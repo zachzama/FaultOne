@@ -2047,6 +2047,49 @@ class TestInternationalDeployment(unittest.TestCase):
         self.assertIsNone(nd.idna_host("plain.example.com"))   # nothing to convert
 
 
+class TestLatencyWall(unittest.TestCase):
+    """A wall, or just a long path - the finding says a single hop adds most
+    of the round trip, so that is what it has to measure."""
+
+    def path(self, cumulative):
+        m = fresh()
+        ping_map(m, inet_loss=0, avg=cumulative[-1], mdev=20.0, sent=20)
+        mtr(m, [{"count": i + 1,
+                 "host": "10.0.0.1" if i == 0 else f"198.51.100.{i}",
+                 "Loss%": 0.0, "Snt": 30, "Avg": v}
+                for i, v in enumerate(cumulative)])
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_a_single_hop_carrying_most_of_the_delay_is_a_wall(self):
+        self.assertIn("latency_wall", self.path([5.0, 305.0, 310.0]))
+
+    def test_a_uniformly_graded_path_has_no_wall(self):
+        """Every hop adding the same amount. The milliseconds alone fired this
+        and named a hop no worse than its neighbours, while claiming a single
+        hop added most of the delay."""
+        codes = self.path([140.0, 280.0, 420.0])
+        self.assertNotIn("latency_wall", codes)
+
+    def test_a_hundred_millisecond_jump_on_a_very_long_path_is_not_a_wall(self):
+        self.assertNotIn("latency_wall", self.path([300.0, 400.0, 700.0, 1000.0]))
+
+    def test_a_small_jump_that_dominates_a_short_path_is_not_a_wall(self):
+        """74% of the total and twenty milliseconds. Nothing to send anyone to,
+        which is what the absolute floor is for."""
+        self.assertNotIn("latency_wall", self.path([3.0, 23.0, 27.0]))
+
+    def test_the_uniformly_slow_path_reports_the_thing_that_is_true(self):
+        """It is not silent - it says calls will be unusable, which is the
+        honest answer when no hop is to blame. Before the share test this
+        verdict was unreachable: the wall stole it in every scenario."""
+        m = fresh()
+        ping_map(m, inet_loss=0, avg=420.0, mdev=90.0, sent=20)
+        mtr(m, [{"count": i + 1, "host": f"198.51.100.{i}", "Loss%": 0.0,
+                 "Snt": 30, "Avg": v} for i, v in enumerate([140.0, 280.0, 420.0])])
+        rep = m.diagnose("8.8.8.8", None, quick=False)
+        self.assertEqual(rep["verdict"]["based_on"][0], "call_quality_bad")
+
+
 class TestQueuingDelay(unittest.TestCase):
     """Latency that is queue, not distance - a different fault entirely."""
 

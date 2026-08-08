@@ -5615,6 +5615,15 @@ CONGESTION_MASQUERADE = {
     "call_quality_bad", "call_quality_degraded", "latency_wall",
 }
 
+# A single hop has to add this many milliseconds, and this share of the whole
+# round trip, before it is a wall rather than one hop on a long path. Both are
+# needed and the share is the one that makes the finding's own sentence true -
+# it says a single hop adds *most* of the delay, so "most" is what it must
+# measure. A rule that under-fires on a path with two equal walls is the right
+# trade: naming one of them would be a claim that is not true of either.
+LATENCY_WALL_MS = 100
+LATENCY_WALL_SHARE = 0.5
+
 # Utilisation below which a queue overflowing has to be explained by the shape
 # of the traffic rather than its volume.
 BURST_UTIL_PCT = 25
@@ -7005,9 +7014,17 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         })
 
     wj = path_insight.get("worst_jump")
-    if wj and wj["delta_ms"] >= 100:
+    end_to_end = max((h.get("avg_ms") or 0) for h in hops) if hops else 0
+    wall_share = (wj["delta_ms"] / end_to_end) if (wj and end_to_end) else 0
+    if wj and wj["delta_ms"] >= LATENCY_WALL_MS and wall_share >= LATENCY_WALL_SHARE:
         # 100ms in a single hop is well past normal inter-city routing, so it's
         # worth naming - and which side of the demarc it lands on is the point.
+        #
+        # The share test is what makes the sentence true. On a uniformly graded
+        # path every hop adds the same amount, and the milliseconds alone fired
+        # this and named a hop no worse than its neighbours - while claiming a
+        # single hop added most of the delay. Where no hop does, nothing is
+        # claimed: the per-hop deltas are in the path panel either way.
         # CGNAT space is private-range but belongs to the carrier, so a jump
         # there is on their side of the demarc, not inside the site.
         if wj.get("cgnat"):

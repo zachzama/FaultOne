@@ -1,4 +1,4 @@
-# FaultOne 1.5 reference
+# FaultOne 1.6 reference
 
 Everything the tool checks, and how it decides which of those checks is the
 answer. For getting started see the

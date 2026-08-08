@@ -1,4 +1,4 @@
-# FaultOne 1.5
+# FaultOne 1.6
 
 **128 findings it can reach. One line saying which one to fix first.**
 

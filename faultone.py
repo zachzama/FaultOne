@@ -2977,8 +2977,15 @@ STANDARD_MTU = 1500
 MTU_OVERHEAD = 28
 
 
-def _link_modes_linux():
-    base = "/sys/class/net"
+def _link_modes_linux(base="/sys/class/net"):
+    """Speed, duplex, MTU and carrier per interface, from sysfs.
+
+    `base` is a parameter for the same reason its counter-reading twin takes
+    one: so the file handling can be tested against a fixture tree. Without it
+    every test had to stub the layer above, and the parsing here - a speed of
+    -1 on a virtual NIC, a driver that exports nothing, carrier as a string -
+    was never exercised at all.
+    """
     modes = {}
     try:
         names = sorted(os.listdir(base))
@@ -7115,6 +7122,11 @@ def _check_addressing(raw, findings):
     command as "no IP address" would be a diagnosis invented from a gap, which
     is exactly what a stripped-down appliance provokes.
     """
+    # Always set, both ways. It was written only when it was False, so its
+    # absence meant the opposite of the only value ever stored - which reads
+    # correctly today because both callers test `is False`, and breaks the
+    # first time anyone writes `if raw["ipv4"]`. A key should mean one thing.
+    raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
     if not raw["interfaces"].get("ok"):
         findings.append({
             "severity": "warning",
@@ -7140,7 +7152,6 @@ def _check_addressing(raw, findings):
         # and in plenty of datacentres outside the US - and every IPv4 check
         # below is now measuring something this box cannot do, rather than
         # something that is broken.
-        raw["ipv4"] = False
         findings.append({
             "severity": "ok",
             "code": "ipv6_only",
@@ -7536,7 +7547,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                 "layer": 3,
                 "message": f"Could not determine reachability of the gateway ({gw}).",
             })
-        elif loss >= 100 and raw.get("ipv4") is False:
+        elif loss >= 100 and not raw.get("ipv4", True):
             findings.append({
                 "severity": "ok",
                 "code": "gw_unmeasurable_v4",
@@ -7608,7 +7619,7 @@ def _check_internet(raw, findings, target, probes):
     gw_ok = gw_loss is None or gw_loss < 100 or any(
         f.get("code") in ("gw_icmp_filtered", "gw_unmeasurable_v4") for f in findings)
     # An IPv4 target on a box with no IPv4 is unreachable by design.
-    if raw.get("ipv4") is False and not _is_ipv6_literal(target):
+    if not raw.get("ipv4", True) and not _is_ipv6_literal(target):
         findings.append({
             "severity": "ok",
             "code": "inet_unmeasurable_v4",

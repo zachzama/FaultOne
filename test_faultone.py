@@ -1193,6 +1193,60 @@ class TestSysfsCounterReading(unittest.TestCase):
     def test_missing_sysfs_tree_yields_nothing(self):
         self.assertEqual(nd._link_stats_linux("/nonexistent/path"), {})
 
+    def build_modes(self, iface="eth0", fields=None):
+        """A sysfs tree for the link-mode reader, the twin of build() above."""
+        import os, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, base, True)
+        idir = os.path.join(base, iface)
+        os.makedirs(idir)
+        for name, value in (fields or {}).items():
+            with open(os.path.join(idir, name), "w") as fh:
+                fh.write(str(value))
+        return base
+
+    def test_reads_link_mode_from_sysfs(self):
+        """This reader had no fixture-tree test at all while its twin had
+        twelve, so every file it parses was covered only through a stub."""
+        base = self.build_modes(fields={"speed": 1000, "duplex": "full",
+                                        "mtu": 1500, "carrier": 1, "operstate": "up"})
+        modes = nd._link_modes_linux(base)
+        self.assertEqual(modes["eth0"]["speed_mbps"], 1000)
+        self.assertEqual(modes["eth0"]["duplex"], "full")
+        self.assertEqual(modes["eth0"]["mtu"], 1500)
+        self.assertTrue(modes["eth0"]["carrier"])
+        self.assertEqual(modes["eth0"]["operstate"], "up")
+
+    def test_a_negative_speed_is_unknown_not_a_speed(self):
+        """Virtual NICs report -1, and sysfs raises EINVAL on an interface with
+        no carrier. Either read as a number would make a 1000 Mbps comparison
+        nonsense."""
+        for value in (-1, 0):
+            with self.subTest(value=value):
+                base = self.build_modes(fields={"speed": value, "mtu": 1500})
+                self.assertIsNone(nd._link_modes_linux(base)["eth0"]["speed_mbps"])
+
+    def test_unreadable_fields_are_absent_rather_than_guessed(self):
+        base = self.build_modes(fields={"mtu": "not-a-number"})
+        mode = nd._link_modes_linux(base)["eth0"]
+        self.assertIsNone(mode["mtu"])
+        self.assertIsNone(mode["speed_mbps"])
+        self.assertIsNone(mode["duplex"])
+        self.assertFalse(mode["carrier"])
+        self.assertEqual(mode["operstate"], "unknown")
+
+    def test_carrier_zero_is_no_carrier_not_a_present_value(self):
+        """sysfs writes "0" when the cable is out. Anything that tests the
+        field for presence rather than its value reads that as a live link -
+        on exactly the interface someone is standing next to, unplugged."""
+        base = self.build_modes(fields={"carrier": 0, "mtu": 1500})
+        self.assertFalse(nd._link_modes_linux(base)["eth0"]["carrier"])
+        up = self.build_modes(fields={"carrier": 1, "mtu": 1500})
+        self.assertTrue(nd._link_modes_linux(up)["eth0"]["carrier"])
+
+    def test_no_sysfs_tree_yields_nothing(self):
+        self.assertEqual(nd._link_modes_linux("/nonexistent/path"), {})
+
     def test_unknown_counters_survive_into_the_interface_summary(self):
         base = self.build(present=["rx_packets", "tx_packets"])
         nd._read_link_stats = lambda: (nd._link_stats_linux(base), "test")
@@ -1456,6 +1510,25 @@ class TestNoSecondCopy(unittest.TestCase):
         self.assertGreater(out["days_left"], 0)
         self.assertEqual(out["starts"], "2098-08-17")
         self.assertGreater(out["not_yet_valid_days"], 0)
+
+    def test_no_raw_key_means_one_thing_by_its_value_and_another_by_its_absence(self):
+        """A key written only when it is False makes its own absence mean the
+        opposite - correct while every reader tests `is False`, and wrong the
+        first time one tests the value. raw["ipv4"] was exactly that.
+
+        Checked by running the pipeline and asserting the keys the checks
+        actually consult are the ones something actually set.
+        """
+        rep = fresh().diagnose("8.8.8.8", None, quick=False)
+        raw = rep["raw"]
+        # Present on every box, both ways round, because it is a fact about
+        # the box rather than a flag raised on one branch.
+        self.assertIn("ipv4", raw)
+        self.assertIsInstance(raw["ipv4"], bool)
+        with open(nd.__file__) as fh:
+            src = fh.read()
+        # And nothing reads it with the tri-state idiom any more.
+        self.assertNotIn('raw.get("ipv4") is False', src)
 
     def test_nothing_is_defined_and_never_used(self):
         """A helper written for a path that was then taken differently is dead

@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 126
+difference is which one it puts at the top, and that is the whole product: 127
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -213,6 +213,41 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## Down, or unreachable
+
+A host that is failing and a host you cannot get to are different states with
+different owners. Monitoring systems have drawn that line for decades; this
+collapsed both into `inet_unreachable`, owner *the provider* — which sends
+someone to a carrier about their own server.
+
+When the target answers nothing, the trace decides which it is:
+
+| | |
+|---|---|
+| the trace **reached** it | `destination_unresponsive` — the path carries traffic and the host itself is silent. Owner: *the destination, not the path to it*. |
+| the trace **stopped short** | `inet_unreachable` — the path is broken somewhere before it. Owner: *the provider*, as before. |
+
+With no trace to judge by — a `--quick` run — nothing is concluded between them
+and the older, vaguer finding stands. Guessing between two answers with
+different owners is worse than being vague about which.
+
+## Two cables are two faults
+
+Findings about an interface carry which one they came from. Corroboration
+counts an independent second fault at the same layer or below as agreement, and
+without a scope it counted **errors on `eth0` and collisions on `eth1`** as one
+problem confirmed twice — high confidence in whichever happened to be named, on
+a box with two unrelated bad cables.
+
+Same interface still corroborates: a duplex mismatch and collisions on `eth0`
+are the same fault seen twice, which is exactly what the rule is for. A finding
+with **no** scope is about the box rather than one of its interfaces — the
+softnet backlog belongs to all of them — and agrees with any of them.
+
+This is the same idea an alert manager expresses as scoping suppression by
+label: the relationship only holds between things that are about the same
+thing.
+
 ## Which way a fault faces
 
 The ordering rule — *the lowest layer with a live fault is the cause* — is
@@ -387,11 +422,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **126** | Distinct conclusions it can reach and state in plain language. 109 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **109** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 627 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **127** | Distinct conclusions it can reach and state in plain language. 110 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **110** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 634 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 126 findings are the useful figure** if you want to know what the tool can
+**The 127 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -506,7 +541,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 627 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 634 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1809,7 +1844,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-627 tests, no dependencies, no network, a few seconds — so they run
+634 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -1885,7 +1920,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 126 findings with readable rules instead of
+> way out - and who owns it. Ranks 127 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

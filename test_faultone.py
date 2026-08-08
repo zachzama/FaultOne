@@ -2051,6 +2051,95 @@ class TestInternationalDeployment(unittest.TestCase):
         self.assertIsNone(nd.idna_host("plain.example.com"))   # nothing to convert
 
 
+class TestDownVersusUnreachable(unittest.TestCase):
+    """A host that is down and a host you cannot get to are different states
+    with different owners - a line monitoring systems have drawn for decades
+    and this collapsed into "the provider"."""
+
+    def silent_target(self, hops, quick=False):
+        m = fresh()
+        m.cmd_ping = lambda t, c=4, w=2: (
+            {"ok": True, "cmd": "ping", "stdout":
+             "10 packets transmitted, 10 received, 0% packet loss\n"
+             "rtt min/avg/max/mdev = 1/1/2/0.2 ms\n"} if t == "10.0.0.1"
+            else {"ok": True, "cmd": "ping", "stdout":
+                  "10 packets transmitted, 0 received, 100% packet loss\n"})
+        m.cmd_check_port = lambda h, p, timeout=5: {"ok": False, "reason": "timeout"}
+        if hops:
+            mtr(m, hops)
+        return m.diagnose("8.8.8.8", None, quick=quick)["verdict"]
+
+    REACHES = [{"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.0},
+               {"count": 2, "host": "198.51.100.1", "Loss%": 0.0, "Snt": 30, "Avg": 12.0},
+               {"count": 3, "host": "8.8.8.8", "Loss%": 0.0, "Snt": 30, "Avg": 20.0}]
+    STOPS = [{"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.0},
+             {"count": 2, "host": "???", "Loss%": 100.0, "Snt": 30, "Avg": 0.0}]
+
+    def test_a_reachable_target_that_answers_nothing_is_the_destination(self):
+        v = self.silent_target(self.REACHES)
+        self.assertEqual(v["based_on"][0], "destination_unresponsive")
+        self.assertNotIn("provider", v["owner"])
+
+    def test_a_path_that_stops_short_is_still_the_path(self):
+        v = self.silent_target(self.STOPS)
+        self.assertEqual(v["based_on"][0], "inet_unreachable")
+        self.assertEqual(v["owner"], "the provider")
+
+    def test_with_no_trace_nothing_is_concluded_about_which(self):
+        """--quick runs no trace. The older, vaguer finding stands rather than
+        a guess being made between two answers with different owners."""
+        v = self.silent_target(self.REACHES, quick=True)
+        self.assertEqual(v["based_on"][0], "inet_unreachable")
+
+
+class TestFaultsAreScopedToWhatTheyAreAbout(unittest.TestCase):
+    """Two cables are two faults, not one confirmed twice."""
+
+    def f(self, code, scope=None, sev="critical", layer=1):
+        out = {"code": code, "severity": sev, "layer": layer, "message": code}
+        if scope:
+            out["scope"] = scope
+        return out
+
+    def test_faults_on_different_interfaces_do_not_corroborate(self):
+        v = nd.build_verdict([self.f("link_errors_live", "eth0"),
+                              self.f("collisions", "eth1", sev="warning")])
+        self.assertEqual(v["corroborated_by"], [])
+        self.assertEqual(v["confidence"], "medium")
+
+    def test_faults_on_the_same_interface_still_do(self):
+        v = nd.build_verdict([self.f("duplex_mismatch", "eth0"),
+                              self.f("collisions", "eth0", sev="warning")])
+        self.assertTrue(v["corroborated_by"])
+        self.assertEqual(v["confidence"], "high")
+
+    def test_a_fault_about_the_whole_box_corroborates_any_interface(self):
+        """The softnet backlog belongs to all of them, so it carries no scope
+        and agrees with whichever interface is named."""
+        v = nd.build_verdict([self.f("link_errors_live", "eth0"),
+                              self.f("nic_drops_live")])
+        self.assertEqual(v["corroborated_by"], ["nic_drops_live"])
+
+    def test_every_per_interface_finding_records_which_one(self):
+        """A finding that forgets its scope silently corroborates across
+        cables again."""
+        scoped = set()
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            for f in rep["findings"]:
+                if f.get("scope"):
+                    scoped.add(f["code"])
+        for code in ("link_errors_live", "collisions", "duplex_mismatch",
+                     "slow_link", "link_flapping_live"):
+            with self.subTest(code=code):
+                self.assertIn(code, scoped)
+
+
 class TestRatesNeedADenominator(unittest.TestCase):
     """One event is not a rate - the reasoning ping loss already used."""
 
@@ -3444,6 +3533,7 @@ class TestVerdict(unittest.TestCase):
         m = fresh()
         ping_map(m, inet_loss=100, sent=20)
         unreachable(m, arp=True)
+        path_dies_short(m)
         rep = m.diagnose("8.8.8.8", None, quick=False)
         self.assertEqual(rep["verdict"]["based_on"][0], "inet_unreachable")
         self.assertEqual(nd.exit_status(rep), 2)
@@ -3457,6 +3547,7 @@ class TestVerdict(unittest.TestCase):
         m = fresh()
         ping_map(m, inet_loss=100, sent=20)
         unreachable(m, arp=True)
+        path_dies_short(m)
         serving(m, text)
         codes = [f.get("code") for f in
                  m.diagnose("8.8.8.8", None, quick=False)["findings"]]
@@ -3546,6 +3637,7 @@ class TestVerdict(unittest.TestCase):
         m = fresh()
         ping_map(m, inet_loss=100, sent=20)
         unreachable(m, arp=True)
+        path_dies_short(m)
         rep = m.diagnose("8.8.8.8", None, quick=False)
         self.assertEqual(rep["verdict"]["based_on"][0], "inet_unreachable")
         self.assertEqual(rep["verdict"]["owner"], "the provider")
@@ -5283,6 +5375,9 @@ class DiagnoseHarness(unittest.TestCase):
         # box with a working uplink, not an uplink that is down.
         nd.cmd_check_port = lambda h, p, timeout=5: {
             "ok": False, "cmd": f"tcp connect {h}:{p}", "reason": "timeout"}
+        # The path must stop short too, or this describes a reachable target
+        # that is silent - a different fault, with a different owner.
+        path_dies_short(nd)
         r = self.run_diagnose()
         self.assertIn("inet_unreachable", self.codes(r))
         self.assertEqual(r["verdict"]["owner"], "the provider")
@@ -5551,6 +5646,13 @@ def rate_series(nd, rates, window=120):
                series_seconds=0:
         orig(first, source, window, already_waited, {"eth0": list(rates)}, window))
 
+def path_dies_short(nd):
+    """A trace that stops before the target. Without this the fixture describes
+    a target that is silent at the end of a working path - which is a different
+    fault, and now reported as one."""
+    mtr(nd, [{"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.0},
+             {"count": 2, "host": "???", "Loss%": 100.0, "Snt": 30, "Avg": 0.0}])
+
 def unreachable(nd, arp=False, tcp=False):
     """A box that is genuinely cut off, not just unanswered by ICMP.
 
@@ -5636,6 +5738,16 @@ def _(nd):
 def _(nd):
     ping_map(nd, inet_loss=100)
     unreachable(nd, arp=True)
+    path_dies_short(nd)
+
+@scenario("destination_unresponsive")
+def _(nd):
+    # The path carries probes all the way there and the host says nothing.
+    ping_map(nd, inet_loss=100)
+    unreachable(nd, arp=True)
+    mtr(nd, [{"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.0},
+             {"count": 2, "host": "198.51.100.1", "Loss%": 0.0, "Snt": 30, "Avg": 12.0},
+             {"count": 3, "host": "8.8.8.8", "Loss%": 0.0, "Snt": 30, "Avg": 20.0}])
 
 BACKEND_SS = ("State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
               "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
@@ -7476,6 +7588,7 @@ class TestCompoundFaults(unittest.TestCase):
         def setup(mod):
             ping_map(mod, gw_loss=0, inet_loss=100)
             unreachable(mod, arp=True)
+            path_dies_short(mod)
             mod.cmd_dns = lambda t: {"ok": True, "cmd": "dig", "stdout": "SERVFAIL\n"}
             resolvers(mod, [R("10.0.0.53", ok=False, ms=2000, answers=())])
         self.assert_blames(self.diagnose_with(setup), "inet_unreachable", "provider")

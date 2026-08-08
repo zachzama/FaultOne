@@ -3961,6 +3961,12 @@ VERDICT_RULES = [
      "Link negotiated below its capable speed",
      "Usually a damaged pair in the cable. Replace it, or check for a speed "
      "forced on one end."),
+    ("destination_unresponsive", "the destination, not the path to it",
+     "The path reaches the target and the target answers nothing",
+     "The trace got all the way there, so the network between here and it is "
+     "carrying traffic. What is not answering is the host itself, or something "
+     "filtering directly in front of it. Do not escalate this to whoever owns "
+     "the path - it is not theirs."),
     ("inet_unreachable", "the provider",
      "The gateway answers but nothing beyond it does - the site's uplink is down",
      "This device and the local network are fine. Escalate to whoever owns the "
@@ -4549,6 +4555,7 @@ FINDING_SIDE.update({
     "syn_sent_backlog": "upstream",
     "egress_blocked": "upstream",
     "inet_unreachable": "upstream",
+    "destination_unresponsive": "upstream",
     "inet_partial_loss": "upstream",
     "inet_loss_unmeasured": "upstream",
     "inet_icmp_filtered": "upstream",
@@ -4634,7 +4641,8 @@ STAGE_RULES = [
      {"gw_partial_loss", "gw_unknown", "gw_loss_unmeasured"}),
     # A routing loop means traffic never arrives, so it fails the stage rather
     # than merely warning it.
-    ("internet", {"inet_unreachable", "loop", "conntrack_drops_live"},
+    ("internet", {"inet_unreachable", "destination_unresponsive", "loop",
+                  "conntrack_drops_live"},
      {"inet_partial_loss", "inet_loss_unmeasured", "path_loss", "trace_stalls",
       "latency_wall", "tcp_retransmits",
       # The uplink is this site's internet stage, whoever owns the congestion.
@@ -4952,6 +4960,18 @@ def collection_coverage(raw):
     return sum(1 for v in attempted if v.get("ok")), len(attempted)
 
 
+def _same_scope(a, b):
+    """Are two findings about the same thing?
+
+    Interface findings carry the interface they came from. Two that name
+    different ones are separate faults however alike they look. A finding with
+    no scope is about the box rather than one of its interfaces, and can
+    corroborate anything - the softnet backlog belongs to all of them.
+    """
+    one, two = a.get("scope"), b.get("scope")
+    return one is None or two is None or one == two
+
+
 def _sides_can_agree(a, b):
     """Can a fault facing `a` explain, or corroborate, one facing `b`?
 
@@ -5048,7 +5068,13 @@ def build_verdict(findings, quick=False, raw=None):
                          and (f.get("layer") or 9) <= layer
                          # A fault facing the other way is not agreement. A
                          # local one faces both, so it corroborates either.
-                         and _sides_can_agree(side, finding_side(f.get("code")))]
+                         and _sides_can_agree(side, finding_side(f.get("code")))
+                         # Nor is a fault on a different cable. Errors on one
+                         # interface and collisions on another are two
+                         # problems, and counting them as one confirmed twice
+                         # made a two-NIC box read as high confidence in
+                         # whichever happened to be named.
+                         and _same_scope(matches[0], f)]
         if code in WEAK_EVIDENCE:
             confidence = "low"
         elif corroborating:
@@ -5678,7 +5704,7 @@ def _check_link_flaps(raw, findings):
             findings.append({
                 "severity": "critical",
                 "layer": 1,
-                "code": "link_flapping_live",
+                "code": "link_flapping_live", "scope": name,
                 "message": f"{name} lost carrier and regained it {live} time(s) in the "
                            f"{window}s this run was watching. A link that drops while you "
                            f"are looking at it is a physical fault - the cable, the "
@@ -5695,7 +5721,7 @@ def _check_link_flaps(raw, findings):
             findings.append({
                 "severity": "warning",
                 "layer": 1,
-                "code": "link_flapping",
+                "code": "link_flapping", "scope": name,
                 "message": f"{name} has lost and regained carrier {flaps} time(s) over "
                            f"{days:.1f} days of uptime - about {per_day:.1f} a day. It is "
                            f"up now, so nothing else here will show it, but a link that "
@@ -5783,7 +5809,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         if iface["delta_errors"]:
             findings.append({
                 "severity": "critical",
-                "code": "link_errors_live",
+                "code": "link_errors_live", "scope": name,
                 "layer": 1,
                 "message": f"{name}: {iface['delta_errors']:,} new error(s) in the last {secs}s - "
                            f"{iface['errors']:,} total across {iface['packets']:,} packets "
@@ -5795,7 +5821,7 @@ def _check_counters(raw, findings, duplex_by_iface):
                 and iface["packets"] >= MIN_PACKETS_FOR_RATE):
             findings.append({
                 "severity": "warning",
-                "code": "link_errors_historical",
+                "code": "link_errors_historical", "scope": name,
                 "layer": 1,
                 "message": f"{name}: {iface['errors']:,} errors across {iface['packets']:,} packets "
                            f"({iface['err_ppm']}/million){detail}"
@@ -5812,7 +5838,7 @@ def _check_counters(raw, findings, duplex_by_iface):
                 and duplex_by_iface.get(name) != "half"):
             findings.append({
                 "severity": "warning",
-                "code": "collisions",
+                "code": "collisions", "scope": name,
                 "layer": 1,
                 "message": f"{name}: {iface['collisions']:,} collisions across {iface['packets']:,} "
                            f"packets ({iface['coll_ppm']}/million). On a full-duplex link - which "
@@ -5824,7 +5850,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         if iface["delta_drops"]:
             findings.append({
                 "severity": "warning",
-                "code": "drops_live",
+                "code": "drops_live", "scope": name,
                 "layer": 2,
                 "message": f"{name}: {iface['delta_drops']:,} packet(s) dropped in the last {secs}s "
                            f"({iface['drops']:,} total). Frames are arriving but this device isn't "
@@ -5855,7 +5881,7 @@ def _check_link_modes(raw, findings):
             coll = collisions_by_iface.get(name, 0)
             findings.append({
                 "severity": "critical" if coll else "warning",
-                "code": "duplex_mismatch",
+                "code": "duplex_mismatch", "scope": name,
                 "layer": 1,
                 "message": f"{name}: negotiated HALF duplex"
                            + (f" at {mode['speed_mbps']} Mbps" if mode.get("speed_mbps") else "")
@@ -5871,7 +5897,7 @@ def _check_link_modes(raw, findings):
         if speed is not None and speed <= 100:
             findings.append({
                 "severity": "warning",
-                "code": "slow_link",
+                "code": "slow_link", "scope": name,
                 "layer": 1,
                 "message": f"{name}: link negotiated at only {speed} Mbps. If this port and "
                            f"switch are gigabit-capable, that usually means a damaged cable "
@@ -5883,7 +5909,7 @@ def _check_link_modes(raw, findings):
         if mtu and mtu != STANDARD_MTU:
             findings.append({
                 "severity": "warning",
-                "code": "mtu_nonstandard",
+                "code": "mtu_nonstandard", "scope": name,
                 "layer": 2,
                 "message": f"{name}: MTU is {mtu}, not the standard {STANDARD_MTU}."
                            + (" Smaller than standard usually means a tunnel (VPN/PPPoE) or a "
@@ -5942,7 +5968,7 @@ def _check_neighbours_and_optics(raw, findings):
             findings.append({
                 "severity": "critical",
                 "layer": 1,
-                "code": "optics_alarm",
+                "code": "optics_alarm", "scope": name,
                 "message": f"{name}: the optical module is raising its own alarms "
                            f"({', '.join(p['alarms'][:3])})"
                            + (f", receiving {rx} dBm" if rx is not None else "")
@@ -5953,7 +5979,7 @@ def _check_neighbours_and_optics(raw, findings):
             findings.append({
                 "severity": "critical",
                 "layer": 1,
-                "code": "optics_rx_low",
+                "code": "optics_rx_low", "scope": name,
                 "message": f"{name}: optical receive power is {rx} dBm, below the "
                            f"{OPTIC_RX_CRIT_DBM} dBm most receivers can work with. The link may "
                            f"still show up while corrupting frames. Usual causes are a dirty or "
@@ -5963,7 +5989,7 @@ def _check_neighbours_and_optics(raw, findings):
             findings.append({
                 "severity": "warning",
                 "layer": 1,
-                "code": "optics_rx_marginal",
+                "code": "optics_rx_marginal", "scope": name,
                 "message": f"{name}: optical receive power is {rx} dBm - working, but with "
                            f"little margin left. Clean the connectors and check the patching "
                            f"before it starts dropping frames.",
@@ -5972,7 +5998,7 @@ def _check_neighbours_and_optics(raw, findings):
             findings.append({
                 "severity": "warning",
                 "layer": 1,
-                "code": "optics_warning",
+                "code": "optics_warning", "scope": name,
                 "message": f"{name}: the optical module reports {', '.join(p['warnings'][:3])}"
                            + (f" while receiving {rx} dBm" if rx is not None else "")
                            + ". Not failing yet, but it's the module's own warning threshold.",
@@ -6325,7 +6351,7 @@ def _check_utilization(raw, findings, counter_window, uplink_mbps=None):
             findings.append({
                 "severity": "critical" if util >= 95 else "warning",
                 "layer": 2,
-                "code": "link_saturated",
+                "code": "link_saturated", "scope": name,
                 "message": f"{name} is running at {busiest} Mbps on a {speed} Mbps link "
                            f"({util}% utilization over {counter_window}s). A full link looks "
                            f"exactly like a broken one from the application's side - latency "
@@ -6340,7 +6366,7 @@ def _check_utilization(raw, findings, counter_window, uplink_mbps=None):
             findings.append({
                 "severity": "warning",
                 "layer": 2,
-                "code": "link_busy",
+                "code": "link_busy", "scope": name,
                 "message": f"{name} ran at {busiest} Mbps of a {speed} Mbps link "
                            f"({util}% over {counter_window}s) with nothing failing while it "
                            f"did. A link being used to capacity is not a fault - but if the "
@@ -7698,6 +7724,18 @@ def _serves_traffic(raw):
     return None
 
 
+def _trace_got_there(probes, target):
+    """Did the path carry probes all the way to the target?
+
+    The difference between a destination that is down and a path that is
+    broken. Without a trace - a --quick run, or a tool that could not run -
+    nothing is concluded and the older, vaguer finding stands.
+    """
+    trace = (probes or {}).get("trace") or {}
+    hops = trace.get("hops") or []
+    return bool(hops) and trace_reached(hops, target)
+
+
 def _is_ipv6_literal(host):
     return ":" in (host or "")
 
@@ -7891,6 +7929,24 @@ def _check_internet(raw, findings, target, probes):
                                f"internet access, which on a server is usually absent on "
                                f"purpose. Only a fault if this box is supposed to reach the "
                                f"internet - check the egress rules before the carrier.",
+                })
+            elif _trace_got_there(probes, target):
+                # The path carried probes all the way there and the host itself
+                # said nothing. Nagios has drawn this line for twenty years:
+                # a host that is DOWN and a host that is UNREACHABLE because
+                # something in front of it failed are different states with
+                # different owners, and calling both "the provider" sends
+                # someone to a carrier about their own server.
+                findings.append({
+                    "severity": "critical",
+                    "code": "destination_unresponsive",
+                    "layer": 3,
+                    "message": f"The path to {target} works - the trace reached it - and "
+                               f"{target} itself answers nothing, on ICMP or on TCP. The "
+                               f"network between here and there is carrying traffic; what is "
+                               f"not answering is the destination, or something filtering "
+                               f"immediately in front of it. Nothing upstream of this site "
+                               f"explains it.",
                 })
             else:
                 findings.append({

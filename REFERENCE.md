@@ -389,7 +389,7 @@ they're spelled out:
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **122** | Distinct conclusions it can reach and state in plain language. 105 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **105** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 613 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 618 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 122 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -506,7 +506,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 613 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 618 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -560,6 +560,7 @@ can say what the bar was rather than "the tool said so".
 | `ATTEMPT_FAIL_PCT` | **10** | share of connection attempts that never establish at all |
 | `CSUM_ERR_PPM` | **1** | segments per million arriving with a bad TCP checksum — should be zero |
 | `SPURIOUS_RETRANS_PCT` | **30** | share of retransmissions the far end says were unnecessary before reordering, not loss, is the story |
+| `MIN_PACKETS_FOR_RATE` | **20000** | packets an interface must have carried before an error or collision *rate* is quoted about it. One error on a nearly idle NIC divides out to twenty times the threshold - the same reasoning `MIN_PROBES_FOR_LOSS` applies to ping, which had never been applied here |
 | `MIN_PROBES_FOR_LOSS` | **10** | probes needed before a single unanswered one is allowed to be called a loss rate |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
 | `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
@@ -1781,7 +1782,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-613 tests, no dependencies, no network, a few seconds — so they run
+618 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

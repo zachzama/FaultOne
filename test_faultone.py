@@ -2051,6 +2051,49 @@ class TestInternationalDeployment(unittest.TestCase):
         self.assertIsNone(nd.idna_host("plain.example.com"))   # nothing to convert
 
 
+class TestRatesNeedADenominator(unittest.TestCase):
+    """One event is not a rate - the reasoning ping loss already used."""
+
+    def link(self, packets, errors=0, collisions=0):
+        m = fresh()
+        counters(m, rx_packets=packets, tx_packets=0, rx_errors=errors,
+                 collisions=collisions)
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": 1000, "duplex": "full", "mtu": 1500,
+             "carrier": True}]}
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+                if f["severity"] != "ok"]
+
+    def test_one_error_on_an_idle_interface_is_not_an_error_rate(self):
+        """500 packets and one error divides out to 2000 per million - twenty
+        times the threshold - and said the link had a problem. A management
+        NIC, a bond member carrying nothing, an interface that just came up."""
+        self.assertNotIn("link_errors_historical", self.link(500, errors=1))
+        self.assertNotIn("link_errors_historical", self.link(2_000, errors=1))
+
+    def test_one_collision_on_an_idle_interface_is_not_a_duplex_mismatch(self):
+        """Worse than the error case: this one is critical and headlines."""
+        self.assertNotIn("collisions", self.link(500, collisions=1))
+
+    def test_a_real_rate_on_a_busy_link_still_fires(self):
+        self.assertIn("link_errors_historical", self.link(5_000_000, errors=800))
+        self.assertIn("collisions", self.link(5_000_000, collisions=900))
+
+    def test_the_floor_is_set_so_a_single_event_cannot_cross_the_threshold(self):
+        """Otherwise the guard would let exactly the case it exists for
+        through, one packet above the floor."""
+        one_error_ppm = 1_000_000 / nd.MIN_PACKETS_FOR_RATE
+        self.assertLess(one_error_ppm, nd.ERR_PPM_WARN)
+
+    def test_errors_arriving_while_we_watch_are_not_gated(self):
+        """A rate needs a denominator; an error appearing during the window
+        does not. It is happening now, at whatever volume."""
+        m = fresh()
+        counters(m, rx_packets=800, tx_packets=0, rx_errors=1, d_rx_errors=3)
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False, soak=1)["findings"]]
+        self.assertIn("link_errors_live", codes)
+
+
 class TestLatencyWall(unittest.TestCase):
     """A wall, or just a long path - the finding says a single hop adds most
     of the round trip, so that is what it has to measure."""

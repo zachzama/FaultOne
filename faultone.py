@@ -3435,6 +3435,14 @@ def parse_ping_counts(ping_result):
     return sent, max(0, sent - received)
 
 
+# Below this many packets, an error count is not an error rate. One error on a
+# nearly idle interface - a management NIC, a bond member carrying nothing, an
+# interface that just came up - divides out to twenty times the threshold and
+# says the link has a problem. The same reasoning MIN_PROBES_FOR_LOSS applies
+# to ping was never applied here: a rate needs a denominator big enough that a
+# single event cannot be one. Set so one error stays under ERR_PPM_WARN.
+MIN_PACKETS_FOR_RATE = 20_000
+
 # Below this many probes, one unanswered packet is not a loss rate. Hosts and
 # routers rate-limit ICMP replies as a matter of course - 8.8.8.8 among them -
 # so a single missing reply in a short run is the expected cost of asking,
@@ -5685,7 +5693,8 @@ def _check_counters(raw, findings, duplex_by_iface):
                            f"now, which points at the physical link into this device: cable, "
                            f"connector/SFP, or a duplex mismatch on the switch port.",
             })
-        elif iface["errors"] and iface["err_ppm"] >= ERR_PPM_WARN:
+        elif (iface["errors"] and iface["err_ppm"] >= ERR_PPM_WARN
+                and iface["packets"] >= MIN_PACKETS_FOR_RATE):
             findings.append({
                 "severity": "warning",
                 "code": "link_errors_historical",
@@ -5701,6 +5710,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         # negotiated half duplex, collisions are expected for that mode and the
         # duplex finding below is the real story - don't say both.
         if (iface["collisions"] and iface.get("coll_ppm", 0) >= COLL_PPM_WARN
+                and iface["packets"] >= MIN_PACKETS_FOR_RATE
                 and duplex_by_iface.get(name) != "half"):
             findings.append({
                 "severity": "warning",

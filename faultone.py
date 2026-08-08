@@ -3628,8 +3628,14 @@ def annotate_hops(hops, gateway=None, target=None):
         h["jitter_ms"] = round(max(times) - min(times), 1) if len(times) > 1 else None
         # Latency this hop added. Negative deltas are normal noise (a later hop
         # can answer faster than an earlier one), so they're clamped away.
-        if avg is not None and prev_avg is not None:
-            h["delta_ms"] = round(max(avg - prev_avg, 0), 1)
+        #
+        # The first hop counts its own latency: the path starts there, so
+        # everything before it is zero by definition. It was left as None,
+        # which meant a first hop carrying the entire delay - a satellite link,
+        # a VPN concentrator, a distant CPE - could never be the worst jump and
+        # the tool said nothing about the one thing that mattered on that path.
+        if avg is not None:
+            h["delta_ms"] = round(max(avg - (prev_avg or 0.0), 0), 1)
         else:
             h["delta_ms"] = None
         if avg is not None:
@@ -7038,9 +7044,14 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             "severity": "warning",
             "code": "latency_wall",
             "layer": 3,
-            "message": f"Latency jumps {wj['delta_ms']:.0f}ms at hop {wj['hop']} "
-                       f"({wj['host']}), {side}. Everything past that hop inherits the delay, "
-                       f"so the hops after it looking slow is expected rather than separate.",
+            "message": (
+                (f"The very first hop is already {wj['delta_ms']:.0f}ms "
+                 f"({wj['host']}), {side}. "
+                 if wj["hop"] == 1 else
+                 f"Latency jumps {wj['delta_ms']:.0f}ms at hop {wj['hop']} "
+                 f"({wj['host']}), {side}. ")
+                + "Everything past that hop inherits the delay, so the hops after it "
+                  "looking slow is expected rather than separate."),
         })
     return hops, path_insight, path_source
 

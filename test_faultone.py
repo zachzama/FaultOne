@@ -1042,7 +1042,11 @@ class TestPathAnnotation(unittest.TestCase):
         nd.annotate_hops(hops)
         self.assertEqual(hops[1]["delta_ms"], 12.0)   # 13 avg - 1 avg
         self.assertEqual(hops[1]["jitter_ms"], 4.0)   # 15 - 11
-        self.assertIsNone(hops[0]["delta_ms"])        # nothing before it
+        # The first hop counts its own latency. This asserted None until
+        # 2026-08-08, on the reasoning that nothing precedes it - which meant a
+        # first hop carrying the whole delay could never be the worst jump.
+        # The path starts there, so everything before it is zero.
+        self.assertEqual(hops[0]["delta_ms"], 1.0)
 
     def test_negative_deltas_are_clamped(self):
         # A later hop answering faster than an earlier one is normal noise.
@@ -2077,6 +2081,34 @@ class TestLatencyWall(unittest.TestCase):
         """74% of the total and twenty milliseconds. Nothing to send anyone to,
         which is what the absolute floor is for."""
         self.assertNotIn("latency_wall", self.path([3.0, 23.0, 27.0]))
+
+    def test_a_first_hop_carrying_the_whole_delay_is_a_wall(self):
+        """A satellite link, a VPN concentrator, a distant CPE. The delay is
+        entirely at hop one and nothing followed it - so no step between hops
+        existed, and the tool said nothing about the only thing that mattered
+        on that path."""
+        codes = self.path([600.0, 605.0, 610.0])
+        self.assertIn("latency_wall", codes)
+
+    def test_a_first_hop_wall_is_worded_as_one(self):
+        """"Latency jumps 600ms at hop 1" reads as a step from something. There
+        is nothing before it, and the sentence should say so."""
+        m = fresh()
+        ping_map(m, inet_loss=0, avg=610.0, mdev=20.0, sent=20)
+        mtr(m, [{"count": i + 1, "host": "10.0.0.1" if i == 0 else f"198.51.100.{i}",
+                 "Loss%": 0.0, "Snt": 30, "Avg": v}
+                for i, v in enumerate([600.0, 605.0, 610.0])])
+        msg = [f for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+               if f["code"] == "latency_wall"][0]["message"]
+        self.assertIn("very first hop is already", msg)
+        self.assertNotIn("jumps", msg)
+
+    def test_an_ordinary_gateway_does_not_become_a_wall(self):
+        """Counting the first hop must not turn every LAN gateway into one."""
+        self.assertNotIn("latency_wall", self.path([1.0, 20.0, 22.0]))
+
+    def test_a_modest_first_hop_with_the_delay_further_out_is_not_a_wall(self):
+        self.assertNotIn("latency_wall", self.path([150.0, 500.0, 900.0]))
 
     def test_the_uniformly_slow_path_reports_the_thing_that_is_true(self):
         """It is not silent - it says calls will be unusable, which is the

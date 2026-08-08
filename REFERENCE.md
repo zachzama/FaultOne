@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 122
+difference is which one it puts at the top, and that is the whole product: 126
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -387,11 +387,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **122** | Distinct conclusions it can reach and state in plain language. 105 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **105** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 618 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **126** | Distinct conclusions it can reach and state in plain language. 109 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **109** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 627 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 122 findings are the useful figure** if you want to know what the tool can
+**The 126 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -506,7 +506,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 618 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 627 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1180,6 +1180,33 @@ On a box with no listening ports every flow is outbound by definition, `side`
 stays `None`, and nothing about this changes — inventing a side there would be
 a claim the data cannot support.
 
+### Whether the service answers, not just whether it accepts
+
+Every other check here stops at the handshake: the port is open, the TLS
+completes, the certificate is valid, the TCP connection is established. A
+service that accepts connections and then **answers nothing** passes all of it
+while being completely down from a client's side — and that is the commonest
+way a service is broken and the least visible from the box it runs on.
+
+One `HEAD /` per listener, no redirects followed, no body read, no credentials,
+and only against ports this box is **already listening on** that are
+conventionally HTTP — so it never becomes a probe. Skipped under `--quick`.
+
+| | |
+|---|---|
+| `own_service_silent` | Accepted a connection, took the request, answered nothing. Ranked above the certificate findings: a client meets this first, and it is more broken than a wrong certificate. |
+| `own_service_upstream_error` | Answered 502, 503 or 504 — the service running and reporting that *what it depends on* failed. Classified **upstream**: this box is not the fault. |
+| `own_service_erroring` | Any other 5xx. The service accepting connections and failing to serve them, which no network change will fix. |
+| `own_service_not_http` | Answered with something that is not an HTTP status line. Either the wrong thing is bound to that port, or it speaks a protocol this cannot read. |
+
+A 4xx is **an answer**, not a failure — 401 and 404 mean the service is up and
+replying, and only the server errors are its own fault.
+
+The gateway split is the useful one on a box that proxies: a 502 is the
+difference between *the service is broken* and *the service is fine and its
+backend is not*, which are different faults with different owners. It is the
+one finding here whose evidence is seen downstream and whose cause is upstream.
+
 ### The certificate this box serves
 
 Every other TLS check here points outward, at something this device connects
@@ -1782,7 +1809,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-618 tests, no dependencies, no network, a few seconds — so they run
+627 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -1858,7 +1885,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 122 findings with readable rules instead of
+> way out - and who owns it. Ranks 126 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

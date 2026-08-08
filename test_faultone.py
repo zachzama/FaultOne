@@ -2769,6 +2769,115 @@ class TestFlowSides(unittest.TestCase):
         self.assertEqual([f["side"] for f in again], ["backend", "backend"])
 
 
+class TestOwnServiceAnswers(unittest.TestCase):
+    """Accepting a connection is not answering a request."""
+
+    def serve(self, handler):
+        import socket as _socket, threading
+        s = _socket.socket()
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.listen(4)
+        self.addCleanup(s.close)
+        def loop():
+            try:
+                conn, _ = s.accept()
+                handler(conn)
+            except OSError:
+                pass
+        threading.Thread(target=loop, daemon=True).start()
+        return port
+
+    def ask(self, handler, timeout=2):
+        res = nd.cmd_own_http(self.serve(handler), timeout=timeout)
+        found = []
+        nd._own_service_findings(res, res["port"], found)
+        return res, [f["code"] for f in found]
+
+    @staticmethod
+    def _reply(body):
+        def handler(conn):
+            conn.recv(2048)
+            conn.sendall(body)
+            conn.close()
+        return handler
+
+    def test_a_service_that_answers_is_left_alone(self):
+        res, codes = self.ask(self._reply(b"HTTP/1.1 200 OK\r\n\r\n"))
+        self.assertEqual(res["status"], 200)
+        self.assertEqual(codes, [])
+
+    def test_a_four_hundred_is_still_an_answer(self):
+        """401 or 404 means the service is up and replying. Only the server
+        errors are its own failure."""
+        for code in (b"401 Unauthorized", b"404 Not Found", b"301 Moved"):
+            with self.subTest(code=code):
+                _res, codes = self.ask(self._reply(b"HTTP/1.1 " + code + b"\r\n\r\n"))
+                self.assertEqual(codes, [])
+
+    def test_a_service_that_never_answers_is_the_case_this_exists_for(self):
+        """It accepts, reads the request, and says nothing. The port is open,
+        the handshake completes, every network check passes."""
+        def silent(conn):
+            conn.recv(2048)
+            time.sleep(9)
+        _res, codes = self.ask(silent)
+        self.assertEqual(codes, ["own_service_silent"])
+
+    def test_a_gateway_error_points_past_this_box_not_at_it(self):
+        for status in (502, 503, 504):
+            with self.subTest(status=status):
+                _res, codes = self.ask(self._reply(
+                    f"HTTP/1.1 {status} Gateway\r\n\r\n".encode()))
+                self.assertEqual(codes, ["own_service_upstream_error"])
+        self.assertEqual(nd.finding_side("own_service_upstream_error"), "upstream")
+
+    def test_a_plain_server_error_is_the_service_itself(self):
+        _res, codes = self.ask(self._reply(b"HTTP/1.1 500 Internal\r\n\r\n"))
+        self.assertEqual(codes, ["own_service_erroring"])
+        self.assertEqual(nd.finding_side("own_service_erroring"), "downstream")
+
+    def test_something_that_is_not_http_is_reported_as_that(self):
+        _res, codes = self.ask(self._reply(b"+OK POP3 ready\r\n"))
+        self.assertEqual(codes, ["own_service_not_http"])
+
+    def test_a_closed_port_says_nothing(self):
+        import socket as _socket
+        spare = _socket.socket(); spare.bind(("127.0.0.1", 0))
+        port = spare.getsockname()[1]; spare.close()
+        res = nd.cmd_own_http(port, timeout=1)
+        found = []
+        nd._own_service_findings(res, port, found)
+        self.assertIn("unreachable_locally", res)
+        self.assertEqual(found, [])
+
+    def test_only_http_shaped_ports_are_asked(self):
+        """This must never become a probe. A database or an SSH daemon is not
+        sent an HTTP request just because it is listening."""
+        text = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 0.0.0.0:8080 0.0.0.0:*\n"
+                "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                "LISTEN 0 128 0.0.0.0:5432 0.0.0.0:*\n")
+        asked = []
+        m = fresh()
+        serving(m, text)
+        m.cmd_own_http = lambda p, timeout=5, address="127.0.0.1", tls=False: (
+            asked.append(p) or {"ok": True, "port": p, "status": 200, "host": address})
+        m.diagnose("8.8.8.8", None, quick=False)
+        self.assertEqual(asked, [8080])
+
+    def test_quick_mode_asks_nothing(self):
+        asked = []
+        m = fresh()
+        serving(m, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                   "LISTEN 0 128 0.0.0.0:8080 0.0.0.0:*\n")
+        m.cmd_own_http = lambda p, timeout=5, address="127.0.0.1", tls=False: (
+            asked.append(p) or {"ok": True, "port": p, "status": 200})
+        m.diagnose("8.8.8.8", None, quick=True)
+        self.assertEqual(asked, [])
+
+
 class TestOwnTlsListener(unittest.TestCase):
     """The certificate this box serves - which nothing here ever looked at."""
 
@@ -4730,13 +4839,14 @@ class TestBareBox(unittest.TestCase):
     # so "the tool is missing" doesn't apply to them - and calling them would
     # put real traffic on the wire, which this suite never does.
     SOCKET_BACKED = {"cmd_tls_check", "cmd_check_port", "cmd_own_tls",
-                     "cmd_tls_check_local"}
+                     "cmd_tls_check_local", "cmd_own_http"}
 
     ARGS = {
         "cmd_ping": ("8.8.8.8", 2, 1), "cmd_traceroute": ("8.8.8.8",),
         "cmd_dns": ("8.8.8.8",), "cmd_mtr": ("8.8.8.8", 2), "cmd_optics": ("eth0",),
         "cmd_traceroute_tcp": ("8.8.8.8", 443), "cmd_ethtool": ("eth0",),
         "cmd_own_tls": (443,), "cmd_tls_check_local": (443, "example.com"),
+        "cmd_own_http": (8080,),
         "cmd_path_mtu": ("8.8.8.8", 1500),
     }
 
@@ -5685,6 +5795,30 @@ def own_tls(nd, port="443", **fields):
         raw.setdefault("own_tls", {"ok": True, "cmd": "tls", "stdout": "",
                                    "listeners": [base]})
     nd._check_own_tls = wrapped
+
+def own_service(nd, port="8080", **fields):
+    # The ports stage only reads as checked when something recorded a listener
+    # there, the same way the TLS check does.
+    """A box listening on an HTTP port, with a scripted answer from it."""
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                f"LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:*\n")
+    base = {"ok": True, "cmd": "HEAD /", "port": int(port), "host": "127.0.0.1",
+            "tls": False, "ms": 4.0, "status": 200}
+    base.update(fields)
+    nd.cmd_own_http = lambda p, timeout=5, address="127.0.0.1", tls=False: dict(base, port=p)
+
+@scenario("own_service_silent")
+def _(nd): own_service(nd, ok=False, silent=True, status=None)
+
+@scenario("own_service_upstream_error")
+def _(nd): own_service(nd, status=502)
+
+@scenario("own_service_erroring")
+def _(nd): own_service(nd, status=500)
+
+@scenario("own_service_not_http")
+def _(nd): own_service(nd, ok=False, not_http=True, status=None,
+                       status_line="+OK POP3 ready")
 
 @scenario("own_tls_expired")
 def _(nd): own_tls(nd, days_left=-3, expires="2026-08-04", expired=True)

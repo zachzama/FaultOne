@@ -1036,6 +1036,74 @@ def der_validity(der):
     return min(found), max(found)
 
 
+# Gateway errors: the service answered, and what it answered is that something
+# behind it did not. On a box that proxies, this is the difference between "the
+# service is broken" and "the service is fine and its backend is not" - which
+# are different faults with different owners.
+GATEWAY_ERRORS = {502, 503, 504}
+
+
+def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
+    """Ask this box's own service for a response, not just a connection.
+
+    Every other check here stops at the handshake: the port is open, the
+    certificate is valid, the TCP connection completes. A service that accepts
+    connections and then answers nothing - or answers 502 to every one of them
+    - passes all of it while being completely down from a client's side. That
+    is the commonest way a proxy is broken and the least visible from on it.
+
+    One HEAD to the root path, no redirects followed, no body read, no
+    credentials. Only against a port this box is already listening on.
+    """
+    result = {"ok": False, "cmd": f"HEAD / {address}:{port}", "port": port,
+              "host": address, "tls": tls}
+    raw = None
+    try:
+        started = time.monotonic()
+        raw = socket.create_connection((address, port), timeout=timeout)
+    except (OSError, ValueError) as e:
+        result["unreachable_locally"] = str(e)
+        return result
+    try:
+        sock = raw
+        if tls:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            sock = ctx.wrap_socket(raw)
+        with sock:
+            sock.settimeout(timeout)
+            sock.sendall(f"HEAD / HTTP/1.1\r\nHost: {address}\r\n"
+                         f"User-Agent: FaultOne/{__version__}\r\n"
+                         f"Connection: close\r\n\r\n".encode())
+            data = b""
+            while b"\r\n" not in data and len(data) < 4096:
+                chunk = sock.recv(512)
+                if not chunk:
+                    break
+                data += chunk
+    except socket.timeout:
+        result["silent"] = True
+        result["ms"] = round((time.monotonic() - started) * 1000, 1)
+        return result
+    except (OSError, ssl.SSLError, ValueError) as e:
+        result["error"] = str(e)
+        return result
+    result["ms"] = round((time.monotonic() - started) * 1000, 1)
+    if not data:
+        # Accepted the connection, read the request, closed without answering.
+        result["silent"] = True
+        return result
+    line = data.split(b"\r\n", 1)[0].decode("ascii", "replace").strip()
+    result["status_line"] = line[:120]
+    m = re.match(r"HTTP/\d(?:\.\d)?\s+(\d{3})", line)
+    if not m:
+        result["not_http"] = True
+        return result
+    result.update({"ok": True, "status": int(m.group(1))})
+    return result
+
+
 def cmd_own_tls(port, timeout=5, address="127.0.0.1"):
     """The certificate this box is serving, as a client on the internet sees it.
 
@@ -3971,6 +4039,27 @@ VERDICT_RULES = [
      "Everything this box depends on is clean, so the service itself is healthy. "
      "The loss is between here and your users - the edge, the load balancer in "
      "front, or the internet path to them."),
+    # Above the certificate findings: a service that answers nothing is more
+    # broken than one whose certificate is wrong, and a client meets it first.
+    ("own_service_silent", "the service on this box, not the network",
+     "The service accepts connections and answers nothing",
+     "The port is open, the handshake completes and no client gets a reply. "
+     "Every network check here passes while this is true. Look at the service "
+     "and what it is blocked on - this is not the network."),
+    ("own_service_upstream_error", "what this box depends on, not this box",
+     "The service is up and says what it depends on is not",
+     "It answered a gateway error, which is the service reporting that its own "
+     "backend failed. This box and the path to it are fine; look at what it "
+     "proxies to, and the path from here to that."),
+    ("own_service_erroring", "the service on this box, not the network",
+     "The service answers its own root path with an error",
+     "It is accepting connections and failing to serve them. Nothing on the "
+     "network explains this, and no network change will fix it."),
+    ("own_service_not_http", "whatever is bound to that port",
+     "A port answered, but not with what was expected",
+     "Either something other than the intended service is bound here, or it "
+     "speaks a protocol this check cannot read. Confirm which before trusting "
+     "anything else about that port."),
     ("own_tls_expired", "this box's own certificate",
      "The certificate this box serves has expired - clients are being refused now",
      "Renew it. Nothing about the network is wrong, and no amount of looking at "
@@ -4440,6 +4529,11 @@ FINDING_SIDE.update({
     "close_wait_backlog": "downstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
+    "own_service_silent": "downstream",
+    "own_service_erroring": "downstream",
+    "own_service_not_http": "downstream",
+    # Answered by this box, but it is a report about what lies beyond it.
+    "own_service_upstream_error": "upstream",
     "own_tls_expiring": "downstream",
     "own_tls_untrusted": "downstream",
     "own_tls_handshake_failed": "downstream",
@@ -4564,9 +4658,11 @@ STAGE_RULES = [
       "resolvers_unreadable"}),
     ("mtu", {"pmtu_blackhole"}, {"pmtu_unmeasurable", "mtu_nonstandard"}),
     ("ports", {"tls_handshake_failed", "tls_expired", "tls_not_yet_valid",
-               "own_tls_expired", "own_tls_handshake_failed"},
+               "own_tls_expired", "own_tls_handshake_failed",
+               "own_service_silent", "own_service_erroring",
+               "own_service_upstream_error"},
      {"port_refused", "port_timeout", "ports_truncated", "tls_expiring", "tls_handshake_slow", "family_unreachable",
-      "own_tls_expiring", "own_tls_untrusted",
+      "own_tls_expiring", "own_tls_untrusted", "own_service_not_http",
       "tls_intercepted", "tls_untrusted"}),
 ]
 
@@ -4579,7 +4675,9 @@ def build_stages(findings, raw=None, checked_ports=False, quick=False):
     for name, fail_codes, warn_codes in STAGE_RULES:
         # Our own TLS listeners are checked on every run, so the ports stage
         # has something to say even when nobody asked for --check-ports.
-        if name == "ports" and not checked_ports and not (raw.get("own_tls") or {}).get("listeners"):
+        if (name == "ports" and not checked_ports
+                and not (raw.get("own_tls") or {}).get("listeners")
+                and not (raw.get("own_service") or {}).get("listeners")):
             state = "skip"
         elif name == "mtu" and not raw.get("path_mtu"):
             state = "skip"          # not measured (quick mode, or target silent)
@@ -5929,6 +6027,94 @@ def _check_own_tls(raw, findings, quick=False):
                     else f"handshake failed: {r.get('error', '?')}")
                 for r in results),
         }
+
+
+def _check_own_service(raw, findings, quick=False):
+    """Does the service answer, or only accept?
+
+    Runs against the ports this box already listens on that are conventionally
+    HTTP, so this never probes anything - it asks a service already taking
+    requests for one response.
+    """
+    if quick:
+        return
+    sockets = raw.get("sockets") or {}
+    seen, targets = set(), []
+    for addr, port in (sockets.get("bound") or []):
+        if port in SERVING_PORTS and port not in seen:
+            seen.add(port)
+            targets.append((_listener_address(addr), int(port)))
+    if not targets:
+        return
+    results = []
+    for addr, port in targets[:OWN_TLS_MAX_PORTS]:
+        res = cmd_own_http(port, address=addr, tls=int(port) in TLS_PORTS)
+        results.append(res)
+        _own_service_findings(res, port, findings)
+    if results:
+        raw["own_service"] = {
+            "ok": any(r.get("ok") for r in results), "cmd": "HEAD / (own listeners)",
+            "stderr": "", "code": 0, "listeners": results,
+            "stdout": "\n".join(
+                f"{r['port']:<6} " + (str(r.get("status") or r.get("status_line")
+                                          or ("no answer" if r.get("silent") else
+                                              r.get("unreachable_locally")
+                                              or r.get("error") or "?")))
+                for r in results),
+        }
+
+
+def _own_service_findings(res, port, findings):
+    """One listener's answer, or its refusal to give one."""
+    if res.get("unreachable_locally"):
+        return                      # bound elsewhere; nothing was asked
+    if res.get("silent"):
+        findings.append({
+            "severity": "critical",
+            "layer": 7,
+            "code": "own_service_silent",
+            "message": f"The service on port {port} accepted a connection, took a request "
+                       f"and answered nothing"
+                       + (f" in {res['ms']:.0f}ms" if res.get("ms") else "")
+                       + ". Every check above this one passes - the port is open, the "
+                         "handshake completes, the certificate is valid - and no client "
+                         "gets a reply. That is the most common way a service is down "
+                         "while the box it runs on looks entirely healthy.",
+        })
+        return
+    if res.get("not_http"):
+        findings.append({
+            "severity": "warning",
+            "layer": 7,
+            "code": "own_service_not_http",
+            "message": f"Port {port} answered, but not with HTTP: "
+                       f"{res.get('status_line', '')!r}. Either something other than the "
+                       f"expected service is bound to this port, or it speaks a protocol "
+                       f"this check cannot read - worth confirming which before trusting "
+                       f"anything else here about it.",
+        })
+        return
+    status = res.get("status")
+    if status in GATEWAY_ERRORS:
+        findings.append({
+            "severity": "critical",
+            "layer": 7,
+            "code": "own_service_upstream_error",
+            "message": f"The service on port {port} answered {status} - it is running and "
+                       f"telling you that what it depends on is not. This box is not the "
+                       f"fault; whatever it proxies to, or the path to it, is. Every "
+                       f"network check here can pass while this is true.",
+        })
+    elif status and status >= 500:
+        findings.append({
+            "severity": "critical",
+            "layer": 7,
+            "code": "own_service_erroring",
+            "message": f"The service on port {port} answered {status} to a plain request "
+                       f"for its root path. It is accepting connections and failing to "
+                       f"serve them, which is the service itself rather than anything on "
+                       f"the network.",
+        })
 
 
 def _own_tls_findings(res, port, findings):
@@ -7852,6 +8038,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _check_rotation(raw, findings)
     _check_idle(raw, findings)
     _check_own_tls(raw, findings, quick)
+    _check_own_service(raw, findings, quick)
 
     say("querying each configured DNS resolver")
     dns_failed = _check_dns(raw, findings, target, inet_loss, quick)

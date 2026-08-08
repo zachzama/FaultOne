@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+report.json
+report.html
+*-report.json
+*-report.html
+reports/
+demo-failing-site.json
+demo-failing-site.html
+.claude/settings.local.json
+.DS_Store

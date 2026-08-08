@@ -1,0 +1,799 @@
+<!doctype html>
+<!-- FaultOne report viewer. Copyright (c) 2026 Zachary Zamarripa. MIT licensed.
+     SPDX-License-Identifier: MIT -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FaultOne console</title>
+<!-- Inline so a report stays one file: the icon is recoloured from the
+     verdict once a report loads, and a tab that has been squeezed too narrow
+     to show its title still shows its state. -->
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%236b7785'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg: #0a0e13;
+    --panel: #10151c;
+    --panel-2: #151b23;
+    --border: #232b35;
+    --text: #dce4ec;
+    --text-dim: #6b7785;
+    /* Same role as --text-dim, lifted until it clears 4.5:1 against the
+       verdict's tinted backgrounds. "owner:" and "confidence:" are among the
+       most load-bearing words in the report and were the dimmest text on it. */
+    --text-dim-lift: #8b97a5;
+    --accent: #4fd1c5;
+    --accent-dim: #2a5b56;
+    --ok: #3fb950;
+    --warn: #d9a02b;
+    --crit: #e5534b;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); font-size:14px; line-height:1.5;
+  }
+  .topbar{
+    display:flex; align-items:center; gap:14px;
+    padding:14px 20px; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg, #0d1218, #0a0e13);
+    position:sticky; top:0; z-index:5;
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .dot{
+    width:10px; height:10px; border-radius:50%;
+    background:var(--accent); box-shadow:0 0 8px var(--accent);
+  }
+  .brand h1{
+    font-family:var(--mono); font-size:15px; font-weight:600;
+    margin:0; letter-spacing:0.02em; color:var(--text);
+  }
+  .brand h1 .sub{color:var(--text-dim); font-weight:400;}
+  .badge{
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);
+    border:1px solid var(--border); border-radius:4px; padding:3px 8px;
+    margin-left:auto;
+  }
+  .layout{
+    display:grid; grid-template-columns:280px 1fr; gap:0; min-height:calc(100vh - 53px);
+  }
+  @media (max-width:820px){ .layout{grid-template-columns:1fr;} }
+
+  .sidebar{
+    border-right:1px solid var(--border); padding:18px; background:var(--panel);
+  }
+  .field-label{
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px; display:block;
+  }
+
+  .viewer-hint{
+    margin-top:12px; padding:10px 12px; border-radius:6px;
+    background:var(--panel-2); border:1px solid var(--border);
+    color:var(--text-dim); font-size:12px; line-height:1.55;
+  }
+  .viewer-hint code{
+    font-family:var(--mono); font-size:11px; color:var(--accent);
+    word-break:break-all;
+  }
+  /* Drop a report anywhere on the page. */
+  body.dragging::after{
+    content:'Drop report.json to load it';
+    position:fixed; inset:0; z-index:100;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(10,14,19,0.88); border:2px dashed var(--accent);
+    color:var(--accent); font-family:var(--mono); font-size:15px;
+    pointer-events:none;
+  }
+
+
+  .leds{margin-top:22px;}
+  .led-row{display:flex; align-items:center; gap:8px; padding:4px 0; font-family:var(--mono); font-size:12px; color:var(--text-dim);}
+  .led-name{flex:1 1 auto;}
+  /* A skipped stage is dimmed rather than coloured: "not measured" is not a
+     result, and showing it green would be a claim the run never made. */
+  .led-row.skip{opacity:.55;}
+  .led-layer{font-size:10px; color:var(--text-dim); border:1px solid var(--border); border-radius:3px; padding:0 4px;}
+  .led-state{font-size:10px; letter-spacing:.06em; text-transform:uppercase; opacity:.8;}
+  .led-row.warn .led-state{color:var(--warn);}
+  .led-row.crit .led-state{color:var(--crit);}
+  /* Set apart from the chain above it: this is the conclusion, not a stage. */
+  .verdict-row{border-top:1px solid var(--border); margin-top:6px; padding-top:8px;}
+  .led{width:8px; height:8px; border-radius:50%; background:#333d47; flex-shrink:0;}
+  .led.ok{background:var(--ok); box-shadow:0 0 6px var(--ok);}
+  .led.warn{background:var(--warn); box-shadow:0 0 6px var(--warn);}
+  .led.crit{background:var(--crit); box-shadow:0 0 6px var(--crit);}
+  .led.skip{background:#333d47; box-shadow:none;}
+
+  .main{padding:20px; overflow-x:hidden;}
+  .empty-state{
+    color:var(--text-dim); font-family:var(--mono); font-size:13px;
+    padding:40px 10px; text-align:center; border:1px dashed var(--border); border-radius:8px;
+  }
+
+  /* The verdict: what to look at first. Sits above everything because reading
+     eight findings to work out the culprit is the thing it exists to spare you. */
+  .verdict{
+    border:1px solid var(--border); border-left:4px solid var(--text-dim);
+    background:var(--panel); border-radius:8px; padding:13px 16px; margin-bottom:16px;
+    box-shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+  /* The most important block on the page shared its background with every
+     panel and stage chip, so severity showed only as a 4px stripe on one edge
+     and the block read as generic. The tint is mixed from the same variables
+     the lamps and the tab icon use, so the three can't drift apart. The plain
+     background and border are declared first: a browser too old for color-mix
+     (pre-2023) ignores the line after and is left with today's appearance
+     rather than a broken one.
+     On a dark page this has to be a wash of the severity colour over the panel,
+     not a pastel - a light tint over #10151c goes muddy rather than soft. */
+  .verdict.critical{
+    border-color:var(--border);
+    border-color:color-mix(in srgb, var(--crit) 35%, var(--border));
+    border-left-color:var(--crit);
+    background:var(--panel);
+    background:color-mix(in srgb, var(--crit) 8%, var(--panel));
+  }
+  .verdict.warning{
+    border-color:var(--border);
+    border-color:color-mix(in srgb, var(--warn) 35%, var(--border));
+    border-left-color:var(--warn);
+    background:var(--panel);
+    background:color-mix(in srgb, var(--warn) 8%, var(--panel));
+  }
+  /* No wash when nothing is wrong: it would shout with nothing to say, and
+     compete with the lamps that are already green. */
+  .verdict.ok{border-left-color:var(--ok);}
+  .verdict .vlabel{
+    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    letter-spacing:0.08em; color:var(--text-dim-lift); margin-bottom:5px;
+  }
+  .verdict .vhead{font-size:17px; font-weight:600; line-height:1.35; margin-bottom:8px;}
+  .verdict .vmeta{
+    font-family:var(--mono); font-size:11.5px; color:var(--text-dim-lift);
+    display:flex; flex-wrap:wrap; gap:14px; margin-bottom:8px;
+  }
+  /* Where the fault is. Deliberately the largest thing on the page after the
+     verdict itself: someone who does not know what a layer is can still read
+     three boxes and an arrow. State is a word as well as a colour, because a
+     colour alone is not readable to everyone and does not survive a printout
+     or a screenshot pasted into a ticket. */
+  .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  .zarrow{display:flex; align-items:center; padding:0 10px; color:var(--text-dim);
+          font-size:18px;}
+  .zone{flex:1 1 180px; min-width:150px; padding:10px 12px; border-radius:8px;
+        border:1px solid var(--border); background:var(--panel-2);}
+  .zone .zname{font-size:12px; color:var(--text-dim-lift); line-height:1.35;}
+  .zone .zvia{font-family:var(--mono); font-size:11px; color:var(--text-dim);
+              margin-top:2px; word-break:break-all;}
+  .zone .zstate{font-size:15px; font-weight:700; letter-spacing:.04em; margin-top:6px;}
+  .zone .zwhy{font-size:12px; color:var(--text-dim-lift); margin-top:6px; line-height:1.45;}
+  .zone.pass{border-color:var(--ok);} .zone.pass .zstate{color:var(--ok);}
+  .zone.warn{border-color:var(--warn);} .zone.warn .zstate{color:var(--warn);}
+  .zone.fail{border-color:var(--crit); background:rgba(229,83,75,.08);}
+  .zone.fail .zstate{color:var(--crit);}
+  .zone.skip{opacity:.5;} .zone.skip .zstate{color:var(--text-dim);}
+  @media (max-width: 640px){
+    .zones{flex-direction:column;}
+    .zarrow{padding:2px 0; transform:rotate(90deg); align-self:center;}
+  }
+  /* The inbound leg. One hop, because one hop is all that is true - drawn in
+     the same shape as the path below it so the two read as two directions of
+     one picture rather than two unrelated panels. */
+  .inbound{margin-bottom:16px; padding-bottom:14px; border-bottom:1px dashed var(--border);}
+  .inbound-title{font-family:var(--mono); font-size:12px; color:var(--text-dim);
+                 margin-bottom:8px;}
+  .inbound-note{font-size:12px; color:var(--text-dim-lift); margin-top:8px;
+                line-height:1.45; max-width:70ch;}
+  .verdict .vnext{font-size:13px; color:var(--text); line-height:1.55;}
+  .verdict .vnext b{color:var(--accent); font-weight:600;}
+  /* Stage strip: the whole chain at a glance, the way a handheld tester shows
+     it. Detail lives in the findings below. */
+  .stages{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;}
+  .stage{
+    font-family:var(--mono); font-size:11px; padding:4px 9px; border-radius:5px;
+    border:1px solid var(--border); background:var(--panel); color:var(--text-dim);
+    display:flex; gap:6px; align-items:center;
+  }
+  .stage b{font-weight:600;}
+  .stage.pass b{color:var(--ok);}
+  .stage.warn b{color:var(--warn);}
+  .stage.fail b{color:var(--crit);}
+  .stage.skip{opacity:0.5;}
+  .changes{
+    border:1px solid var(--border); border-radius:8px; background:var(--panel);
+    padding:11px 14px; margin-bottom:16px; font-size:12.5px;
+  }
+  .changes h4{margin:0 0 7px; font-family:var(--mono); font-size:10px;
+    text-transform:uppercase; letter-spacing:0.08em; color:var(--text-dim); font-weight:600;}
+  .changes .row{display:flex; gap:8px; padding:2px 0; font-family:var(--mono); font-size:11.5px;}
+  .changes .row.worse{color:var(--warn);}
+  .changes .row.better{color:var(--ok);}
+  .changes .row.neutral{color:var(--text-dim);}
+  .findings{display:flex; flex-direction:column; gap:8px; margin-bottom:22px;}
+  .finding{
+    display:flex; gap:10px; padding:11px 13px; border-radius:7px;
+    border:1px solid var(--border); background:var(--panel);
+  }
+  .finding .sev{width:8px; height:8px; border-radius:50%; margin-top:5px; flex-shrink:0;}
+  .finding.ok .sev{background:var(--ok); box-shadow:0 0 6px var(--ok);}
+  .finding.warning .sev{background:var(--warn); box-shadow:0 0 6px var(--warn);}
+  .finding.critical .sev{background:var(--crit); box-shadow:0 0 6px var(--crit);}
+  .finding .msg{font-size:13.5px;}
+  .finding .tag{
+    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    letter-spacing:0.06em; color:var(--text-dim); margin-bottom:3px;
+  }
+  .finding .tagline{display:flex; align-items:center; gap:7px; margin-bottom:3px;}
+  /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
+     so it never competes with the severity color for attention. */
+  .layer{
+    font-family:var(--mono); font-size:10px; letter-spacing:0.04em;
+    padding:1px 6px; border-radius:9px; white-space:nowrap;
+    border:1px solid var(--border); color:var(--text-dim); background:var(--panel-2);
+  }
+  .layer.low{border-color:var(--warn); color:var(--warn);}
+  .layer-note{
+    font-size:12px; color:var(--text-dim); margin:-8px 0 16px;
+    padding:8px 11px; border-left:2px solid var(--warn);
+    background:var(--panel); border-radius:0 5px 5px 0;
+  }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    margin-bottom:14px; overflow:hidden;
+  }
+  .panel-head{
+    display:flex; align-items:center; gap:10px; padding:9px 13px;
+    background:var(--panel-2); border-bottom:1px solid var(--border);
+    font-family:var(--mono); font-size:12px; cursor:pointer; user-select:none;
+  }
+  .panel-head .prompt{color:var(--accent);}
+  .panel-head .cmdtxt{color:var(--text-dim); flex:1;}
+  .panel-head .chev{color:var(--text-dim); transition:transform .15s;}
+  .panel.collapsed .chev{transform:rotate(-90deg);}
+  .panel.collapsed .panel-body{display:none;}
+  .panel.collapsed .panel-desc{display:none;}
+  .panel-body{padding:12px 14px;}
+  /* What this panel checked. Inline rather than on hover: the sidebar is a list
+     you scan before clicking, but this is a result you read - and screenshot. */
+  .panel-desc{
+    padding:8px 14px; border-bottom:1px solid var(--border); background:var(--panel);
+    color:var(--text-dim); font-size:12px; line-height:1.5;
+    display:flex; gap:8px; align-items:flex-start;
+  }
+  .panel-desc .layer{flex:0 0 auto; margin-top:1px;}
+  pre{
+    margin:0; font-family:var(--mono); font-size:12.5px; white-space:pre-wrap;
+    word-break:break-word; color:var(--text); max-height:400px; overflow:auto;
+  }
+  .err{color:var(--crit); font-family:var(--mono); font-size:12.5px;}
+  .loading{color:var(--text-dim); font-family:var(--mono); font-size:12.5px;}
+
+  .divider{border:none; border-top:1px solid var(--border); margin:18px 0;}
+  .file-input{
+    width:100%; background:var(--panel-2); border:1px solid var(--border);
+    color:var(--text-dim); font-family:var(--sans); font-size:12px;
+    padding:8px 9px; border-radius:6px;
+  }
+  .report-meta{
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);
+    margin-top:8px; line-height:1.5;
+  }
+
+  .section-title{
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.08em; margin:0 0 10px;
+  }
+  /* Wrap rather than scroll: a 12-hop trace with long PTR names ran several
+     screens wide, so the end of the path - the part that matters - sat off
+     the right edge. Wrapping keeps the whole path visible at any width. */
+  .hop-chain{
+    display:flex; flex-wrap:wrap; align-items:stretch; gap:4px 0;
+    padding:6px 2px 14px; margin-bottom:22px;
+  }
+  .hop-node{
+    flex:0 1 auto; min-width:110px; max-width:230px;
+    background:var(--panel); border:1px solid var(--border);
+    border-left:3px solid #333d47; border-radius:6px; padding:9px 11px;
+  }
+  .hop-node.ok{border-left-color:var(--ok);}
+  .hop-node.warn{border-left-color:var(--warn);}
+  .hop-node.crit{border-left-color:var(--crit);}
+  .hop-label{font-family:var(--mono); font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em;}
+  .hop-sub{font-family:var(--mono); font-size:12.5px; margin-top:3px; word-break:break-word;}
+  .hop-arrow{flex:0 0 auto; display:flex; align-items:center; padding:0 8px; color:var(--text-dim); font-family:var(--mono);}
+  .hop-meta{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:4px;}
+  .hop-meta .jump{color:var(--warn);}
+  /* Where traffic stops being the site's network and becomes their ISP's -
+     the most useful single boundary on the whole diagram. */
+  .hop-arrow.demarc{
+    flex-direction:column; justify-content:center; gap:2px; padding:0 10px;
+    color:var(--accent); border-left:1px dashed var(--accent-dim);
+    margin-left:6px; padding-left:14px;
+  }
+  .hop-arrow.demarc span{font-size:9px; letter-spacing:0.06em; text-transform:uppercase;}
+  /* Entering a different operator's network - the same kind of boundary as the
+     site edge, one level out. Dimmer, so the site edge stays the loudest. */
+  .hop-arrow.handoff{
+    flex-direction:column; justify-content:center; gap:2px;
+    color:var(--text-dim); border-left:1px dashed var(--border);
+    margin-left:6px; padding-left:14px;
+  }
+  .hop-arrow.handoff span{font-size:9px; letter-spacing:0.04em;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="dot" id="brandDot"></div>
+    <h1>FaultOne <span class="sub">// diagnostics console</span></h1>
+  </div>
+  <div class="badge" id="osBadge">report viewer</div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="leds" id="leds"></div>
+
+    <hr class="divider" id="sidebarDivider">
+
+    <div id="reportControls">
+      <label class="field-label" for="reportFile" id="reportFileLabel">Load exported report</label>
+      <input type="file" id="reportFile" class="file-input" accept="application/json,.json">
+      <div class="report-meta" id="reportMeta"></div>
+      <div class="viewer-hint" id="viewerHint">
+        Choose a <code>report.json</code> above, or drop one anywhere on this page.
+        <br><br>
+        Produce one with:<br><code>python3 faultone.py --export report.json</code>
+        <br><br>
+        Or skip this viewer entirely:<br><code>python3 faultone.py --export report.html</code><br>
+        gives you a single file that opens on its own.
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="section-title" id="pathTitle" style="display:none;">Path</div>
+    <div id="hopChainWrap"></div>
+    <div id="findingsWrap"></div>
+    <div id="output">
+      <div class="empty-state" id="emptyState">Load a report exported with <code>--export</code> — choose the file on the left, or drop it anywhere on this page.</div>
+    </div>
+  </div>
+</div>
+
+<!-- A self-contained report drops its data in here; the viewer leaves it
+     empty and waits for a file instead. -->
+<script id="faultone-report" type="application/json">__FAULTONE_REPORT__</script>
+<script>
+const output = document.getElementById('output');
+const findingsWrap = document.getElementById('findingsWrap');
+const osBadge = document.getElementById('osBadge');
+const ledsEl = document.getElementById('leds');
+
+let panelSeq = 0;
+let panelHelp = {}; // raw-report key -> {desc, layer}
+
+function escapeHtml(s){
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function clearEmptyState(){
+  const empty = output.querySelector('.empty-state');
+  if(empty) empty.remove();
+}
+
+function addPanel(label, cmdText, help){
+  clearEmptyState();
+  const id = 'panel-' + (panelSeq++);
+  const div = document.createElement('div');
+  div.className = 'panel';
+  div.id = id;
+  const desc = help && help.desc ? `
+    <div class="panel-desc">
+      ${help.layer ? `<span class="layer">L${escapeHtml(String(help.layer))}</span>` : ''}
+      <span>${escapeHtml(help.desc)}</span>
+    </div>` : '';
+  div.innerHTML = `
+    <div class="panel-head" onclick="document.getElementById('${id}').classList.toggle('collapsed')">
+      <span class="prompt">$</span>
+      <span class="cmdtxt">${escapeHtml(cmdText || label)}</span>
+      <span class="chev">▾</span>
+    </div>
+    ${desc}
+    <div class="panel-body"><div class="loading">running…</div></div>
+  `;
+  output.prepend(div);
+  return div.querySelector('.panel-body');
+}
+
+function renderResult(body, result){
+  if(!result){
+    body.innerHTML = '<div class="err">no response</div>';
+    return;
+  }
+  if(result.error){
+    body.innerHTML = `<div class="err">${escapeHtml(result.error)}</div>`;
+    return;
+  }
+  let html = '';
+  if(result.stdout && result.stdout.trim()){
+    html += `<pre>${escapeHtml(result.stdout)}</pre>`;
+  }
+  if(result.stderr && result.stderr.trim()){
+    html += `<pre style="color:var(--warn); margin-top:8px;">${escapeHtml(result.stderr)}</pre>`;
+  }
+  if(!html){
+    html = '<div class="loading">(no output)</div>';
+  }
+  body.innerHTML = html;
+}
+
+const STAGE_LAMP = {pass: 'ok', warn: 'warn', fail: 'crit', skip: 'skip'};
+const VERDICT_LAMP = {ok: 'ok', warning: 'warn', critical: 'crit'};
+
+function verdictRow(v){
+  // The stages above describe getting traffic out and back. Some faults sit
+  // outside that chain entirely - an application at either end, the site's
+  // inbound topology, a change since the last visit - and those left seven
+  // green lamps sitting beside a verdict that named an owner. This row is the
+  // verdict itself, so the panel cannot disagree with the conclusion it
+  // summarises.
+  if(!v) return '';
+  const lamp = VERDICT_LAMP[v.severity] || 'skip';
+  const why = v.owner ? ` title="${escapeHtml(v.headline || '')} — ${escapeHtml(v.owner)}"` : '';
+  return `<div class="led-row verdict-row ${lamp}"${why}><div class="led ${lamp}"></div>` +
+         `<span class="led-name">verdict</span>` +
+         `<span class="led-state">${escapeHtml(v.severity === 'ok' ? 'clear' : v.severity)}</span></div>`;
+}
+
+function ledRow(st){
+  const lamp = STAGE_LAMP[st.state] || 'skip';
+  // The layer is only present when a finding put the stage in that state, so
+  // a passing stage carries no layer rather than a guessed one.
+  const layer = st.layer ? `<span class="led-layer">L${escapeHtml(String(st.layer))}</span>` : '';
+  const why = (st.because && st.because.length)
+    ? ` title="${escapeHtml(st.because.join(', '))}"` : '';
+  return `<div class="led-row ${lamp}"${why}><div class="led ${lamp}"></div>` +
+         `<span class="led-name">${escapeHtml(st.stage)}</span>${layer}` +
+         `<span class="led-state">${escapeHtml(st.state)}</span></div>`;
+}
+
+function hopSeverity(h){
+  if(h.timed_out) return 'crit';
+  // With mtr we have a real loss percentage; use it. Counting timings is a
+  // traceroute-only heuristic (three probes per hop) and mtr reports one
+  // representative timing, which would make every hop look lossy.
+  if(h.loss_pct != null){
+    if(h.loss_pct >= 20) return 'crit';
+    if(h.loss_pct >= 5) return 'warn';
+    return 'ok';
+  }
+  if(h.times_ms && h.times_ms.length && h.times_ms.length < 3) return 'warn';
+  return 'ok';
+}
+
+function avgMs(times){
+  if(!times || !times.length) return null;
+  return times.reduce((a,b)=>a+b,0) / times.length;
+}
+
+function renderHopChain(data){
+  const hops = data.hops || [];
+  const pathTitle = document.getElementById('pathTitle');
+  if(hops.length === 0){
+    pathTitle.style.display = 'none';
+    document.getElementById('hopChainWrap').innerHTML = '';
+    return;
+  }
+  pathTitle.style.display = 'block';
+
+  // Path summary stats
+  const timeouts = hops.filter(h => h.timed_out).length;
+  const validTimes = hops.flatMap(h => h.times_ms || []);
+  const avgLatency = validTimes.length ? (validTimes.reduce((a,b)=>a+b,0) / validTimes.length).toFixed(1) : null;
+  const summaryParts = [`${hops.length} hops`];
+  if(timeouts) summaryParts.push(`${timeouts} timeout${timeouts > 1 ? 's' : ''}`);
+  if(avgLatency) summaryParts.push(`avg ${avgLatency}ms`);
+  if(data.demarc_hop != null) summaryParts.push(`leaves this site at hop ${data.demarc_hop}`);
+  const wj = data.worst_jump;
+  if(wj && wj.delta_ms >= 10){
+    // The share turns "+65ms" into "is this hop worth chasing".
+    const share = wj.share_pct != null ? ` (${wj.share_pct}% of the path)` : '';
+    summaryParts.push(`biggest jump +${wj.delta_ms}ms at hop ${wj.hop}${share}`);
+  }
+  const nets = (data.networks_crossed || []).map(n => n.network);
+  if(nets.length) summaryParts.push(`crosses ${nets.join(' → ')}`);
+  // summary is escaped at render; nets/hops come from the report file
+  const summary = summaryParts.join(' · ');
+
+  const nodes = [{label:'source', sub:'this device', sev:'ok'}];
+  hops.forEach(h => {
+    const avg = h.avg_ms != null ? h.avg_ms : avgMs(h.times_ms);
+    // zone: inside the site vs out on the provider's network
+    const zone = h.cgnat ? 'cgnat' : (h.private === true ? 'lan' : (h.private === false ? 'wan' : ''));
+    const roles = (h.roles || []).join(' ');
+    const meta = [];
+    if(h.delta_ms) meta.push(`<span class="jump">+${escapeHtml(String(h.delta_ms))}ms</span>`);
+    const jit = h.jitter_ms != null ? h.jitter_ms : h.stdev_ms;   // mtr reports stdev, traceroute a spread
+    if(jit != null && jit >= 5) meta.push(`jitter ${escapeHtml(String(jit))}ms`);
+    nodes.push({
+      label: `hop ${h.hop}${zone ? ` · ${zone}` : ''}${roles ? ` · ${roles}` : ''}`,
+      sub: h.timed_out ? 'timeout' : `${h.display}${avg != null ? ' · ' + Number(avg).toFixed(1) + 'ms' : ''}`,
+      meta: meta.join(' · '),
+      sev: hopSeverity(h),
+      demarcBefore: data.demarc_hop != null && h.hop === data.demarc_hop,
+      entersNetwork: h.enters_network || null,
+      cgnat: !!h.cgnat,
+    });
+  });
+  nodes.push({label:'target', sub: data.target || '', sev:'ok'});
+
+  // The other direction, as far as it can honestly be drawn: one hop. A
+  // traceroute goes one way, and nothing here can observe the route a client's
+  // packets took to arrive - so there is no inbound chain, and inventing one
+  // would be worse than leaving it out. What is drawn instead is the kernel's
+  // own measurement of the connections clients actually have open.
+  const inbound = ((data.raw || {}).tcp_flows || {}).by_side || {};
+  const cin = inbound.client;
+  const inboundHtml = cin ? `
+    <div class="inbound">
+      <div class="inbound-title">clients in — measured on their own connections, not probed</div>
+      <div class="hop-chain">
+        <div class="hop-node ${(cin.worst_loss_pct >= 5) ? 'crit'
+                              : (cin.worst_loss_pct >= 2) ? 'warn' : 'ok'}">
+          <div class="hop-label">clients${cin.via ? ' · via ' + escapeHtml(cin.via) : ''}</div>
+          <div class="hop-sub">${cin.connections} connection${cin.connections === 1 ? '' : 's'}</div>
+          <div class="hop-meta">${[cin.rtt_ms != null ? cin.rtt_ms + 'ms rtt' : '',
+              cin.worst_loss_pct != null ? cin.worst_loss_pct + '% loss' : '']
+              .filter(Boolean).join(' · ')}</div>
+        </div>
+        <div class="hop-arrow">→</div>
+        <div class="hop-node ok"><div class="hop-label">this box</div>
+          <div class="hop-sub">${escapeHtml(data.hostname || 'here')}</div></div>
+      </div>
+      <div class="inbound-note">${cin.via
+        ? `This box cannot see past ${escapeHtml(cin.via)} to the client. A clean reading here means clean as far as ${escapeHtml(cin.via)} — not clean to whoever is complaining.`
+        : 'Connections arrive from many addresses, so this is the spread of real clients rather than one balancer in front.'}</div>
+    </div>` : '';
+
+  document.getElementById('hopChainWrap').innerHTML = inboundHtml +
+    `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
+      escapeHtml(cin ? 'path out — ' + summary : summary)}</div>` +
+    '<div class="hop-chain">' + nodes.map((n,i) => `
+      ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'
+        : (n.entersNetwork ? `<div class="hop-arrow handoff">→<span>${escapeHtml(n.entersNetwork)}</span></div>` : '')}
+      <div class="hop-node ${n.sev}">
+        <div class="hop-label">${escapeHtml(n.label)}</div>
+        <div class="hop-sub">${escapeHtml(n.sub)}</div>
+        ${n.meta ? `<div class="hop-meta">${n.meta}</div>` : ''}
+      </div>
+      ${i < nodes.length - 1 && !(nodes[i+1] && (nodes[i+1].demarcBefore || nodes[i+1].entersNetwork)) ? '<div class="hop-arrow">→</div>' : ''}
+    `).join('') + '</div>';
+}
+
+function renderDiagnosis(data, opts){
+  opts = opts || {};
+  output.innerHTML = '';
+  panelSeq = 0;
+
+  osBadge.textContent = [(data.os_label || data.os) && `${data.os_label || data.os} report`,
+                         data.version && `v${data.version}`].filter(Boolean).join(' · ')
+                        || 'report viewer';
+
+  renderHopChain(data);
+
+  const findings = data.findings || [];
+  const layers = data.layers || {};
+  if(data.panel_help) panelHelp = data.panel_help;
+  const lowest = data.lowest_broken_layer || null;
+  const layerBadge = f => {
+    if(!f.layer) return '';
+    const meta = layers[String(f.layer)] || {};
+    const isLowest = f.layer === lowest && f.severity !== 'ok';
+    return `<span class="layer${isLowest ? ' low' : ''}" title="${escapeHtml(meta.hint || '')}">L${f.layer}${meta.name ? ' · ' + escapeHtml(meta.name) : ''}</span>`;
+  };
+  const v = data.verdict;
+  const verdictHtml = v ? `
+    <div class="verdict ${v.severity || 'warning'}">
+      <div class="vlabel">likely root cause</div>
+      <div class="vhead">${escapeHtml(v.headline)}</div>
+      <div class="vmeta">
+        <span>owner: ${escapeHtml(v.owner)}</span>
+        <span>confidence: ${escapeHtml(v.confidence)}${v.coverage && v.coverage.attempted
+          ? ` (${v.coverage.ran} of ${v.coverage.attempted} checks ran)` : ''}</span>
+      </div>
+      ${(v.unrelated || []).map(u =>
+        `<div class="vnext"><b>Also, unrelated:</b> ${escapeHtml(u.message)}</div>`).join('')}
+      <div class="vnext"><b>Next:</b> ${escapeHtml(v.next_step)}</div>
+    </div>` : '';
+
+  // Where the fault is, before which layer. The strip below walks one chain
+  // outward, which is the shape of a device that only talks; a box that
+  // answers requests has traffic coming the other way too. Three boxes with
+  // one of them lit answers "where" without knowing what a layer is, which is
+  // the first thing anyone wants and the last thing a layer number gives them.
+  // Shown on every box, including one nothing connects to, where the inbound
+  // zone greys out. Hiding it there restated the strip for a reader who can
+  // already read the strip, and withheld it from the one who cannot.
+  const sides = data.sides || [];
+  const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
+                     upstream: 'what this box depends on'};
+  const ZONE_WORD = {pass: 'OK', warn: 'DEGRADED', fail: 'FAULT',
+                     // The socket table was read and nothing was coming in.
+                     // That is an answer, not a gap.
+                     skip: 'none connected'};
+  const sidesHtml = sides.length ? `
+    <div class="zones">
+      ${sides.map((z, i) => `
+        ${i ? '<div class="zarrow" aria-hidden="true">→</div>' : ''}
+        <div class="zone ${z.state}">
+          <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}</div>
+          ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
+          <div class="zstate">${ZONE_WORD[z.state] || z.state}</div>
+          ${z.worst ? `<div class="zwhy">${escapeHtml(z.worst)}</div>` : ''}
+        </div>`).join('')}
+    </div>` : '';
+
+  const stages = data.stages || [];
+  const stageHtml = stages.length ? '<div class="stages">' + stages.map(st =>
+    `<span class="stage ${st.state}">${escapeHtml(st.stage)} <b>${
+      {pass:'PASS', warn:'WARN', fail:'FAIL', skip:'—'}[st.state] || ''}</b></span>`).join('') + '</div>' : '';
+
+  const changes = data.comparison || [];
+  const changesHtml = changes.length ? `<div class="changes">
+      <h4>changes since baseline</h4>
+      ${changes.map(c => `<div class="row ${escapeHtml(c.direction || 'neutral')}">
+        <span>${escapeHtml(String(c.what))}:</span>
+        <span>${escapeHtml(String(c.before))} → ${escapeHtml(String(c.after))}</span>
+      </div>`).join('')}
+    </div>` : '';
+
+  findingsWrap.innerHTML = verdictHtml + sidesHtml + stageHtml + changesHtml + '<div class="findings">' + findings.map(f => `
+    <div class="finding ${f.severity}">
+      <div class="sev"></div>
+      <div>
+        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}</div>
+        <div class="msg">${escapeHtml(f.message)}</div>
+      </div>
+    </div>
+  `).join('') + '</div>' + (lowest ? `
+    <div class="layer-note">Lowest layer showing a problem: <strong>L${lowest}${(layers[String(lowest)]||{}).name ? ' · ' + escapeHtml(layers[String(lowest)].name) : ''}</strong>
+    — ${escapeHtml((layers[String(lowest)]||{}).hint || '')}. Start there; findings at higher layers may just be downstream symptoms.</div>` : '');
+
+  // Every stage the report computed, in path order, from the report's own
+  // stage data. This used to substring-match the finding text for four
+  // keywords, which left a critical CRC fault showing all-green and lit the
+  // gateway lamp for a finding that said the gateway was reachable.
+  ledsEl.innerHTML = (data.stages || []).map(ledRow).join('') + verdictRow(data.verdict);
+
+  const raw = data.raw || {};
+  const order = ['lldp', 'optics', 'dns_health', 'inventory', 'ports', 'sockets', 'link_stats', 'link_modes', 'tcp_health', 'arp', 'path_mtu', 'ping_gateway', 'ping_internet', 'path_trace', 'dns_lookup', 'routes', 'interfaces'];
+  order.forEach(key => {
+    if(!raw[key]) return;
+    const labelMap = {
+      ping_gateway: `ping ${data.detected_gateway || ''}`.trim(),
+      ping_internet: `ping ${data.target || ''}`.trim(),
+      path_trace: `traceroute ${data.target || ''}`.trim(),
+      dns_lookup: 'dns lookup google.com',
+      lldp: 'switch port (lldp/cdp)',
+      optics: 'optical module (sfp)',
+      dns_health: 'dns resolvers',
+      ports: 'listening ports',
+      sockets: 'socket states',
+      inventory: 'neighbours (passive)',
+      link_stats: 'interface error counters',
+      tcp_health: 'tcp retransmissions',
+      arp: 'arp / neighbour table',
+      link_modes: 'link speed / duplex / mtu',
+      path_mtu: 'path mtu probe',
+      routes: 'routing table',
+      interfaces: 'interfaces',
+    };
+    const body = addPanel(labelMap[key], raw[key].cmd || labelMap[key], (data.panel_help || {})[key]);
+    renderResult(body, raw[key]);
+  });
+
+  // Port check results
+  const portResults = data.port_results || [];
+  portResults.forEach(pr => {
+    if(!pr || !pr.cmd) return;
+    const body = addPanel(pr.cmd, pr.cmd, (data.panel_help || panelHelp || {}).port_check);
+    renderResult(body, pr);
+  });
+
+  if(opts.imported){
+    document.getElementById('reportMeta').textContent =
+      `loaded: ${data.generated_at || 'unknown time'}`;
+  }
+
+  // A self-contained export is a finished report, not a tool waiting for
+  // input. The standalone viewer keeps its picker - loading another report is
+  // the whole point of it - so this turns on only for the embedded copy.
+  if(opts.embedded){
+    ['reportFileLabel', 'reportFile', 'viewerHint'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.style.display = 'none';
+    });
+  }
+
+  // Name the tab after the report. Several of these get opened side by side -
+  // two sites, or a before and after - and identical titles make you click
+  // each one to find out which is which. It is also the filename a browser
+  // offers when the page is saved.
+  const state = (data.verdict || {}).severity === 'ok' ? 'clear'
+              : (data.verdict || {}).severity || 'report';
+  document.title = ['FaultOne', data.target, state].filter(Boolean).join(' \u00b7 ');
+  setFavicon(state);
+}
+
+const FAVICON_VAR = {clear: '--ok', warning: '--warn', critical: '--crit'};
+
+function setFavicon(state){
+  // Read the colour from the stylesheet rather than repeating the hex here,
+  // so the tab dot and the lamps can't drift apart.
+  const css = getComputedStyle(document.documentElement);
+  const colour = (css.getPropertyValue(FAVICON_VAR[state] || '--text-dim') || '#6b7785').trim();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">`
+            + `<circle cx="8" cy="8" r="6" fill="${colour}"/></svg>`;
+  const link = document.getElementById('favicon');
+  // encodeURIComponent also escapes the '#' of the colour, which would
+  // otherwise truncate the data URI at the fragment.
+  if(link) link.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
+function loadReportFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const data = JSON.parse(reader.result);
+      renderDiagnosis(data, {imported:true});
+    }catch(err){
+      alert('Could not parse this file as a FaultOne report: ' + err);
+    }
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById('reportFile').addEventListener('change', (e) => {
+  loadReportFile(e.target.files[0]);
+});
+
+// Drag a report anywhere onto the page - in viewer mode that's the whole job,
+// so it shouldn't require aiming at a file input.
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  document.body.classList.add('dragging');
+});
+document.addEventListener('dragleave', (e) => {
+  if(e.relatedTarget === null) document.body.classList.remove('dragging');
+});
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  document.body.classList.remove('dragging');
+  loadReportFile(e.dataTransfer && e.dataTransfer.files[0]);
+});
+
+
+// A self-contained export leaves its data in the island above; the standalone
+// viewer leaves the placeholder in place and waits for a dropped file.
+(function () {
+  const el = document.getElementById('faultone-report');
+  const raw = el && el.textContent.trim();
+  if (!raw || raw === '__FAULTONE_' + 'REPORT__') return;
+  try {
+    renderDiagnosis(JSON.parse(raw), {imported: true, embedded: true});
+  } catch (err) {
+    document.getElementById('findingsWrap').innerHTML =
+      '<div class="err">this file\'s embedded report could not be read: ' +
+      escapeHtml(String(err)) + '</div>';
+  }
+})();
+</script>
+</body>
+</html>

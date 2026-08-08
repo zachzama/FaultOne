@@ -2842,6 +2842,11 @@ LINK_COUNTERS = (
     "rx_errors", "tx_errors", "rx_dropped",
     "tx_dropped", "rx_crc_errors", "rx_frame_errors", "rx_over_errors",
     "collisions",
+    # rx_errors is an aggregate - the kernel documents it as including the
+    # length, CRC and frame counters "and other errors not otherwise counted".
+    # Which of them moved decides who owns the fault, and without these three
+    # every one of them was reported as a cable.
+    "rx_missed_errors", "rx_length_errors", "tx_carrier_errors",
 )
 
 
@@ -3113,6 +3118,14 @@ def _finish_link_sample(first, source, sample_seconds, already_waited=False,
             "delta_errors": _nonneg(d.get("rx_errors", 0) + d.get("tx_errors", 0)) if d else None,
             "delta_drops": _nonneg(d.get("rx_dropped", 0) + d.get("tx_dropped", 0)) if d else None,
             "delta_packets": _nonneg(d.get("rx_packets", 0) + d.get("tx_packets", 0)) if d else None,
+            # The same error burst, split by who has to fix it. A FIFO overflow
+            # and a packet the host had no buffer for are this box failing to
+            # take delivery; an invalid length is a frame that arrived the
+            # wrong size. Neither is the cable the aggregate counter sends
+            # people to check.
+            "delta_host_errors": (_nonneg(d.get("rx_over_errors", 0)
+                                          + d.get("rx_missed_errors", 0)) if d else None),
+            "delta_length_errors": _nonneg(d.get("rx_length_errors", 0)) if d else None,
             # Throughput over the sampling window: the answer to "the network
             # is slow" is often "your link is full", which no other check sees.
             "rx_mbps": (round(d.get("rx_bytes", 0) * 8 / sample_seconds / 1e6, 2)
@@ -3636,6 +3649,20 @@ def parse_ping_counts(ping_result):
 # single event cannot be one. Set so one error stays under ERR_PPM_WARN.
 MIN_PACKETS_FOR_RATE = 20_000
 
+# The same idea for a counter window rather than a lifetime. A percentage of
+# fifty packets is not a percentage of anything, and the window is seconds long
+# on a box that may be nearly idle.
+MIN_WINDOW_PACKETS_FOR_RATE = 1_000
+
+# Share of a window's packets that has to be discarded before it is worth
+# saying so. Deliberately two orders of magnitude looser than the error
+# threshold above, because the two counters mean opposite things: an error is a
+# frame that arrived damaged and should never happen, while a discard is a
+# frame this box chose not to deliver upwards and happens on every busy
+# interface there is. Treating them alike made discards fire on a single
+# packet.
+DROP_PCT_WARN = 2.0
+
 # Below this many probes, one unanswered packet is not a loss rate. Hosts and
 # routers rate-limit ICMP replies as a matter of course - 8.8.8.8 among them -
 # so a single missing reply in a short run is the expected cost of asking,
@@ -4004,6 +4031,16 @@ VERDICT_RULES = [
      "Optical receive power is below what the receiver can work with",
      "The link can stay up while corrupting frames. Dirty or loose connector, a "
      "tight bend, or a dying laser at the far end - in that order of likelihood."),
+    ("nic_ring_overruns", "this device, not the link into it",
+     "Frames are arriving intact and this device is failing to take delivery",
+     "The link delivered the frames, so this is not something to take to "
+     "whoever owns the cable. Look at the ring buffer size, the driver, and "
+     "whether the CPU that services this queue is keeping up."),
+    ("frame_length_errors", "the segment, over how big a frame may be",
+     "Frames are arriving on this segment at an invalid length",
+     "Runts and giants mean something here disagrees about frame size. Compare "
+     "the MTU at both ends of this link, and check for a VLAN tag being added "
+     "or stripped where it is not expected."),
     ("nic_reset_logged", "this device's NIC or its driver",
      "The kernel has been resetting this device's network hardware",
      "The adapter or its driver is failing, not the network. Every connection "
@@ -4674,6 +4711,7 @@ _LOCAL_FAULTS = (
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
+    "nic_ring_overruns", "frame_length_errors",
     "conntrack_drops_live", "conntrack_drops_historical", "conntrack_near_limit",
     "aborts_on_memory", "aborts_on_timeout",
     # Its own stack and clock.
@@ -4804,7 +4842,8 @@ STAGE_RULES = [
     # "everything looks fine" that sends someone hunting upstream.
     ("link", {"link_errors_live", "duplex_mismatch", "tcp_flow_loss_all_peers",
               "optics_alarm", "optics_rx_low", "link_flapping_live", "nic_drops_live",
-              "rcv_buffer_pruned", "link_flapping_logged", "nic_reset_logged"},
+              "rcv_buffer_pruned", "link_flapping_logged", "nic_reset_logged",
+              "nic_ring_overruns", "frame_length_errors"},
      {"slow_link", "negotiated_below_capacity", "bond_degraded",
       "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
@@ -5165,6 +5204,12 @@ def _sides_can_agree(a, b):
 # treating them as separate families let one number read as three agreeing
 # opinions and put a slow path at high confidence on a single measurement.
 SHARED_FAMILY = {
+    # This box failing to take delivery, counted in two places. The kernel's
+    # own backlog and the adapter's ring are the same complaint at two depths,
+    # so neither is independent evidence for the other.
+    "nic_drops_live": "backlog",
+    "nic_drops_historical": "backlog",
+    "nic_ring_overruns": "backlog",
     # One link running below par, said two ways. slow_link owns the absolute
     # case and this owns the relative one, so they are the same check and must
     # not confirm each other.
@@ -6041,7 +6086,36 @@ def _check_counters(raw, findings, duplex_by_iface):
         detail = f" ({', '.join(bits)})" if bits else ""
         secs = iface["sample_seconds"]
 
-        if iface["delta_errors"]:
+        # Which sub-counter moved decides the owner. rx_errors is an
+        # aggregate, and blaming all of it on the cable sent someone to a
+        # switch port over a box that could not drain its own ring buffer.
+        host_errs = iface.get("delta_host_errors") or 0
+        length_errs = iface.get("delta_length_errors") or 0
+        link_errs = (iface["delta_errors"] or 0) - host_errs - length_errs
+        if iface["delta_errors"] and host_errs > max(link_errs, length_errs):
+            findings.append({
+                "severity": "critical",
+                "code": "nic_ring_overruns", "scope": name,
+                "layer": 2,
+                "message": f"{name}: {host_errs:,} of {iface['delta_errors']:,} new error(s) in "
+                           f"the last {secs}s were the receiver overflowing or the host having "
+                           f"no buffer ready. The frames arrived intact and this device failed "
+                           f"to take delivery, so nothing about the cable, the optic or the "
+                           f"switch port explains it - the ring buffer, the driver, or the CPU "
+                           f"that services it does." + _burst_note(raw, iface),
+            })
+        elif iface["delta_errors"] and length_errs > max(link_errs, host_errs):
+            findings.append({
+                "severity": "critical",
+                "code": "frame_length_errors", "scope": name,
+                "layer": 2,
+                "message": f"{name}: {length_errs:,} of {iface['delta_errors']:,} new error(s) in "
+                           f"the last {secs}s were frames of an invalid length - runts and "
+                           f"giants. Frames arriving the wrong size point at something on this "
+                           f"segment disagreeing about how big a frame may be, which is an MTU "
+                           f"or VLAN-tagging mismatch rather than a damaged link.",
+            })
+        elif iface["delta_errors"]:
             findings.append({
                 "severity": "critical",
                 "code": "link_errors_live", "scope": name,
@@ -6082,15 +6156,26 @@ def _check_counters(raw, findings, duplex_by_iface):
                            f"this interface and the switch port it's plugged into.",
             })
 
-        if iface["delta_drops"]:
+        # A discard is not an error. Errors should never happen and are worth
+        # reporting on a single occurrence; discards happen every day on a busy
+        # box - buffer pressure, traffic it was never going to deliver upwards
+        # - and firing on one of them made this the finding that was always
+        # present, corroborating whatever else was found and lifting the
+        # confidence of conclusions it had nothing to do with.
+        window = iface.get("delta_packets") or 0
+        drop_pct = (100.0 * iface["delta_drops"] / window
+                    if iface["delta_drops"] and window else 0)
+        if window >= MIN_WINDOW_PACKETS_FOR_RATE and drop_pct >= DROP_PCT_WARN:
             findings.append({
                 "severity": "warning",
                 "code": "drops_live", "scope": name,
                 "layer": 2,
-                "message": f"{name}: {iface['delta_drops']:,} packet(s) dropped in the last {secs}s "
-                           f"({iface['drops']:,} total). Frames are arriving but this device isn't "
-                           f"keeping up - CPU, ring buffer, or driver, rather than the network."
-                           + _burst_note(raw, iface),
+                "message": f"{name}: {iface['delta_drops']:,} of {window:,} packet(s) discarded in "
+                           f"the last {secs}s ({drop_pct:.1f}%, {iface['drops']:,} total). A few "
+                           f"discards are normal on any busy interface; this is a share large "
+                           f"enough to be losing real traffic. Frames are arriving and this "
+                           f"device isn't keeping up - CPU, ring buffer, or driver, rather than "
+                           f"the network." + _burst_note(raw, iface),
             })
 
 def _check_link_modes(raw, findings):

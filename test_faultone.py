@@ -2092,6 +2092,90 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestAnErrorBurstIsSplitByWhoOwnsIt(unittest.TestCase):
+    """rx_errors is an aggregate - the kernel documents it as including the
+    length, CRC and frame counters "and other errors not otherwise counted".
+    Blaming all of it on the cable sent someone to a switch port over a box
+    that could not drain its own ring buffer."""
+
+    def codes(self, **kw):
+        m = fresh()
+        counters(m, rx_errors=900, d_rx_errors=40, d_rx_packets=2_000, **kw)
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_a_fifo_overflow_is_this_box_not_the_cable(self):
+        self.assertIn("nic_ring_overruns", self.codes(d_rx_over_errors=35))
+
+    def test_a_packet_the_host_had_no_buffer_for_is_the_same_fault(self):
+        self.assertIn("nic_ring_overruns", self.codes(d_rx_missed_errors=35))
+
+    def test_an_invalid_length_is_a_disagreement_about_frame_size(self):
+        self.assertIn("frame_length_errors", self.codes(d_rx_length_errors=35))
+
+    def test_a_crc_error_is_still_the_cable(self):
+        self.assertIn("link_errors_live", self.codes(d_rx_crc_errors=35))
+
+    def test_a_driver_that_exports_no_detail_falls_back_to_the_link(self):
+        """Not every driver breaks rx_errors down. Without a fallback the
+        commonest case on the cheapest hardware would report nothing at all."""
+        self.assertIn("link_errors_live", self.codes())
+
+    def test_one_burst_produces_one_finding(self):
+        for kw in ({"d_rx_over_errors": 35}, {"d_rx_length_errors": 35},
+                   {"d_rx_crc_errors": 35}):
+            with self.subTest(**kw):
+                fired = [c for c in self.codes(**kw)
+                         if c in ("nic_ring_overruns", "frame_length_errors",
+                                  "link_errors_live")]
+                self.assertEqual(len(fired), 1)
+
+    def test_the_ring_and_the_backlog_do_not_confirm_each_other(self):
+        """Both are this box failing to take delivery, counted at two depths.
+        Separate families made one complaint read as two agreeing faults."""
+        self.assertEqual(nd._finding_family("nic_ring_overruns"),
+                         nd._finding_family("nic_drops_live"))
+
+    def test_the_overrun_verdict_does_not_send_anyone_to_a_switch_port(self):
+        """Its whole point is that the link delivered the frames."""
+        rule = dict((c, (o, h, n)) for c, o, h, n in nd.VERDICT_RULES)["nic_ring_overruns"]
+        self.assertNotIn("switch port", " ".join(rule).lower())
+
+
+class TestADiscardIsNotAnError(unittest.TestCase):
+    """Errors should never happen and are worth reporting on one occurrence.
+    Discards happen every day on a busy box, and firing on a single one made
+    this the finding that was always present - corroborating whatever else was
+    found and lifting the confidence of conclusions it had nothing to do with."""
+
+    def codes(self, dropped, packets):
+        m = fresh()
+        counters(m, rx_dropped=900, d_rx_dropped=dropped, d_rx_packets=packets)
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_a_real_share_of_the_window_is_reported(self):
+        self.assertIn("drops_live", self.codes(200, 2_000))
+
+    def test_a_handful_across_a_busy_window_is_not(self):
+        self.assertNotIn("drops_live", self.codes(31, 50_000))
+
+    def test_a_percentage_of_forty_packets_is_not_a_percentage(self):
+        """The window is seconds long on a box that may be nearly idle."""
+        self.assertNotIn("drops_live", self.codes(2, 40))
+
+    def test_discards_are_judged_far_more_loosely_than_errors(self):
+        """The two counters mean opposite things - a frame that arrived
+        damaged, and a frame this box chose not to deliver upwards. Sharing a
+        threshold is what made them read alike."""
+        self.assertGreater(nd.DROP_PCT_WARN * 10_000, nd.ERR_PPM_WARN * 10)
+
+    def test_one_error_still_speaks_where_one_discard_does_not(self):
+        m = fresh()
+        counters(m, rx_errors=900, d_rx_errors=1, d_rx_packets=50_000,
+                 d_rx_crc_errors=1)
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertIn("link_errors_live", codes)
+
+
 class TestBondMembers(unittest.TestCase):
     """A bond hides its own failures by design - the interface stays up, the
     address stays put, and the redundancy that was the point of it is gone."""
@@ -6307,7 +6391,15 @@ def _(nd): counters(nd, rx_errors=1200, rx_crc_errors=1150, d_rx_errors=14)
 def _(nd): counters(nd, rx_errors=4000, rx_crc_errors=3900)
 
 @scenario("drops_live")
-def _(nd): counters(nd, rx_dropped=900, d_rx_dropped=31)
+def _(nd): counters(nd, rx_dropped=900, d_rx_dropped=200, d_rx_packets=2_000)
+
+@scenario("nic_ring_overruns")
+def _(nd): counters(nd, rx_errors=900, d_rx_errors=40, d_rx_over_errors=35,
+                    d_rx_packets=2_000)
+
+@scenario("frame_length_errors")
+def _(nd): counters(nd, rx_errors=900, d_rx_errors=40, d_rx_length_errors=35,
+                    d_rx_packets=2_000)
 
 @scenario("collisions")
 def _(nd): counters(nd, collisions=900)
@@ -7462,7 +7554,7 @@ class TestEveryFindingFires(unittest.TestCase):
         tool sees and this cannot - so drops on a quiet link say so."""
         mod = fresh()
         counters(mod, rx_packets=10_000_000, rx_dropped=900,
-                 d_rx_dropped=120, d_rx_packets=50_000, d_rx_bytes=2_000_000)
+                 d_rx_dropped=2_000, d_rx_packets=50_000, d_rx_bytes=2_000_000)
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         fired = [f for f in report["findings"] if f.get("code") == "drops_live"]
         self.assertTrue(fired)

@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 133
+difference is which one it puts at the top, and that is the whole product: 135
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -212,6 +212,57 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## One error burst, three owners
+
+`rx_errors` is an aggregate. The kernel documents it as including the length,
+CRC and frame counters "and other errors not otherwise counted" — and this
+reported all of it with one sentence, sending the reader to *"cable,
+connector/SFP, or a duplex mismatch on the switch port"* whatever had actually
+happened. The sub-counters were read, but only to print a parenthetical.
+
+Which one moved decides who owns it:
+
+| what moved | what it means | owner |
+|---|---|---|
+| `rx_over_errors`, `rx_missed_errors` | the receiver overflowed, or the host had no buffer ready | **this box** — ring buffer, driver, or the CPU servicing the queue |
+| `rx_length_errors` | runts and giants — frames arriving at an invalid length | **the segment** — an MTU or VLAN-tagging disagreement |
+| `rx_crc_errors`, `rx_frame_errors`, anything else | a frame arrived damaged | the cable, connector, optic or duplex setting |
+
+The frames in the first row **arrived intact**. Nothing about the cable, the
+optic or the switch port explains a box that failed to take delivery of them,
+and its verdict deliberately contains no phrase that would send anyone to a
+port — the guard that makes port-naming verdicts name the port would otherwise
+append a switch port to advice that says not to go there.
+
+The dominant cause wins, so one burst produces one finding. Where a driver
+breaks nothing down — common on cheap hardware — it falls through to the link,
+which is both the old behaviour and the safest guess.
+
+`nic_ring_overruns` shares a family with the softnet backlog findings. Both are
+this box failing to take delivery, counted at two depths, so neither is
+independent evidence for the other.
+
+## A discard is not an error
+
+These were judged alike: a single dropped packet in the counter window produced
+`drops_live`, exactly as a single error produced `link_errors_live`. The two
+counters mean opposite things. An error is a frame that arrived damaged and
+should never happen. A discard is a frame this box chose not to deliver
+upwards — buffer pressure, traffic it was never going to pass on — and happens
+on every busy interface there is.
+
+So `drops_live` was the finding that was always present. Worse than noise: it
+sits at layer 2, so it corroborated nearly anything above it and lifted the
+confidence of conclusions it had nothing to do with.
+
+It now needs **2%** of the window's packets, across a window of at least
+**1,000** of them — two orders of magnitude looser than the error threshold,
+which is the asymmetry the counters deserve. A percentage of fifty packets is
+not a percentage of anything, and the window is seconds long on a box that may
+be nearly idle.
+
+One error still speaks where one discard does not. That is the point.
 
 ## A bond hides the thing it was built for
 
@@ -539,11 +590,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **133** | Distinct conclusions it can reach and state in plain language. 116 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **116** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 664 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **135** | Distinct conclusions it can reach and state in plain language. 118 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **118** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 677 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 133 findings are the useful figure** if you want to know what the tool can
+**The 135 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -658,7 +709,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 664 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 677 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -714,6 +765,8 @@ can say what the bar was rather than "the tool said so".
 | `ATTEMPT_FAIL_PCT` | **10** | share of connection attempts that never establish at all |
 | `CSUM_ERR_PPM` | **1** | segments per million arriving with a bad TCP checksum — should be zero |
 | `SPURIOUS_RETRANS_PCT` | **30** | share of retransmissions the far end says were unnecessary before reordering, not loss, is the story |
+| `MIN_WINDOW_PACKETS_FOR_RATE` | **1,000** | the same idea for a counter window rather than a lifetime. A percentage of fifty packets is not a percentage of anything, and the window is seconds long on a box that may be nearly idle |
+| `DROP_PCT_WARN` | **2.0** | share of a window's packets discarded before it is worth saying so. Two orders of magnitude looser than the error threshold on purpose - the counters mean opposite things: an error is a frame that arrived damaged and should never happen, a discard is a frame this box chose not to deliver upwards and happens on every busy interface there is |
 | `MIN_PACKETS_FOR_RATE` | **20000** | packets an interface must have carried before an error or collision *rate* is quoted about it. One error on a nearly idle NIC divides out to twenty times the threshold - the same reasoning `MIN_PROBES_FOR_LOSS` applies to ping, which had never been applied here |
 | `MIN_PROBES_FOR_LOSS` | **10** | probes needed before a single unanswered one is allowed to be called a loss rate |
 | `LATENCY_HIGH_MS` | **400** | round trip past which distance stops explaining the delay. Light in fibre crosses the planet and returns in about 250ms, and the longest real terrestrial paths measure 250-300ms, so this leaves room for a genuinely long route. One threshold rather than a warn/critical pair: the verdict takes its severity from the finding that headlines it, so a warning-level rule above a critical one would downgrade the whole run |
@@ -1964,7 +2017,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-664 tests, no dependencies, no network, a few seconds — so they run
+677 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2040,7 +2093,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 133 findings with readable rules instead of
+> way out - and who owns it. Ranks 135 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

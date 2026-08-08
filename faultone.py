@@ -4356,6 +4356,16 @@ VERDICT_RULES = [
      "This device's real TCP traffic is being retransmitted",
      "Measured on actual traffic rather than probes. Pair it with the path loss "
      "figures to place where the drops happen."),
+    # Above call quality because voice is one thing a slow path ruins and the
+    # report has to work for a box whose traffic is requests and responses.
+    # Below latency_wall, which names the hop: where the delay accumulates
+    # beats what it costs, when the path can say.
+    ("latency_high", "the path to the target - distance if it is genuinely far away",
+     "The round trip to the target is long enough to slow every request",
+     "Nothing is being dropped, so this is delay rather than damage and more "
+     "bandwidth will not move it. Read the per-hop times in the path panel for "
+     "where it accumulates, and confirm the target is as far away as this "
+     "implies before taking it to anyone."),
     ("call_quality_bad", "the path to the target - see the latency/jitter/loss split",
      "Voice and video will be unusable on this connection",
      "Check which of the three is to blame: jitter points at congestion or a "
@@ -4457,6 +4467,12 @@ BACKEND_TARGET_VERDICTS = {
         "The local link is clean, so the loss is on the internal path to that "
         "backend. Take the hop where it starts to whoever runs that segment - "
         "this is inside your own network."),
+    "latency_high": (
+        "the segment between this box and that backend",
+        "The backend this box depends on is hundreds of milliseconds away",
+        "Distance does not explain this one - it is an internal path, so the "
+        "delay is queuing or a bad route inside your own network rather than "
+        "the width of an ocean. Every request this box serves waits behind it."),
     "trace_stalls": (
         "the internal path to that backend",
         "The path to the backend stops responding before reaching it",
@@ -4568,6 +4584,7 @@ FINDING_SIDE.update({
     "double_nat": "upstream",
     "pmtu_blackhole": "upstream",
     "pmtu_unmeasurable": "upstream",
+    "latency_high": "upstream",
     "call_quality_bad": "upstream",
     "call_quality_degraded": "upstream",
     "uplink_saturated": "upstream",
@@ -4644,7 +4661,7 @@ STAGE_RULES = [
     ("internet", {"inet_unreachable", "destination_unresponsive", "loop",
                   "conntrack_drops_live"},
      {"inet_partial_loss", "inet_loss_unmeasured", "path_loss", "trace_stalls",
-      "latency_wall", "tcp_retransmits",
+      "latency_wall", "latency_high", "tcp_retransmits",
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
@@ -4982,11 +4999,25 @@ def _sides_can_agree(a, b):
     return a == b or "local" in (a, b)
 
 
+# Findings whose code does not say which check they came from. The heuristic
+# below splits on the first word, which is right for four port results and
+# wrong for these: the call score is computed from the same round trip that
+# latency_high reports and the wall is that delay located on the path, so
+# treating them as separate families let one number read as three agreeing
+# opinions and put a slow path at high confidence on a single measurement.
+SHARED_FAMILY = {
+    "latency_high": "latency",
+    "latency_wall": "latency",
+    "call_quality_bad": "latency",
+    "call_quality_degraded": "latency",
+}
+
+
 def _finding_family(code):
     """Which check a finding came from. Four port results are four instances of
     one check, not four independent signals - counting them as corroboration
     let a speculative port sweep read as 'high confidence'."""
-    return (code or "").split("_")[0]
+    return SHARED_FAMILY.get(code) or (code or "").split("_")[0]
 
 
 def _retarget_verdict(verdict, raw):
@@ -5751,6 +5782,7 @@ UPLINK_UNKNOWN_FLOOR_MBPS = 5
 CONGESTION_MASQUERADE = {
     "inet_partial_loss", "tcp_flow_loss_all_peers", "tcp_retransmits",
     "call_quality_bad", "call_quality_degraded", "latency_wall",
+    "latency_high",
 }
 
 # A single hop has to add this many milliseconds, and this share of the whole
@@ -5761,6 +5793,15 @@ CONGESTION_MASQUERADE = {
 # trade: naming one of them would be a claim that is not true of either.
 LATENCY_WALL_MS = 100
 LATENCY_WALL_SHARE = 0.5
+
+# Round trip past which the distance explanation runs out. Light in fibre
+# covers about 200,000 km/s, so the far side of the planet and back is roughly
+# 250ms and the longest real terrestrial paths measure 250-300ms. 400ms leaves
+# room for a genuinely long route and still catches delay that is not distance.
+# One threshold rather than a warn/critical pair on purpose: the verdict takes
+# its severity from the finding that headlines it, so a warning-level rule
+# sitting above a critical one would quietly downgrade the whole run.
+LATENCY_HIGH_MS = 400
 
 # Utilisation below which a queue overflowing has to be explained by the shape
 # of the traffic rather than its volume.
@@ -7279,8 +7320,31 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
 
 
 def _check_call_quality(raw, findings, target, inet_loss):
-    """Reduce latency, jitter and loss to the score a complaint is about."""
+    """What the round trip costs: on its own, and reduced to a call score.
+
+    Two statements from one measurement, because a box serving requests and a
+    box carrying calls are hurt by the same milliseconds in different words.
+    The MOS finding used to be the only one, so an 800ms path to a database
+    reported that voice and video would be unusable - true, and no use at all
+    to whoever runs the database. It also needs a loss figure to compute, so a
+    run that could not measure loss said nothing about latency whatsoever.
+    """
     ping_stats = parse_ping_stats(raw.get("ping_internet", {}))
+    avg = ping_stats.get("avg_ms")
+    if avg is not None and avg >= LATENCY_HIGH_MS:
+        findings.append({
+            "severity": "critical",
+            "layer": 3,
+            "code": "latency_high",
+            "message": f"The round trip to {target} averages {avg:.0f}ms. Light in "
+                       f"fibre crosses the planet and comes back in about 250ms, so "
+                       f"distance stops explaining a path this long - unless this link "
+                       f"is satellite, where a geostationary hop is 500-650ms by itself "
+                       f"and nothing is wrong. Every request pays it before any data "
+                       f"moves, and a new TLS connection pays it three times over, so "
+                       f"anything that makes several calls is seconds slower no matter "
+                       f"how much bandwidth the line has.",
+        })
     call_quality = None
     if ping_stats.get("avg_ms") is not None and inet_loss is not None:
         mos, r = mos_score(ping_stats["avg_ms"], ping_stats.get("stdev_ms"), inet_loss)

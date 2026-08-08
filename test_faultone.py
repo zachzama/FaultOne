@@ -2092,6 +2092,68 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestLatencyHasItsOwnWords(unittest.TestCase):
+    """An 800ms path to a database used to report that voice and video would
+    be unusable. True, and no use to whoever runs the database."""
+
+    def verdict(self, avg, loss=0, target="8.8.8.8", **kw):
+        m = fresh()
+        ping_map(m, inet_loss=loss, avg=avg, mdev=5.0)
+        return m.diagnose(target, None, quick=False, **kw)
+
+    def test_a_slow_path_is_named_as_delay_not_as_call_quality(self):
+        v = self.verdict(800.0)["verdict"]
+        self.assertEqual(v["based_on"][0], "latency_high")
+        self.assertNotIn("Voice", v["headline"])
+        self.assertEqual(v["severity"], "critical")
+
+    def test_the_call_score_is_still_reported_underneath(self):
+        """Delay is the general statement; what it does to a call is a real
+        consequence of it, not a competing answer."""
+        codes = [f["code"] for f in self.verdict(800.0)["findings"]]
+        self.assertEqual(codes.index("latency_high") + 1, codes.index("call_quality_bad"))
+
+    def test_a_long_haul_path_is_not_called_a_fault(self):
+        """The far side of the planet and back is about 250ms of physics."""
+        codes = [f["code"] for f in self.verdict(300.0)["findings"]]
+        self.assertNotIn("latency_high", codes)
+
+    def test_it_does_not_need_a_loss_figure_to_say_anything(self):
+        """The call score needs loss to compute, so a run that could not
+        measure loss said nothing at all about latency."""
+        m = fresh()
+        m.cmd_ping = lambda t, c=4, w=2: {
+            "ok": True, "cmd": "ping",
+            "stdout": "rtt min/avg/max/mdev = 1.0/900.0/1800.0/5.0 ms\n"}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertIn("latency_high", codes)
+        self.assertNotIn("call_quality_bad", codes)
+
+    def test_loss_still_outranks_delay(self):
+        """Traffic that never arrives beats traffic that arrives late."""
+        v = self.verdict(800.0, loss=25)["verdict"]
+        self.assertEqual(v["based_on"][0], "inet_partial_loss")
+
+    def test_the_call_score_is_not_a_second_opinion_about_the_latency(self):
+        """It is computed from the same round trip. Counting it as agreement
+        put a slow path at high confidence on one measurement."""
+        rep = self.verdict(800.0)
+        v = rep["verdict"]
+        self.assertEqual(v["corroborated_by"], [])
+        self.assertEqual(v["confidence"], "medium")
+        self.assertNotIn("call_quality_bad", [u["code"] for u in v["unrelated"]])
+
+    def test_distance_is_not_offered_as_an_excuse_for_an_internal_backend(self):
+        """400ms to a box in your own rack is queuing or a bad route. The
+        internet verdict's own next step tells the reader to check whether the
+        target is really that far away, which is the wrong question here."""
+        own, backend = nd.VERDICT_RULES, nd.BACKEND_TARGET_VERDICTS
+        internet = dict((c, (o, h, n)) for c, o, h, n in own)["latency_high"]
+        self.assertIn("latency_high", backend)
+        self.assertNotEqual(backend["latency_high"], internet)
+        self.assertNotIn("ocean", internet[2])
+
+
 class TestFaultsAreScopedToWhatTheyAreAbout(unittest.TestCase):
     """Two cables are two faults, not one confirmed twice."""
 
@@ -2243,15 +2305,17 @@ class TestLatencyWall(unittest.TestCase):
         self.assertNotIn("latency_wall", self.path([150.0, 500.0, 900.0]))
 
     def test_the_uniformly_slow_path_reports_the_thing_that_is_true(self):
-        """It is not silent - it says calls will be unusable, which is the
-        honest answer when no hop is to blame. Before the share test this
-        verdict was unreachable: the wall stole it in every scenario."""
+        """It is not silent - it names the delay itself, which is the honest
+        answer when no hop is to blame. Before the share test the wall stole
+        this verdict in every scenario, and for a while afterwards the only
+        thing left to say was what the path did to a phone call."""
         m = fresh()
         ping_map(m, inet_loss=0, avg=420.0, mdev=90.0, sent=20)
         mtr(m, [{"count": i + 1, "host": f"198.51.100.{i}", "Loss%": 0.0,
                  "Snt": 30, "Avg": v} for i, v in enumerate([140.0, 280.0, 420.0])])
         rep = m.diagnose("8.8.8.8", None, quick=False)
-        self.assertEqual(rep["verdict"]["based_on"][0], "call_quality_bad")
+        self.assertEqual(rep["verdict"]["based_on"][0], "latency_high")
+        self.assertNotIn("latency_wall", [f["code"] for f in rep["findings"]])
 
 
 class TestQueuingDelay(unittest.TestCase):
@@ -6225,6 +6289,9 @@ def _(nd): ping_map(nd, inet_loss=3, avg=120.0, mdev=45.0)
 
 @scenario("call_quality_bad")
 def _(nd): ping_map(nd, inet_loss=25, avg=300.0, mdev=90.0)
+
+@scenario("latency_high")
+def _(nd): ping_map(nd, inet_loss=0, avg=800.0, mdev=5.0)
 
 @scenario("port_refused", check_ports=["9999"])
 def _(nd): nd.cmd_check_port = lambda h, p, timeout=5: {"ok": False, "cmd": f"tcp {h}:{p}",

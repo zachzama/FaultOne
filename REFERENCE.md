@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 127
+difference is which one it puts at the top, and that is the whole product: 128
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -212,6 +212,45 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## Latency has its own words
+
+Until now the only thing this said about a slow path was what it would do to a
+phone call. An 800ms round trip to a database reported that *voice and video
+will be unusable* — true, and no use whatsoever to whoever runs the database.
+The score also needs a loss figure to compute, so a run that could not measure
+loss said nothing about latency at all.
+
+`latency_high` fires at **400ms** and says what the delay costs any traffic:
+every request pays it before a byte moves, and a new TLS connection pays it
+three times over. It is deliberately one threshold rather than a warning and a
+critical — the verdict takes its severity from the finding that headlines it,
+so a warning-level rule sitting above a critical one would quietly downgrade
+the whole run.
+
+400ms is a physical line, not a preference. Light in fibre covers about
+200,000 km/s, so the far side of the planet and back is roughly 250ms and the
+longest real terrestrial paths measure 250–300ms. Past 400ms distance has
+stopped explaining it — with one benign exception the finding names itself, a
+geostationary satellite hop, which is 500–650ms on its own with nothing wrong.
+
+Where it sits in the ranking is the rest of the answer:
+
+| | |
+|---|---|
+| below `latency_wall` | when a single hop adds most of the delay, **where** beats **what it costs** |
+| below the loss rules | traffic that never arrives beats traffic that arrives late |
+| above the call score | which stays in the report as a consequence of the delay, not a competing answer |
+
+For an internal backend the verdict is re-owned, as the reachability ones
+already are. The internet version tells the reader to check whether the target
+really is that far away; for a box in your own rack that is the wrong question,
+and the delay is queuing or a bad route rather than the width of an ocean.
+
+**The call score does not corroborate it.** It is computed from the same round
+trip, so counting it as an independent second opinion put a slow path at high
+confidence on a single measurement — the same inflation two cables produced,
+in a different guise. Both, and the wall, are now one family.
 
 ## Down, or unreachable
 
@@ -422,11 +461,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **127** | Distinct conclusions it can reach and state in plain language. 110 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **110** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 634 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **128** | Distinct conclusions it can reach and state in plain language. 111 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **111** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 641 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 127 findings are the useful figure** if you want to know what the tool can
+**The 128 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -541,7 +580,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 634 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 641 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -597,6 +636,7 @@ can say what the bar was rather than "the tool said so".
 | `SPURIOUS_RETRANS_PCT` | **30** | share of retransmissions the far end says were unnecessary before reordering, not loss, is the story |
 | `MIN_PACKETS_FOR_RATE` | **20000** | packets an interface must have carried before an error or collision *rate* is quoted about it. One error on a nearly idle NIC divides out to twenty times the threshold - the same reasoning `MIN_PROBES_FOR_LOSS` applies to ping, which had never been applied here |
 | `MIN_PROBES_FOR_LOSS` | **10** | probes needed before a single unanswered one is allowed to be called a loss rate |
+| `LATENCY_HIGH_MS` | **400** | round trip past which distance stops explaining the delay. Light in fibre crosses the planet and returns in about 250ms, and the longest real terrestrial paths measure 250-300ms, so this leaves room for a genuinely long route. One threshold rather than a warn/critical pair: the verdict takes its severity from the finding that headlines it, so a warning-level rule above a critical one would downgrade the whole run |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
 | `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
 | `BURST_UTIL_PCT` | **25** | utilisation below which a queue overflowing has to be explained by bursts rather than volume |
@@ -1844,7 +1884,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-634 tests, no dependencies, no network, a few seconds — so they run
+641 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -1920,7 +1960,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 127 findings with readable rules instead of
+> way out - and who owns it. Ranks 128 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

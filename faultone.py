@@ -482,6 +482,11 @@ ETHTOOL_SPEED_RE = re.compile(r"^\s*Speed:\s*(\d+)", re.M)
 ETHTOOL_DUPLEX_RE = re.compile(r"^\s*Duplex:\s*(\w+)", re.M)
 ETHTOOL_AUTONEG_RE = re.compile(r"^\s*Auto-negotiation:\s*(\w+)", re.M)
 ETHTOOL_LINK_RE = re.compile(r"^\s*Link detected:\s*(\w+)", re.M)
+# The supported-modes block runs over several lines and ends at the next
+# "Something:" key, so it is taken whole and the speeds picked out of it.
+ETHTOOL_SUPPORTED_RE = re.compile(
+    r"^\s*Supported link modes:(.*?)(?=^\s*[A-Z][\w -]*:)", re.M | re.S)
+ETHTOOL_BASE_RE = re.compile(r"(\d+)base", re.I)
 
 
 def parse_ethtool(text):
@@ -504,6 +509,14 @@ def parse_ethtool(text):
     m = ETHTOOL_LINK_RE.search(text or "")
     if m:
         out["carrier"] = m.group(1).lower() == "yes"
+    # The fastest mode the hardware itself can do. Without it "slow" can only
+    # be an absolute number, and a 10G port sitting at 1G is not slow by any
+    # absolute measure while being a tenth of what was paid for.
+    m = ETHTOOL_SUPPORTED_RE.search(text or "")
+    if m:
+        speeds = [int(v) for v in ETHTOOL_BASE_RE.findall(m.group(1))]
+        if speeds:
+            out["max_mbps"] = max(speeds)
     return out
 
 
@@ -1690,6 +1703,14 @@ ACCEPT_OVERFLOW_PER_DAY = 10
 # random on a box that passes every other check here.
 CONNTRACK_WARN_PCT = 80
 
+# How full the neighbour table gets before it is worth saying so. Same figure
+# as the connection-tracking table above and for the same reason: both refuse
+# outright at 100% with no back pressure, so the useful moment to speak is
+# before that rather than after. Its own constant all the same - the two are
+# different tables with different ceilings, and sharing one number would mean
+# tuning either retuned the other.
+NEIGH_TABLE_WARN_PCT = 80
+
 # Refusals per day of uptime before a history of them is worth mentioning.
 # Its own constant: this shared ACCEPT_OVERFLOW_PER_DAY, so tuning the accept
 # queue silently retuned connection tracking, which is a different check
@@ -1723,6 +1744,14 @@ COVERAGE_THIN_PCT = 40
 # Share of connection attempts that never reached ESTABLISHED at all. Distinct
 # from a retransmitted SYN, which eventually got there.
 ATTEMPT_FAIL_PCT = 10
+
+# Resets this box sent, as a share of the connections it took part in. A reset
+# is not by itself a fault - an application that closes with data still unread
+# sends one, and browsers abandon connections all day - so the line is drawn
+# where the count stops looking like a by-product: at least one reset for every
+# connection the box handled. A listener that has died, or a port nothing is
+# bound to, produces exactly that, and so does a scan.
+RESETS_PER_CONN_PCT = 100
 
 # A TLS handshake is one or two round trips. Past this multiple of the connect
 # that preceded it, the extra time is the server doing work - key exchange, or
@@ -1882,6 +1911,102 @@ def _read_conntrack():
     for name, value in wanted.items():
         if name in names:
             out["ct_" + name] = value
+    return out
+
+
+def _read_neigh_table(base="/proc"):
+    """How full the neighbour table is, and whether it has already overflowed.
+
+    The ARP cache has a hard ceiling and no back pressure: past gc_thresh3 the
+    kernel simply stops resolving, and the box loses the ability to talk to
+    some of its neighbours while every check that does not need one of them
+    passes. The symptom is intermittent unreachability that follows no pattern,
+    which is the exact shape of fault this tool exists to attribute.
+
+    `base` is a parameter for the same reason the sysfs readers take one - so
+    the file handling can be driven from a fixture tree rather than stubbed a
+    layer above.
+    """
+    out = {}
+    try:
+        with open(os.path.join(base, "sys/net/ipv4/neigh/default/gc_thresh3")) as fh:
+            out["gc_thresh3"] = int(fh.read().strip())
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(os.path.join(base, "net/stat/arp_cache")) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+    if len(lines) < 2:
+        return out
+    # Same shape as the conntrack table: hex, one row per CPU, and "entries"
+    # repeats the table total on every row rather than being a per-CPU share.
+    names = lines[0].split()
+    fulls = 0
+    for row in lines[1:]:
+        cols = row.split()
+        if len(cols) != len(names):
+            continue
+        if "entries" in names:
+            try:
+                # Assigned, never accumulated: this column repeats the whole
+                # table on every row rather than holding a per-CPU share, so
+                # adding it up would report a table over its own ceiling on any
+                # box with more than one core.
+                out["entries"] = int(cols[names.index("entries")], 16)
+            except ValueError:
+                pass
+        if "table_fulls" in names:
+            try:
+                fulls += int(cols[names.index("table_fulls")], 16)
+            except ValueError:
+                pass
+    if "table_fulls" in names:
+        out["table_fulls"] = fulls
+    return out
+
+
+def _bond_members_linux(base="/sys/class/net"):
+    """Which interfaces are bonds, and which of their members are down.
+
+    A bond hides its own failures by design: lose one member of a pair and the
+    interface stays up, the address stays put, and nothing anywhere reports a
+    fault. What has actually gone is the redundancy that was the reason for
+    bonding in the first place, plus half the capacity, and the next member to
+    fail takes the box off the network.
+    """
+    out = {}
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return {}
+    for name in names:
+        bdir = os.path.join(base, name, "bonding")
+        if not os.path.isdir(bdir):
+            continue
+
+        def read(path):
+            try:
+                with open(path) as fh:
+                    return fh.read().strip()
+            except OSError:
+                return None
+
+        slaves = (read(os.path.join(bdir, "slaves")) or "").split()
+        if not slaves:
+            continue
+        down = []
+        for slave in slaves:
+            status = read(os.path.join(base, slave, "bonding_slave", "mii_status"))
+            if status is None:
+                # No per-slave view: fall back to the member's own link state,
+                # which says the same thing one level less directly.
+                status = read(os.path.join(base, slave, "operstate"))
+            if status is not None and status.lower() not in ("up", "unknown"):
+                down.append(slave)
+        mode = ((read(os.path.join(bdir, "mode")) or "").split() or [None])[0]
+        out[name] = {"members": slaves, "down": down, "mode": mode}
     return out
 
 
@@ -4348,6 +4473,11 @@ VERDICT_RULES = [
      "Services here have been turning connections away under load",
      "None during this run, so it tracks load rather than a fault you can reproduce now. "
      "Worth quoting when the complaint is that the network drops connections at busy times."),
+    ("resets_sent_high", "this device, which is the one sending them",
+     "This device is resetting the connections it takes part in",
+     "The resets originate here, so this is not something arriving from the "
+     "network. Check that whatever should be listening still is, and whether "
+     "the application is aborting connections rather than closing them."),
     ("tcp_flow_sendbuf_limited", "this device",
      "Connections are blocking on this device's own send buffer",
      "A local socket or memory limit, not a network fault. Check the sending "
@@ -4382,6 +4512,26 @@ VERDICT_RULES = [
      "Connections are waiting on the far end rather than on the network",
      "The remote application is reading slower than the network delivers. Take "
      "this to whoever owns that service; more bandwidth here won't help."),
+    ("bond_degraded", "the cable or switch port behind the failed member",
+     "This box is running on fewer bonded cables than it was given",
+     "Nothing is failing yet - the bond is doing its job of hiding it. Find "
+     "the member that is down and the port at its far end, before the next "
+     "one goes and takes the box off the network."),
+    ("neigh_table_full", "this box's neighbour table, not the network",
+     "This box has run out of room to remember its neighbours",
+     "Raise net.ipv4.neigh.default.gc_thresh3, and gc_thresh2 and gc_thresh1 "
+     "with it. Until then this box will keep losing neighbours at random on a "
+     "segment where nothing is wrong."),
+    ("neigh_table_near_limit", "this box's neighbour table, not the network",
+     "This box is close to running out of room to remember its neighbours",
+     "It refuses outright rather than queuing when it fills, so raise "
+     "net.ipv4.neigh.default.gc_thresh3 now rather than after the first "
+     "unexplained outage."),
+    ("negotiated_below_capacity", "the cable, optic or port setting - not the network",
+     "This link negotiated below what the port is capable of",
+     "Nothing is failing on it today. Check the cable or optic rating and "
+     "whether a speed has been forced at either end, before the traffic needs "
+     "the capacity that was paid for."),
     ("mtu_nonstandard", "site configuration",
      "Interface MTU is not the standard 1500",
      "Fine if deliberate (a tunnel), a problem if the far end expects 1500."),
@@ -4425,6 +4575,8 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
 # the explanation for something that is failing now.
 LATENT = {
     "optics_warning", "optics_rx_marginal", "link_errors_historical",
+    "negotiated_below_capacity", "bond_degraded", "neigh_table_near_limit",
+    "neigh_table_full",
     "link_flapping", "nic_drops_historical", "conntrack_near_limit",
     "conntrack_drops_historical", "accept_overflow_historical",
     "mtu_nonstandard", "regression_since_baseline", "tls_expiring",
@@ -4516,7 +4668,9 @@ _LOCAL_FAULTS = (
     "link_errors_live", "link_errors_historical", "link_flapping",
     "link_flapping_live", "link_flapping_logged", "nic_reset_logged",
     "optics_alarm", "optics_rx_low", "optics_rx_marginal", "optics_warning",
-    "duplex_mismatch", "slow_link", "collisions", "link_saturated", "link_busy",
+    "duplex_mismatch", "slow_link", "negotiated_below_capacity", "bond_degraded",
+    "collisions", "link_saturated", "link_busy",
+    "neigh_table_full", "neigh_table_near_limit",
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
@@ -4585,6 +4739,7 @@ FINDING_SIDE.update({
     "pmtu_blackhole": "upstream",
     "pmtu_unmeasurable": "upstream",
     "latency_high": "upstream",
+    "resets_sent_high": "local",
     "call_quality_bad": "upstream",
     "call_quality_degraded": "upstream",
     "uplink_saturated": "upstream",
@@ -4624,8 +4779,9 @@ def finding_side(code):
 
 PORT_RELEVANT_CODES = {
     "link_errors_live", "link_errors_historical", "duplex_mismatch",
-    "collisions", "slow_link", "gw_unreachable", "gw_partial_loss",
+    "collisions", "slow_link", "gw_unreachable", "gw_partial_loss", "bond_degraded",
     "link_saturated", "link_busy", "duplicate_ip", "no_ipv4",
+    "negotiated_below_capacity",
     # Both flap verdicts send the reader to "the port's own log at the other
     # end" - the one place LLDP has already named.
     "link_flapping_live", "link_flapping", "link_flapping_logged",
@@ -4649,11 +4805,13 @@ STAGE_RULES = [
     ("link", {"link_errors_live", "duplex_mismatch", "tcp_flow_loss_all_peers",
               "optics_alarm", "optics_rx_low", "link_flapping_live", "nic_drops_live",
               "rcv_buffer_pruned", "link_flapping_logged", "nic_reset_logged"},
-     {"slow_link", "collisions", "link_errors_historical", "drops_live", "link_saturated",
+     {"slow_link", "negotiated_below_capacity", "bond_degraded",
+      "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
       "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical"}),
     ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict"},
-     {"interfaces_unreadable", "routes_unreadable"}),
+     {"interfaces_unreadable", "routes_unreadable",
+      "neigh_table_full", "neigh_table_near_limit"}),
     ("gateway", {"gw_unreachable"},
      {"gw_partial_loss", "gw_unknown", "gw_loss_unmeasured"}),
     # A routing loop means traffic never arrives, so it fails the stage rather
@@ -4668,6 +4826,7 @@ STAGE_RULES = [
       "tcp_flow_loss_backends", "tcp_flow_loss_clients",
       "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
+      "resets_sent_high",
       "retrans_spurious",
       # Listed as warnings, but build_stages promotes a critical to fail, so
       # "degraded" warns the stage and "unusable" fails it without a second rule.
@@ -5006,6 +5165,11 @@ def _sides_can_agree(a, b):
 # treating them as separate families let one number read as three agreeing
 # opinions and put a slow path at high confidence on a single measurement.
 SHARED_FAMILY = {
+    # One link running below par, said two ways. slow_link owns the absolute
+    # case and this owns the relative one, so they are the same check and must
+    # not confirm each other.
+    "slow_link": "link_speed",
+    "negotiated_below_capacity": "link_speed",
     "latency_high": "latency",
     "latency_wall": "latency",
     "call_quality_bad": "latency",
@@ -5315,6 +5479,36 @@ def _check_connection_setup(stats, findings, counter_window):
                            f"{live_opens}). Not a retransmitted SYN that eventually got "
                            f"through - these gave up. Measured on this box's real traffic, "
                            f"so it covers destinations no check here probes.",
+            })
+
+    # Resets this box sent. Collected for a while before anything read them:
+    # on a box that answers requests these are the wire-level shape of every
+    # refusal it makes, and a client on the end of one sees a connection
+    # dropped rather than a slow one - which is reported as the network and is
+    # not the network.
+    live_rsts = delta.get("OutRsts", 0)
+    live_conns = delta.get("PassiveOpens", 0) + live_opens
+    if live_rsts and live_conns >= 20:
+        pct = round(100.0 * live_rsts / live_conns)
+        if pct >= RESETS_PER_CONN_PCT:
+            estab = delta.get("EstabResets", 0)
+            findings.append({
+                "severity": "warning",
+                "layer": 4,
+                "code": "resets_sent_high",
+                "message": f"This device sent {live_rsts:,} TCP reset(s) in the last "
+                           f"{counter_window}s against {live_conns:,} connection(s) it "
+                           f"opened or accepted ({pct}%). The resets are coming from here, "
+                           f"not arriving here"
+                           + (f", and {estab:,} of the connections torn down were already "
+                              f"established rather than refused at the door"
+                              if estab else
+                              ", and none of them were established connections, so this is "
+                              "refusal at the door rather than sessions dying")
+                           + ". A listener that has stopped, a port nothing is bound to, or "
+                             "an application aborting instead of closing all look like this. "
+                             "Whoever is on the other end sees a connection dropped, not a "
+                             "slow one, and reports it as the network.",
             })
 
     # How much of the retransmission was unnecessary. A DSACK is the far end
@@ -5946,6 +6140,25 @@ def _check_link_modes(raw, findings):
                            f"pair silently drops you to 100), or a speed forced on one end.",
             })
 
+        # The same fault the check above catches, for a port fast enough that
+        # no absolute number finds it. A 10G NIC sitting at 1G is not slow by
+        # any threshold worth writing down and is still a tenth of the port.
+        # Only above where slow_link already speaks, so one condition does not
+        # produce two findings: its sentence is the right one below 100.
+        capacity = mode.get("max_mbps")
+        if speed is not None and capacity and 100 < speed < capacity:
+            findings.append({
+                "severity": "warning",
+                "code": "negotiated_below_capacity", "scope": name,
+                "layer": 1,
+                "message": f"{name}: the port can do {capacity:,} Mbps and negotiated "
+                           f"{speed:,}. Nothing is failing and nothing will look wrong until "
+                           f"the traffic needs the rest of it - the ceiling every throughput "
+                           f"figure in this report is measured against is a fraction of the "
+                           f"one that was bought. A cable or optic rated below the port, or a "
+                           f"speed forced at one end, is the usual reason.",
+            })
+
         mtu = mode.get("mtu")
         if mtu and mtu != STANDARD_MTU:
             findings.append({
@@ -6233,6 +6446,72 @@ def _own_tls_findings(res, port, findings):
                        + ", so an incomplete chain shows up here even though the service "
                          "works from a machine that already trusts the issuer - which is "
                          "exactly the failure that reaches customers and not you.",
+        })
+
+
+def _check_neigh_table(raw, findings):
+    """The ceiling on how many neighbours this box can talk to at once."""
+    if OS_NAME != "Linux":
+        raw["neigh_table"] = {"applicable": False}
+        return
+    table = _read_neigh_table()
+    raw["neigh_table"] = table
+    limit, entries = table.get("gc_thresh3"), table.get("entries")
+    if table.get("table_fulls"):
+        findings.append({
+            "severity": "warning",
+            "layer": 3,
+            "code": "neigh_table_full",
+            "message": f"The neighbour table has hit its ceiling "
+                       f"{table['table_fulls']:,} time(s) since boot"
+                       + (f" (limit {limit:,})" if limit else "")
+                       + ". Past it the kernel stops resolving addresses, so this box "
+                         "cannot talk to some of its neighbours while everything that does "
+                         "not need one of them keeps working. That is why it presents as the "
+                         "network failing at random and never reproduces on demand. It is a "
+                         "setting on this box, not a fault on the wire - raise "
+                         "net.ipv4.neigh.default.gc_thresh3 and the two thresholds below it.",
+        })
+    elif limit and entries and round(100.0 * entries / limit) >= NEIGH_TABLE_WARN_PCT:
+        findings.append({
+            "severity": "warning",
+            "layer": 3,
+            "code": "neigh_table_near_limit",
+            "message": f"The neighbour table holds {entries:,} of the {limit:,} entries it "
+                       f"is allowed ({round(100.0 * entries / limit)}%). It has not refused "
+                       f"anything yet. When it does the kernel stops resolving addresses "
+                       f"rather than queuing, so the first symptom is this box losing "
+                       f"neighbours at random on a segment that is working - raise "
+                       f"net.ipv4.neigh.default.gc_thresh3 before that rather than after.",
+        })
+
+
+def _check_bonds(raw, findings):
+    """A bond that is carrying traffic on fewer cables than it was given."""
+    if OS_NAME != "Linux":
+        raw["bonds"] = {"applicable": False}
+        return
+    bonds = _bond_members_linux()
+    raw["bonds"] = bonds
+    for name in sorted(bonds):
+        bond = bonds[name]
+        down, members = bond["down"], bond["members"]
+        if not down or len(down) >= len(members):
+            # All of them down is not a degraded bond, it is an interface with
+            # no carrier, and the link checks already say so in better words.
+            continue
+        findings.append({
+            "severity": "warning",
+            "code": "bond_degraded", "scope": name,
+            "layer": 1,
+            "message": f"{name}: {len(down)} of {len(members)} bonded member(s) are down "
+                       f"({', '.join(down)}"
+                       + (f", mode {bond['mode']}" if bond.get("mode") else "")
+                       + f"). The bond is still up and nothing is failing, which is the "
+                         f"whole problem - a bond is built to hide exactly this, so no "
+                         f"address moved and no alarm fired. What has gone is the redundancy "
+                         f"it was built for: the next member to fail takes this box off the "
+                         f"network, and the capacity it can carry is already reduced.",
         })
 
 
@@ -6749,6 +7028,8 @@ def _check_device_and_link(raw, findings, counter_window, soak, quick, link_samp
 
     # Duplicate IP: Wireshark's classic ARP finding, from the table this box
     # already keeps rather than from a capture.
+    _check_bonds(raw, findings)
+    _check_neigh_table(raw, findings)
     arp_entries = _check_arp(raw, findings)
     return neighbours, primary_mtu, duplex_by_iface, arp_entries
 

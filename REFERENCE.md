@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 128
+difference is which one it puts at the top, and that is the whole product: 133
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -212,6 +212,84 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## A bond hides the thing it was built for
+
+Lose one member of a bonded pair and nothing reports a fault. The interface
+stays up, the address stays put, no route changes and no alarm fires — because
+concealing exactly that is what a bond is for. What has gone is the redundancy
+that was the reason for buying two cables, and the next member to fail takes
+the box off the network.
+
+`bond_degraded` names the member that is down and the mode the bond is in. It
+is deliberately **latent**: nothing is failing, so it can never headline over
+something that is. It also carries the interface as its scope, so it corroborates
+faults on the same bond and not on some other cable.
+
+All members down is *not* this finding. That is an interface with no carrier,
+and the link checks already say so in better words — reporting both would blame
+the redundancy for a cable nobody has plugged in.
+
+## The ceiling on how many neighbours this box can have
+
+The ARP table has a hard limit and no back pressure. Past `gc_thresh3` the
+kernel stops resolving addresses, so the box loses the ability to talk to
+*some* of its neighbours while everything that does not need one of them keeps
+working. The result is intermittent unreachability that follows no pattern and
+never reproduces on demand — a setting on this box presenting as the network.
+
+| | |
+|---|---|
+| `neigh_table_full` | it has already hit the ceiling, `table_fulls` times since boot |
+| `neigh_table_near_limit` | at or past **80%** of `gc_thresh3`, and has refused nothing yet |
+
+Both can be true at once; only the one that has already refused something is
+reported. The count comes from `/proc/net/stat/arp_cache` rather than from
+counting the entries this tool parsed: that column is what `gc_thresh3` is
+actually compared against, and the parsed table mixes in IPv6. Like the
+conntrack table it repeats the whole total on every CPU's row, so it is
+assigned and never accumulated — adding it up puts a two-core box over its own
+ceiling.
+
+## Resets this box sends
+
+These counters were collected for several versions before anything read them.
+On a box that answers requests they are the wire-level shape of every refusal
+it makes, and whoever is on the other end of one sees a connection **dropped**,
+not a slow one — which gets reported as the network and is not the network.
+
+A reset is not by itself a fault: an application that closes with data still
+unread sends one, and browsers abandon connections all day. So the line sits
+where the count stops looking like a by-product — **at least one reset for every
+connection the box opened or accepted**. A listener that has stopped, a port
+nothing is bound to, and a scan all produce exactly that; ordinary churn does
+not come close.
+
+The denominator counts outbound connections as well as accepted ones, because
+the original shape of box this tool was written for accepts nothing at all.
+`EstabResets` sharpens the sentence rather than firing its own finding: it says
+whether the connections torn down were already established or were refused at
+the door.
+
+Its direction is **local**. The resets originate here, so this is not a fault
+arriving from either side, and it can corroborate one facing either way.
+
+## A link below its own capacity
+
+`slow_link` can only speak in absolute numbers — it fires at 100 Mbps or less,
+where a broken pair in a cable drops a gigabit port. That leaves a 10G port
+sitting at 1G invisible: not slow by any threshold worth writing down, and a
+tenth of what was bought.
+
+`negotiated_below_capacity` compares the negotiated speed against the fastest
+mode the hardware itself advertises, read from ethtool's supported-modes block.
+It is latent — nothing fails until the traffic needs the capacity — and it
+fires only **above** 100 Mbps, so one bad link does not produce two findings.
+Below that, `slow_link` already says the more useful thing.
+
+The two share a family. They are one check said two ways, and left in separate
+families one link running below par read as two agreeing faults and pushed the
+verdict to high confidence.
 
 ## Latency has its own words
 
@@ -461,11 +539,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **128** | Distinct conclusions it can reach and state in plain language. 111 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **111** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 641 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **133** | Distinct conclusions it can reach and state in plain language. 116 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **116** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 664 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 128 findings are the useful figure** if you want to know what the tool can
+**The 133 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -580,7 +658,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 641 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 664 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -624,6 +702,8 @@ can say what the bar was rather than "the tool said so".
 | `KLOG_RECENT_SECONDS` | **3600** | how far back a kernel-log event still counts as happening now |
 | `KLOG_FLAPS_RECENT` | **4** | carrier transitions logged within that hour before the link is called unstable. Two is one clean down/up |
 | `SOFTNET_DROP_PPM` | **10** | receive-backlog drops per million packets processed |
+| `NEIGH_TABLE_WARN_PCT` | **80** | how full the neighbour (ARP) table gets before it is worth saying so. Same figure as the connection-tracking table and for the same reason: both refuse outright at 100% with no back pressure, so the useful moment to speak is before that. Its own constant all the same - two tables, two ceilings, and sharing a number would mean tuning either retuned the other |
+| `RESETS_PER_CONN_PCT` | **100** | resets this box sent, as a share of the connections it opened or accepted. A reset is not by itself a fault - an application closing with data unread sends one - so the line sits where the count stops looking like a by-product: at least one reset per connection handled. A dead listener, an unbound port or a scan all produce exactly that |
 | `CONNTRACK_WARN_PCT` | **80** | how full the connection tracking table gets before it's mentioned |
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
@@ -1884,7 +1964,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-641 tests, no dependencies, no network, a few seconds — so they run
+664 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -1960,7 +2040,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 128 findings with readable rules instead of
+> way out - and who owns it. Ranks 133 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

@@ -2092,6 +2092,214 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestBondMembers(unittest.TestCase):
+    """A bond hides its own failures by design - the interface stays up, the
+    address stays put, and the redundancy that was the point of it is gone."""
+
+    def build(self, bonds):
+        """A sysfs tree: {bond: {member: mii_status or None, ...}}."""
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        for bond, members in bonds.items():
+            bdir = os.path.join(base, bond, "bonding")
+            os.makedirs(bdir)
+            with open(os.path.join(bdir, "slaves"), "w") as fh:
+                fh.write(" ".join(members))
+            with open(os.path.join(bdir, "mode"), "w") as fh:
+                fh.write("802.3ad 4\n")
+            for member, status in members.items():
+                mdir = os.path.join(base, member, "bonding_slave")
+                os.makedirs(mdir)
+                if status is not None:
+                    with open(os.path.join(mdir, "mii_status"), "w") as fh:
+                        fh.write(status)
+        return base
+
+    def test_a_member_that_is_down_is_named(self):
+        base = self.build({"bond0": {"eth0": "up", "eth1": "down"}})
+        self.assertEqual(nd._bond_members_linux(base)["bond0"]["down"], ["eth1"])
+        self.assertEqual(nd._bond_members_linux(base)["bond0"]["mode"], "802.3ad")
+
+    def test_a_healthy_bond_reports_nothing_down(self):
+        base = self.build({"bond0": {"eth0": "up", "eth1": "up"}})
+        self.assertEqual(nd._bond_members_linux(base)["bond0"]["down"], [])
+
+    def test_a_member_with_no_status_falls_back_to_its_own_link_state(self):
+        """Not every kernel exports bonding_slave/mii_status. Without the
+        fallback a bond on one of those reads as entirely healthy."""
+        import os
+        base = self.build({"bond0": {"eth0": None, "eth1": None}})
+        for member, state in (("eth0", "up"), ("eth1", "down")):
+            with open(os.path.join(base, member, "operstate"), "w") as fh:
+                fh.write(state)
+        self.assertEqual(nd._bond_members_linux(base)["bond0"]["down"], ["eth1"])
+
+    def test_an_interface_that_is_not_a_bond_is_not_one(self):
+        import os
+        base = self.build({"bond0": {"eth0": "up"}})
+        os.makedirs(os.path.join(base, "eth9"))
+        self.assertNotIn("eth9", nd._bond_members_linux(base))
+
+    def test_no_sysfs_tree_yields_nothing(self):
+        self.assertEqual(nd._bond_members_linux("/nonexistent/path"), {})
+
+    def test_a_bond_with_every_member_down_is_a_dead_link_not_a_degraded_bond(self):
+        """The link checks say that in better words, and saying both would
+        blame the redundancy for an interface that has no carrier at all."""
+        m = fresh(); m.OS_NAME = "Linux"
+        m._bond_members_linux = lambda base="/sys/class/net": {
+            "bond0": {"members": ["eth0", "eth1"], "down": ["eth0", "eth1"], "mode": None}}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("bond_degraded", codes)
+
+
+class TestNeighbourTable(unittest.TestCase):
+    """A ceiling with no back pressure: past it the kernel stops resolving,
+    and the box loses neighbours at random on a segment that is working."""
+
+    def build(self, arp_cache=None, thresh=None):
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        os.makedirs(os.path.join(base, "net", "stat"))
+        os.makedirs(os.path.join(base, "sys", "net", "ipv4", "neigh", "default"))
+        if arp_cache is not None:
+            with open(os.path.join(base, "net", "stat", "arp_cache"), "w") as fh:
+                fh.write(arp_cache)
+        if thresh is not None:
+            with open(os.path.join(base, "sys", "net", "ipv4", "neigh",
+                                   "default", "gc_thresh3"), "w") as fh:
+                fh.write(str(thresh))
+        return base
+
+    CACHE = ("entries  allocs destroys hash_grows lookups hits res_failed "
+             "rcv_probes_mcast rcv_probes_ucast periodic_gc_runs forced_gc_runs "
+             "unresolved_discards table_fulls\n"
+             "00000200  0 0 0 0 0 0 0 0 0 0 0 00000005\n"
+             "00000200  0 0 0 0 0 0 0 0 0 0 0 00000003\n")
+
+    def test_entries_are_the_table_total_not_a_per_cpu_share(self):
+        """The column repeats the whole table on every row, exactly like the
+        conntrack one. Summing it would double the count on a two-core box and
+        report a table over its own limit."""
+        t = nd._read_neigh_table(self.build(self.CACHE, 1024))
+        self.assertEqual(t["entries"], 0x200)
+
+    def test_overflows_are_per_cpu_and_do_add_up(self):
+        t = nd._read_neigh_table(self.build(self.CACHE, 1024))
+        self.assertEqual(t["table_fulls"], 8)
+
+    def test_the_limit_is_read_from_sysctl(self):
+        self.assertEqual(nd._read_neigh_table(self.build(self.CACHE, 4096))["gc_thresh3"], 4096)
+
+    def test_a_missing_tree_says_nothing_rather_than_zero(self):
+        self.assertEqual(nd._read_neigh_table("/nonexistent/path"), {})
+        self.assertNotIn("entries", nd._read_neigh_table(self.build(None, 1024)))
+
+    def test_a_full_table_outranks_a_nearly_full_one(self):
+        """Both can be true at once - it is at the ceiling now and has been
+        there before. Only the one that has already refused something is worth
+        reporting."""
+        m = fresh(); m.OS_NAME = "Linux"
+        m._read_neigh_table = lambda base="/proc": {
+            "gc_thresh3": 1024, "entries": 1020, "table_fulls": 4}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertIn("neigh_table_full", codes)
+        self.assertNotIn("neigh_table_near_limit", codes)
+
+    def test_a_table_with_room_left_says_nothing(self):
+        m = fresh(); m.OS_NAME = "Linux"
+        m._read_neigh_table = lambda base="/proc": {
+            "gc_thresh3": 1024, "entries": 300, "table_fulls": 0}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("neigh_table_near_limit", codes)
+        self.assertNotIn("neigh_table_full", codes)
+
+
+class TestResetsThisBoxSends(unittest.TestCase):
+    """Collected for several versions before anything read them. A client on
+    the end of a reset sees a connection dropped, not a slow one, and reports
+    it as the network."""
+
+    def codes(self, **after):
+        before = {"OutRsts": 0, "PassiveOpens": 0, "ActiveOpens": 0, "EstabResets": 0}
+        m = fresh()
+        kernel_drops(m, before, dict(before, **after))
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_more_resets_than_connections_is_reported(self):
+        self.assertIn("resets_sent_high", self.codes(OutRsts=120, PassiveOpens=100))
+
+    def test_ordinary_churn_is_not(self):
+        """An application that closes with data still unread sends a reset, and
+        browsers abandon connections all day. A count alone would fire on every
+        healthy proxy on earth."""
+        self.assertNotIn("resets_sent_high", self.codes(OutRsts=40, PassiveOpens=100))
+
+    def test_a_handful_of_connections_is_not_a_rate(self):
+        self.assertNotIn("resets_sent_high", self.codes(OutRsts=15, PassiveOpens=5))
+
+    def test_outbound_connections_count_towards_the_denominator(self):
+        """A box that only talks outward accepts nothing, so a denominator of
+        accepts alone would divide by zero on the shape this tool started as."""
+        self.assertIn("resets_sent_high", self.codes(OutRsts=60, ActiveOpens=50))
+
+    def test_it_is_owned_by_this_box_and_faces_both_ways(self):
+        """The resets originate here, so it is not a fault arriving from
+        either direction and can corroborate one facing either way."""
+        self.assertEqual(nd.finding_side("resets_sent_high"), "local")
+
+
+class TestALinkBelowItsOwnCapacity(unittest.TestCase):
+    """slow_link can only speak in absolute numbers, so a 10G port sitting at
+    1G is not slow by any threshold worth writing down."""
+
+    def codes(self, speed, capacity):
+        m = fresh()
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": speed, "max_mbps": capacity,
+             "duplex": "full", "mtu": 1500, "carrier": True}]}
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_a_ten_gig_port_at_one_gig_is_reported(self):
+        self.assertIn("negotiated_below_capacity", self.codes(1000, 10000))
+
+    def test_a_port_at_its_own_maximum_is_not(self):
+        self.assertNotIn("negotiated_below_capacity", self.codes(10000, 10000))
+
+    def test_one_fault_produces_one_finding(self):
+        """A gigabit port at 100 Mbps is both things at once. slow_link says it
+        better below 100, so only that one speaks."""
+        codes = self.codes(100, 1000)
+        self.assertIn("slow_link", codes)
+        self.assertNotIn("negotiated_below_capacity", codes)
+
+    def test_the_two_do_not_confirm_each_other(self):
+        """Same check, said two ways. Different families would have made one
+        link running below par read as two agreeing faults."""
+        self.assertEqual(nd._finding_family("slow_link"),
+                         nd._finding_family("negotiated_below_capacity"))
+
+    def test_the_supported_modes_block_is_read_from_ethtool(self):
+        parsed = nd.parse_ethtool(
+            "Settings for eth0:\n"
+            "\tSupported link modes:   100baseT/Full\n"
+            "\t                        1000baseT/Full\n"
+            "\t                        10000baseT/Full\n"
+            "\tSupported pause frame use: Symmetric\n"
+            "\tAdvertised link modes:  1000baseT/Full\n"
+            "\tSpeed: 1000Mb/s\n\tDuplex: Full\n\tLink detected: yes\n")
+        self.assertEqual(parsed["max_mbps"], 10000)
+        self.assertEqual(parsed["speed_mbps"], 1000)
+
+    def test_ethtool_without_a_supported_block_reports_no_capacity(self):
+        """Virtual NICs print no modes at all. A missing block must not read
+        as a capacity of zero, or every one of them becomes a fault."""
+        self.assertNotIn("max_mbps", nd.parse_ethtool(
+            "Settings for eth0:\n\tSpeed: 1000Mb/s\n\tDuplex: Full\n"))
+
+
 class TestLatencyHasItsOwnWords(unittest.TestCase):
     """An 800ms path to a database used to report that voice and video would
     be unusable. True, and no use to whoever runs the database."""
@@ -6403,6 +6611,34 @@ def _(nd): kernel_drops(nd, {"InCsumErrors": 0, "InSegs": 1_000_000},
 @scenario("connect_failures_high")
 def _(nd): kernel_drops(nd, {"AttemptFails": 0, "ActiveOpens": 1_000},
                             {"AttemptFails": 40, "ActiveOpens": 1_100})
+
+@scenario("bond_degraded")
+def _(nd):
+    nd.OS_NAME = "Linux"
+    nd._bond_members_linux = lambda base="/sys/class/net": {
+        "bond0": {"members": ["eth0", "eth1"], "down": ["eth1"], "mode": "802.3ad"}}
+
+@scenario("neigh_table_full")
+def _(nd):
+    nd.OS_NAME = "Linux"
+    nd._read_neigh_table = lambda base="/proc": {
+        "gc_thresh3": 1024, "entries": 1024, "table_fulls": 37}
+
+@scenario("neigh_table_near_limit")
+def _(nd):
+    nd.OS_NAME = "Linux"
+    nd._read_neigh_table = lambda base="/proc": {
+        "gc_thresh3": 1024, "entries": 900, "table_fulls": 0}
+
+@scenario("negotiated_below_capacity")
+def _(nd):
+    nd.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+        {"name": "eth0", "speed_mbps": 1000, "max_mbps": 10000, "duplex": "full",
+         "mtu": 1500, "carrier": True}]}
+
+@scenario("resets_sent_high")
+def _(nd): kernel_drops(nd, {"OutRsts": 0, "PassiveOpens": 1_000, "EstabResets": 0},
+                            {"OutRsts": 120, "PassiveOpens": 1_100, "EstabResets": 30})
 
 @scenario("syn_retrans_high")
 def _(nd): kernel_drops(nd, {"TCPSynRetrans": 0, "ActiveOpens": 1_000},

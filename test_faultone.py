@@ -2753,6 +2753,31 @@ class TestADiscardIsNotAnError(unittest.TestCase):
         self.assertIn("link_errors_live", codes)
 
 
+class TestTheSmallFileReader(unittest.TestCase):
+    """Three readers had written this out as their own closure. The int-reading
+    variants beside it are deliberately not folded in - they differ in what a
+    failure means, and that distinction is load-bearing."""
+
+    def test_it_reads_and_strips(self):
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        path = os.path.join(base, "value")
+        with open(path, "w") as fh:
+            fh.write("  1000\n")
+        self.assertEqual(nd._read_text(path), "1000")
+
+    def test_a_missing_file_is_none_not_an_empty_string(self):
+        """An absent counter and a counter reading "" are different facts, and
+        every caller here branches on which."""
+        self.assertIsNone(nd._read_text("/nonexistent/path/value"))
+
+    def test_an_unreadable_file_is_none_rather_than_a_raise(self):
+        """sysfs raises EINVAL on an interface with no carrier. That is normal
+        rather than an error worth reporting, and it must not escape."""
+        self.assertIsNone(nd._read_text("/proc/self/mem"))
+
+
 class TestBondMembers(unittest.TestCase):
     """A bond hides its own failures by design - the interface stays up, the
     address stays put, and the redundancy that was the point of it is gone."""

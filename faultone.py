@@ -55,6 +55,7 @@ SPDX-License-Identifier: MIT
 """
 
 import argparse
+import errno
 import concurrent.futures
 import datetime
 import json
@@ -70,7 +71,6 @@ import subprocess
 import sys
 import time
 import textwrap
-import urllib.parse
 
 # Reports carry this, so a page opened months later, or a --baseline from a
 # previous visit, can be read in the light of what produced it.
@@ -1918,6 +1918,21 @@ def _load_context():
             f"limit being hit is a setting rather than a shortage of capacity.")
 
 
+def _read_text(path):
+    """A small file's contents, or None if it isn't there.
+
+    Every /proc and /sys reader here wants exactly this and three of them had
+    written it out as their own closure. The int-reading variants beside it are
+    deliberately *not* folded in: they differ in what a failure means - unknown,
+    skip the field, or leave the default - and that distinction is load-bearing.
+    """
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
 def _read_conntrack():
     """Connection-tracking table pressure, and whether it has actually refused.
 
@@ -2040,26 +2055,19 @@ def _bond_members_linux(base="/sys/class/net"):
         if not os.path.isdir(bdir):
             continue
 
-        def read(path):
-            try:
-                with open(path) as fh:
-                    return fh.read().strip()
-            except OSError:
-                return None
-
-        slaves = (read(os.path.join(bdir, "slaves")) or "").split()
+        slaves = (_read_text(os.path.join(bdir, "slaves")) or "").split()
         if not slaves:
             continue
         down = []
         for slave in slaves:
-            status = read(os.path.join(base, slave, "bonding_slave", "mii_status"))
+            status = _read_text(os.path.join(base, slave, "bonding_slave", "mii_status"))
             if status is None:
                 # No per-slave view: fall back to the member's own link state,
                 # which says the same thing one level less directly.
-                status = read(os.path.join(base, slave, "operstate"))
+                status = _read_text(os.path.join(base, slave, "operstate"))
             if status is not None and status.lower() not in ("up", "unknown"):
                 down.append(slave)
-        mode = ((read(os.path.join(bdir, "mode")) or "").split() or [None])[0]
+        mode = ((_read_text(os.path.join(bdir, "mode")) or "").split() or [None])[0]
         out[name] = {"members": slaves, "down": down, "mode": mode}
     return out
 
@@ -2072,16 +2080,9 @@ def _read_server_limits():
     accepting. All are local limits, and the counters that name them are three
     small reads.
     """
-    def read(path):
-        try:
-            with open(path) as fh:
-                return fh.read().strip()
-        except OSError:
-            return None
-
-    return parse_server_limits(read("/proc/sys/net/ipv4/ip_local_port_range"),
-                               read("/proc/sys/fs/file-nr"),
-                               read("/proc/sys/net/core/somaxconn"))
+    return parse_server_limits(_read_text("/proc/sys/net/ipv4/ip_local_port_range"),
+                               _read_text("/proc/sys/fs/file-nr"),
+                               _read_text("/proc/sys/net/core/somaxconn"))
 
 
 def parse_server_limits(port_range, file_nr, somaxconn):
@@ -3320,11 +3321,7 @@ def _link_modes_linux(base="/sys/class/net"):
         def read(field):
             # speed/duplex raise EINVAL on interfaces with no carrier, which is
             # normal rather than an error worth reporting.
-            try:
-                with open(os.path.join(idir, field)) as fh:
-                    return fh.read().strip()
-            except OSError:
-                return None
+            return _read_text(os.path.join(idir, field))
 
         speed = read("speed")
         try:
@@ -3522,6 +3519,10 @@ def cmd_check_port(host, port, timeout=5):
 
 def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version, timeout):
     """One TCP connect over one address family."""
+    def fail(reason, error):
+        return {"ok": False, "cmd": f"tcp connect {host}:{port_num}",
+                "ip_version": ip_version, "error": error, "reason": reason}
+
     try:
         # closed via context manager so a raise mid-connect can't leak the fd
         banner = ""
@@ -3560,58 +3561,36 @@ def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version,
                 "code": 0,
             }
         else:
-            # Distinguish refused (service/firewall blocked) vs. timeout (packet loss/routing)
-            import errno as errno_module
-            if result == errno_module.ECONNREFUSED or result == 111:  # 111 is ECONNREFUSED on Linux
-                return {
-                    "ok": False,
-                    "cmd": f"tcp connect {host}:{port_num}",
-                    "ip_version": ip_version,
-                    "error": f"Connection refused (port {port_num} closed or filtered by firewall)",
-                    "reason": "refused",
-                }
-            # No route, and the kernel said so before a packet left. Everything
-            # here used to land in the timeout bucket, which describes the
-            # opposite situation - a packet sent and nothing coming back - and
-            # sent the reader looking at the network for a routing table on
-            # this box. The two are told apart by how fast the answer came as
-            # much as by the code: this one is instant.
-            if result in (errno_module.ENETUNREACH, 101):
-                return {
-                    "ok": False,
-                    "cmd": f"tcp connect {host}:{port_num}",
-                    "ip_version": ip_version,
-                    "error": f"Network unreachable - this device has no route to {host}. "
-                             f"The kernel refused before sending anything.",
-                    "reason": "no_route",
-                }
-            if result in (errno_module.EHOSTUNREACH, 113):
-                return {
-                    "ok": False,
-                    "cmd": f"tcp connect {host}:{port_num}",
-                    "ip_version": ip_version,
-                    "error": f"Host unreachable - a router on the path reported it cannot "
-                             f"reach {host}.",
-                    "reason": "host_unreachable",
-                }
-            else:
-                return {
-                    "ok": False,
-                    "cmd": f"tcp connect {host}:{port_num}",
-                    "ip_version": ip_version,
-                    "error": f"Connection timeout (port {port_num} unreachable - packet loss or routing issue)",
-                    "reason": "timeout",
-                }
+            # Why it failed, and who that makes it. The Linux numbers sit
+            # beside the constants because errno values differ by platform -
+            # ENETUNREACH is 101 on Linux and 51 on BSD, and this has to give
+            # the same answer whichever it is asked on.
+            #
+            # The route cases are the point of the split. A connect that never
+            # left the box and one that left and got nothing back are opposite
+            # situations, and both used to land in the timeout bucket - which
+            # describes only the second, and sends the reader to the network
+            # for a routing table on this box.
+            if result == errno.ECONNREFUSED or result == 111:
+                return fail("refused",
+                            f"Connection refused (port {port_num} closed or "
+                            f"filtered by firewall)")
+            if result in (errno.ENETUNREACH, 101):
+                return fail("no_route",
+                            f"Network unreachable - this device has no route to "
+                            f"{host}. The kernel refused before sending anything.")
+            if result in (errno.EHOSTUNREACH, 113):
+                return fail("host_unreachable",
+                            f"Host unreachable - a router on the path reported it "
+                            f"cannot reach {host}.")
+            return fail("timeout",
+                        f"Connection timeout (port {port_num} unreachable - "
+                        f"packet loss or routing issue)")
     except socket.gaierror as e:
         return {"ok": False, "cmd": f"tcp connect {host}:{port_num}", "error": f"hostname resolution failed: {e}"}
     except socket.timeout:
-        return {
-            "ok": False,
-            "cmd": f"tcp connect {host}:{port_num}",
-            "ip_version": ip_version,
-            "error": f"Connection timeout (port {port_num} unreachable - packet loss or routing issue)",
-            "reason": "timeout",
-        }
+        return fail("timeout", f"Connection timeout (port {port_num} unreachable - "
+                               f"packet loss or routing issue)")
     except Exception as e:
         # Broad for the same reason as run(): one odd socket error shouldn't
         # cost the other checks. The port reads as unknown, not as closed.

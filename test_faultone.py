@@ -2636,6 +2636,67 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestTheTableDoesNotLetAnAverageHideAPeak(unittest.TestCase):
+    """The oldest complaint about every tool that consolidates by mean: the
+    peak flattens as the window grows until a line that filled every minute
+    reads as quiet. This report computed the peak and printed the average, and
+    the two sat three lines apart contradicting each other."""
+
+    def row(self, code="saturation_bursts"):
+        setup, kw = S[code]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        text = m.render_text_report(rep)
+        line = next(l for l in text.splitlines() if l.strip().startswith("eth0"))
+        return rep, line
+
+    def test_the_peak_is_shown_when_it_says_something_the_average_does_not(self):
+        rep, line = self.row()
+        iface = next(i for i in rep["raw"]["link_stats"]["interfaces"]
+                     if i["name"] == "eth0")
+        self.assertGreater(iface["peak_mbps"], iface["rx_mbps"])
+        self.assertIn("peak", line)
+        self.assertIn(f"{iface['peak_mbps']:g}", line)
+
+    def test_a_steady_link_does_not_repeat_itself(self):
+        """Where the peak and the average tell the same story, printing both is
+        noise."""
+        _, line = self.row("link_saturated")
+        self.assertNotIn("peak", line)
+
+    def test_the_percentage_names_what_it_is_a_percentage_of(self):
+        """It is against the NIC, and the saturation findings measure against
+        the site uplink when one was given - so the same interface read "2.3%
+        of link" here and "full" three lines above, with nothing reconciling
+        them."""
+        _, line = self.row()
+        self.assertRegex(line, r"of the \d+M link")
+
+    def test_the_report_no_longer_contradicts_itself(self):
+        """The finding says the uplink was full in bursts. The table says 2.3%.
+        Both are true - different denominator, different statistic - and the
+        reader now has both numbers to reconcile them with."""
+        rep, line = self.row()
+        finding = next(f for f in rep["findings"] if f["code"] == "saturation_bursts")
+        self.assertIn("50.0 Mbps of 50 Mbps", finding["message"])
+        self.assertIn("peak 50", line)
+
+    def test_the_threshold_is_a_ratio_not_a_fixed_figure(self):
+        """A 10 Mbps peak over a 1 Mbps mean matters; a 1000 Mbps peak over a
+        999 Mbps mean does not, and an absolute gap cannot tell them apart."""
+        self.assertGreater(nd.PEAK_WORTH_SHOWING, 1.0)
+        self.assertLess(nd.PEAK_WORTH_SHOWING, 2.0)
+
+    def test_an_interface_with_no_series_shows_no_peak(self):
+        """Nothing to be wrong about, and a missing peak must not print as 0."""
+        m = fresh()
+        counters(m, rx_bytes=0, tx_bytes=0)
+        rep = m.diagnose("8.8.8.8", None, quick=False)
+        for line in m.render_text_report(rep).splitlines():
+            if line.strip().startswith("eth0"):
+                self.assertNotIn("peak", line)
+
+
 class TestTheListSaysWhatExplainsWhat(unittest.TestCase):
     """The relationships already existed in the verdict - based_on, explains,
     unrelated - and the report printed them as a line of raw finding codes

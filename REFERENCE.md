@@ -318,6 +318,44 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## The table does not let an average hide a peak
+
+The oldest complaint about every tool that consolidates by mean: the peak
+flattens as the window grows, until a line that filled every minute reads as
+quiet. This report was computing the peak and printing the average — and the two
+sat three lines apart, disagreeing:
+
+```
+the site uplink hit 50.0 Mbps of 50 Mbps in bursts - full for about 40s of
+the 120s window, while averaging only 46% across it...
+
+eth0   10,000,000   0   0   0.0   steady over 120s   23.17/0.0 Mbps rx/tx (2.3% of link)
+```
+
+**Full** and **2.3%**, about the same interface, in one report. Both numbers were
+correct and nothing said why they differed:
+
+| | |
+|---|---|
+| the finding | the **peak**, against the **site uplink** given with `--uplink-mbps` |
+| the table | the **average**, against the **NIC's** negotiated speed |
+
+Two different statistics against two different denominators, and the table
+named neither. It now names both:
+
+```
+eth0   ...   23.17/0.0 Mbps rx/tx (2.3% of the 1000M link), peak 50
+```
+
+The peak appears only when it exceeds the average by **20%** or more. Below that
+the two tell the same story and printing both is noise. It is a ratio rather
+than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000
+over a 999 does not.
+
+This is the same lesson `saturation_bursts` was written for — that lesson had
+been applied to the *analysis* and never to the *display*, which is a layer with
+rules of its own that nothing here was testing.
+
 ## The list says what explains what
 
 The relationships were already in the verdict — `based_on`, `explains`,
@@ -1110,7 +1148,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 825 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 831 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1272,7 +1310,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 825 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 831 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1351,6 +1389,7 @@ can say what the bar was rather than "the tool said so".
 | `LATENCY_HIGH_MS` | **400** | round trip past which distance stops explaining the delay. Light in fibre crosses the planet and returns in about 250ms, and the longest real terrestrial paths measure 250-300ms, so this leaves room for a genuinely long route. One threshold rather than a warn/critical pair: the verdict takes its severity from the finding that headlines it, so a warning-level rule above a critical one would downgrade the whole run |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
 | `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
+| `PEAK_WORTH_SHOWING` | **1.2** | how far a peak must sit above the average before the average is worth distrusting on sight. Below this the two tell the same story and printing both is noise; above it the average is actively hiding something. A ratio rather than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000 over a 999 does not |
 | `BURST_UTIL_PCT` | **25** | utilisation below which a queue overflowing has to be explained by bursts rather than volume |
 | `UPLINK_FULL_PCT` | **70** | share of the `--uplink-mbps` rate this device has to be using before the site's own line is called full. Lower than the NIC threshold: CPE queues are small and the line is shared, so loss starts well before the last few percent |
 | `SERIES_MAX_SAMPLES` | **900** | most samples a rate series holds. At or below this the interval is one second; a longer soak stretches the interval rather than storing more |
@@ -2597,7 +2636,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-825 tests, no dependencies, no network, a few seconds — so they run
+831 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

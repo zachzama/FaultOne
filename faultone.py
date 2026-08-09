@@ -3491,6 +3491,14 @@ def _finish_link_sample(first, source, sample_seconds, already_waited=False,
 # other check in this tool.
 # ---------------------------------------------------------------------------
 
+# How far a peak has to sit above the average before the average is worth
+# distrusting on sight. Below this the two tell the same story and printing both
+# is noise; above it the average is actively hiding something, which is the
+# oldest complaint about every graphing tool that consolidates by mean - the
+# peak flattens as the window grows until a line that filled every minute reads
+# as quiet.
+PEAK_WORTH_SHOWING = 1.2
+
 STANDARD_MTU = 1500
 
 # Interfaces that carry someone else's packets inside this box's packets. A
@@ -10898,6 +10906,9 @@ def _render_link_tables(report, out, tint, width):
               if i.get("packets") and not i["name"].startswith("lo")]
     if ifaces:
         out.append("")
+        iface_speed = {m.get("name"): m.get("speed_mbps")
+                       for m in ((report.get("raw", {}).get("link_modes") or {})
+                                 .get("interfaces") or [])}
         out.append("INTERFACE ERROR COUNTERS")
         out.append(f"  {'iface':<10}{'packets':>14}{'errors':>9}{'drops':>8}{'err/M':>8}   live")
         for i in ifaces:
@@ -10911,7 +10922,21 @@ def _render_link_tables(report, out, tint, width):
             if i.get("rx_mbps") is not None:
                 rate = f"   {i['rx_mbps']}/{i['tx_mbps']} Mbps rx/tx"
                 if i.get("utilization_pct") is not None:
-                    rate += f" ({i['utilization_pct']}% of link)"
+                    # Name the denominator. This percentage is against the
+                    # NIC, and the saturation findings measure against the
+                    # site uplink when one was given - so the same interface
+                    # could read "2% of link" here and "full" three lines
+                    # above, with nothing on the page reconciling them.
+                    speed = iface_speed.get(i["name"])
+                    against = f" of the {speed:g}M link" if speed else " of link"
+                    rate += f" ({i['utilization_pct']}%{against})"
+                # The average alone is what lets a line that fills in bursts
+                # read as quiet - see saturation_bursts, which exists because
+                # of it. Where the peak says something different, say it.
+                peak, mean = i.get("peak_mbps"), max(i.get("rx_mbps") or 0,
+                                                     i.get("tx_mbps") or 0)
+                if peak and peak >= max(mean, 0.01) * PEAK_WORTH_SHOWING:
+                    rate += f", peak {peak:g}"
             out.append(f"  {i['name']:<10}{i['packets']:>14,}{i['errors']:>9,}"
                        f"{i['drops']:>8,}{i['err_ppm']:>8}   {live}{rate}")
 

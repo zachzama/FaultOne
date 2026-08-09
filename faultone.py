@@ -4757,6 +4757,40 @@ LATENT = {
 WEAK_EVIDENCE = {"link_errors_historical", "mtu_nonstandard", "trace_stalls"}
 
 
+# Findings that describe traffic being lost, delayed or refused, rather than a
+# thing being misconfigured. The distinction decides whether a fault further up
+# the stack is this cause's consequence or somebody else's problem, and layer
+# distance alone cannot express it: a full link is layer 2 and the loss it
+# produces is layer 3, while an expired certificate is also layer 7 and no
+# amount of fixing the cable will renew it.
+#
+# Everything here is the *shape* a lower-layer fault produces when it bites -
+# so when the verdict sits underneath one of these, and faces the same way, it
+# explains it. Anything not in this set is a state or a decision: a certificate
+# that has run out, an answer that came back wrong, an address claimed twice, a
+# device refusing on purpose. Those survive fixing whatever is below them, and
+# are the ones actually worth calling unrelated.
+TRANSPORT_SYMPTOMS = {
+    # Traffic that did not arrive, or did not arrive on time.
+    "inet_partial_loss", "inet_loss_unmeasured", "inet_unreachable",
+    "gw_partial_loss", "gw_loss_unmeasured", "gw_unreachable",
+    "path_loss", "trace_stalls", "destination_unresponsive",
+    "latency_wall", "latency_high", "call_quality_bad", "call_quality_degraded",
+    "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
+    # TCP reacting to a path that is losing or delaying traffic.
+    "tcp_retransmits", "syn_retrans_high", "connect_failures_high",
+    "retrans_spurious", "tcp_flow_loss_all_peers", "tcp_flow_loss_some_peers",
+    "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear", "tcp_flow_loss_backends",
+    "tcp_flow_loss_clients",
+    # Services timing out rather than answering wrongly. A resolver that is
+    # slow, or a handshake that never completes, is what a degraded path looks
+    # like from one layer up - unlike a resolver that answers with the wrong
+    # address, which is a fault of its own.
+    "dns_resolver_slow", "dns_fail", "tls_handshake_slow", "port_timeout",
+    "own_service_silent",
+}
+
+
 # Verdicts that send the reader to a switch port. When LLDP has told us which
 # port this device is in, the next step names it: "check the switch port" is
 # advice, "check SW-CLOSET-2 port Gi1/0/12" is an instruction someone can act
@@ -5508,11 +5542,26 @@ def build_verdict(findings, quick=False, raw=None):
         # both layer 3, so before this the tool named one and presented the
         # other as its consequence, which it cannot be. Fixing the first would
         # have left the second exactly where it was.
-        unrelated = [f for f in findings
-                     if f.get("code") != code
-                     and f["severity"] in ("warning", "critical")
-                     and f.get("code") not in VERDICT_EXEMPT
-                     and _finding_family(f.get("code")) != family
+        # Findings above the cause that are the shape a fault below produces.
+        # These are its consequences, and saying so is most of the product: a
+        # full link reported the loss it was causing as "also, unrelated -
+        # suggests upstream congestion", which sends someone to a carrier over
+        # a fault on their own box.
+        def _above_and_facing_the_same_way(f):
+            return ((f.get("layer") or 0) > layer
+                    and _sides_can_agree(side, finding_side(f.get("code"))))
+
+        candidates = [f for f in findings
+                      if f.get("code") != code
+                      and f["severity"] in ("warning", "critical")
+                      and f.get("code") not in VERDICT_EXEMPT
+                      and _finding_family(f.get("code")) != family]
+        explains = [f for f in candidates
+                    if f.get("code") in TRANSPORT_SYMPTOMS
+                    and _above_and_facing_the_same_way(f)]
+        explained = {id(f) for f in explains}
+        unrelated = [f for f in candidates
+                     if id(f) not in explained
                      and ((f.get("layer") or 0) > layer
                           or not _sides_can_agree(side, finding_side(f.get("code"))))]
         return {
@@ -5526,6 +5575,12 @@ def build_verdict(findings, quick=False, raw=None):
             # the findings list back a second time.
             "unrelated": [{"code": f.get("code"), "message": f["message"]}
                           for f in unrelated[:2]],
+            # The other half of the same question, and the one that was never
+            # answered: not what this cause fails to account for, but what it
+            # does. Uncapped - a cause that explains six findings has earned
+            # the right to say so, and the list is codes rather than messages
+            # because they are already printed in full below.
+            "explains": [f.get("code") for f in explains],
             "based_on": [code] + corroborating,
             "severity": matches[0]["severity"],
             "detail": matches[0]["message"],
@@ -9545,6 +9600,8 @@ function renderDiagnosis(data, opts){
         <span>confidence: ${escapeHtml(v.confidence)}${v.coverage && v.coverage.attempted
           ? ` (${v.coverage.ran} of ${v.coverage.attempted} checks ran)` : ''}</span>
       </div>
+      ${(v.explains || []).length ? `<div class="vnext"><b>This also accounts for:</b> `
+        + escapeHtml((v.explains || []).join(', ')) + `</div>` : ''}
       ${(v.unrelated || []).map(u =>
         `<div class="vnext"><b>Also, unrelated:</b> ${escapeHtml(u.message)}</div>`).join('')}
       <div class="vnext"><b>Next:</b> ${escapeHtml(v.next_step)}</div>
@@ -10219,10 +10276,21 @@ def render_text_report(report, color=False, width=None):
         n = len(v.get("corroborated_by") or [])
         if n:
             basis.append(f"{n} corroborating")
+        n = len(v.get("explains") or [])
+        if n:
+            basis.append(f"{n} explained by it")
         out.append(f"  owner: {v['owner']}   confidence: {v['confidence']}"
                    + (f" ({', '.join(basis)})" if basis else ""))
         for line in textwrap.wrap(f"next: {v['next_step']}", width=min(width, 72) - 2):
             out.append(f"  {line}")
+        # What this cause accounts for. Without it every finding below reads
+        # as its own problem, and the longest reports - the ones where one
+        # fault has knocked over five things - were the hardest to act on.
+        if v.get("explains"):
+            for line in textwrap.wrap(
+                    "this also accounts for: " + ", ".join(v["explains"]),
+                    width=min(width, 72) - 2):
+                out.append(f"  {line}")
         # A fault the cause above cannot explain. Fixing the cause leaves this
         # exactly where it is, and the layer rule would otherwise bury it.
         for other in v.get("unrelated") or []:

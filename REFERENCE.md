@@ -213,6 +213,47 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## What the cause accounts for
+
+The verdict has always said what it *cannot* explain. It never said what it
+does — and that asymmetry produced the worst sentence this tool has printed:
+
+> **LIKELY ROOT CAUSE:** The link is full — it is being used to capacity, not broken
+> *Also, unrelated:* Packet loss reaching 8.8.8.8… Suggests upstream congestion or an unstable WAN link.
+
+The link being full is *what causes* that loss. The report named the fault
+correctly and then, in the next line, sent the reader to their carrier about the
+symptom of it. That is the exact failure this tool exists to prevent.
+
+The bug was using **layer distance** as the test. Anything above the cause was
+called something the cause could not explain — but a layered stack is precisely
+a thing where faults below produce symptoms above. A full link is layer 2 and
+the loss it causes is layer 3.
+
+Layer alone cannot fix it either, because an expired certificate is also above
+a bad cable and no amount of recabling renews it. What separates the two is
+**what kind of finding it is**:
+
+| | |
+|---|---|
+| a *transport symptom* | traffic lost, delayed, or timing out — the shape any fault below produces when it bites. **Explained** by a cause underneath it. |
+| a *state or a decision* | a certificate that has run out, an answer that came back wrong, an address claimed twice, a device refusing on purpose. **Survives** fixing anything below, so it is genuinely unrelated. |
+
+Both DNS findings show the split: a resolver **timing out** is what a degraded
+path looks like from one layer up, and is explained. A resolver **answering with
+the wrong address** is a fault of its own, and is not.
+
+Direction still overrides everything, as it does for corroboration. Loss the
+clients see is not a consequence of loss on the path to a backend whatever the
+layers say.
+
+The verdict now carries `explains`, and the report prints *"this also accounts
+for: …"* beside the count of what corroborates it. Two general assertions hold
+it honest across every scenario: nothing is ever both explained and unrelated —
+that would be the report contradicting itself in adjacent lines — and nothing is
+ever both corroborating and explained, which would be the verdict using one
+fault as its own proof and its own result.
+
 ## Too hot to move packets
 
 A CPU that is clocking itself down loses cycles exactly where a box that moves
@@ -728,7 +769,7 @@ they're spelled out:
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **138** | Distinct conclusions it can reach and state in plain language. 121 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **121** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 709 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 719 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 138 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -845,7 +886,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 709 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 719 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2153,7 +2194,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-709 tests, no dependencies, no network, a few seconds — so they run
+719 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

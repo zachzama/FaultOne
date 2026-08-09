@@ -2092,6 +2092,110 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestWhatTheCauseAccountsFor(unittest.TestCase):
+    """The verdict said what it could not explain and never what it could. A
+    full link reported the loss it was causing as "also, unrelated - suggests
+    upstream congestion", which sends someone to a carrier over a fault on
+    their own box."""
+
+    def f(self, code, sev="critical", layer=1):
+        return {"code": code, "severity": sev, "layer": layer, "message": code}
+
+    def verdict(self, *findings):
+        return nd.build_verdict(list(findings))
+
+    def test_a_full_link_accounts_for_the_loss_it_causes(self):
+        v = self.verdict(self.f("link_saturated", "warning", 2),
+                         self.f("inet_partial_loss", "warning", 3))
+        self.assertIn("inet_partial_loss", v["explains"])
+        self.assertEqual([u["code"] for u in v["unrelated"]], [])
+
+    def test_a_cable_does_not_account_for_an_expired_certificate(self):
+        """Layer distance cannot express this on its own: the certificate is
+        further up the stack and no amount of fixing the cable renews it."""
+        v = self.verdict(self.f("link_errors_live", layer=1),
+                         self.f("tls_expired", layer=7))
+        self.assertEqual(v["explains"], [])
+        self.assertEqual([u["code"] for u in v["unrelated"]], ["tls_expired"])
+
+    def test_a_resolver_timing_out_is_explained_but_a_wrong_answer_is_not(self):
+        """Both are DNS at layer 7. One is what a degraded path looks like from
+        above; the other is a resolver being wrong, which survives fixing
+        anything underneath it."""
+        slow = self.verdict(self.f("link_errors_live", layer=1),
+                            self.f("dns_fail", layer=7))
+        wrong = self.verdict(self.f("link_errors_live", layer=1),
+                             self.f("dns_hijack", layer=7))
+        self.assertIn("dns_fail", slow["explains"])
+        self.assertEqual(wrong["explains"], [])
+
+    def test_a_fault_facing_the_other_way_is_never_accounted_for(self):
+        """Direction still overrides everything. Loss the clients see is not a
+        consequence of loss on the path to a backend, whatever the layers."""
+        v = self.verdict(self.f("tcp_flow_loss_backends", "warning", 3),
+                         self.f("own_service_silent", "critical", 7))
+        self.assertEqual(v["explains"], [])
+
+    def test_nothing_is_both_explained_and_unrelated(self):
+        """They are answers to the same question and a finding in both lists
+        would be the report contradicting itself in two adjacent lines."""
+        import test_faultone as self_mod
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                v = m.diagnose(quick=False, **scenario_kwargs(kw))["verdict"]
+            except Exception:
+                continue
+            overlap = set(v.get("explains") or []) & {u["code"] for u in (v.get("unrelated") or [])}
+            self.assertEqual(overlap, set(), f"{code}: {overlap}")
+
+    def test_a_cause_never_accounts_for_what_is_beneath_it(self):
+        """Consequences run upward. A resolver answering with the wrong
+        address does not cause packet loss on the path below it - that
+        finding is evidence about the same box, not a thing DNS produced."""
+        v = self.verdict(self.f("dns_hijack", "critical", 7),
+                         self.f("inet_partial_loss", "warning", 3))
+        self.assertEqual(v["explains"], [])
+
+    def test_nothing_is_both_evidence_for_the_cause_and_caused_by_it(self):
+        """Corroboration looks down the stack and consequences look up, so a
+        finding in both lists would be the verdict using one fault as its own
+        proof and its own result."""
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                v = m.diagnose(quick=False, **scenario_kwargs(kw))["verdict"]
+            except Exception:
+                continue
+            both = set(v.get("explains") or []) & set(v.get("corroborated_by") or [])
+            self.assertEqual(both, set(), f"{code}: {both}")
+
+    def test_the_cause_never_accounts_for_itself(self):
+        v = self.verdict(self.f("inet_partial_loss", "warning", 3))
+        self.assertNotIn("inet_partial_loss", v["explains"])
+
+    def test_it_reaches_the_reader(self):
+        m = fresh()
+        counters(m, rx_bytes=0, tx_bytes=0)
+        rep = {"verdict": {"headline": "h", "owner": "o", "next_step": "n",
+                           "confidence": "medium", "severity": "warning",
+                           "coverage": {"ran": 1, "attempted": 1},
+                           "corroborated_by": [], "unrelated": [],
+                           "explains": ["inet_partial_loss"], "based_on": []},
+               "findings": [], "stages": [], "target": "8.8.8.8"}
+        text = nd.render_text_report(rep)
+        self.assertIn("this also accounts for: inet_partial_loss", text)
+        self.assertIn("1 explained by it", text)
+
+    def test_every_transport_symptom_is_a_finding_that_exists(self):
+        """A code in this set that nothing emits is a rule about nothing, and
+        the set is where the cause-versus-consequence answer comes from."""
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        self.assertEqual(sorted(nd.TRANSPORT_SYMPTOMS - codes), [])
+
+
 class TestTooHotToMovePackets(unittest.TestCase):
     """A count of times the hardware clocked itself down, not a temperature.
     Every threshold anyone picks for "warm" is wrong on some hardware; a box

@@ -607,6 +607,8 @@ function renderDiagnosis(data, opts){
         <span>confidence: ${escapeHtml(v.confidence)}${v.coverage && v.coverage.attempted
           ? ` (${v.coverage.ran} of ${v.coverage.attempted} checks ran)` : ''}</span>
       </div>
+      ${(v.explains || []).length ? `<div class="vnext"><b>This also accounts for:</b> `
+        + escapeHtml((v.explains || []).join(', ')) + `</div>` : ''}
       ${(v.unrelated || []).map(u =>
         `<div class="vnext"><b>Also, unrelated:</b> ${escapeHtml(u.message)}</div>`).join('')}
       <div class="vnext"><b>Next:</b> ${escapeHtml(v.next_step)}</div>

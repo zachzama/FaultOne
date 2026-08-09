@@ -2092,6 +2092,111 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestTooHotToMovePackets(unittest.TestCase):
+    """A count of times the hardware clocked itself down, not a temperature.
+    Every threshold anyone picks for "warm" is wrong on some hardware; a box
+    that has actually been throttled has already lost the cycles."""
+
+    def codes(self, before, after):
+        m = fresh()
+        kernel_drops(m, before, after)
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_throttling_during_the_window_is_happening_now(self):
+        self.assertIn("cpu_throttled_live",
+                      self.codes({"core_throttles": 4}, {"core_throttles": 9}))
+
+    def test_throttling_that_stopped_is_marginal_cooling(self):
+        codes = self.codes({"core_throttles": 31}, {"core_throttles": 31})
+        self.assertIn("cpu_throttled_historical", codes)
+        self.assertNotIn("cpu_throttled_live", codes)
+
+    def test_a_box_that_has_never_throttled_says_nothing(self):
+        self.assertNotIn("cpu_throttled_historical",
+                         self.codes({"core_throttles": 0}, {"core_throttles": 0}))
+
+    def test_the_package_counter_is_maxed_not_summed(self):
+        """The kernel documents every CPU in a package as reporting the same
+        package counter. Summing multiplies one throttling event by the core
+        count and reports sixteen events on a box that had one."""
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        for cpu in range(4):
+            d = os.path.join(base, f"cpu{cpu}", "thermal_throttle")
+            os.makedirs(d)
+            with open(os.path.join(d, "package_throttle_count"), "w") as fh:
+                fh.write("7")
+            with open(os.path.join(d, "core_throttle_count"), "w") as fh:
+                fh.write(str(cpu))
+        t = nd._read_thermal_throttle(base)
+        self.assertEqual(t["package_throttles"], 7)
+        self.assertEqual(t["core_throttles"], 3)
+
+    def test_hardware_that_does_not_report_it_reports_nothing(self):
+        self.assertEqual(nd._read_thermal_throttle("/nonexistent/path"), {})
+
+    def test_it_is_not_latent_while_it_is_happening(self):
+        """Marginal cooling is a risk and must not headline over a live fault.
+        Cooling that is failing right now is the fault."""
+        self.assertIn("cpu_throttled_historical", nd.LATENT)
+        self.assertNotIn("cpu_throttled_live", nd.LATENT)
+
+
+class TestAHopThatSaidWhy(unittest.TestCase):
+    """traceroute prints the ICMP reason next to the time. It was dropped with
+    everything else that was not a number, so a hop that told us exactly why it
+    would not forward was reported as an unexplained silent path."""
+
+    def hops(self, line):
+        return nd.parse_traceroute_hops(
+            "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+            " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms\n" + line)
+
+    def test_the_reason_is_kept(self):
+        h = self.hops(" 2  198.51.100.7 (198.51.100.7)  12.0 ms !X\n")
+        self.assertEqual(h[1]["flags"], ["!X"])
+
+    def test_three_probes_refusing_is_one_reason_not_three(self):
+        h = self.hops(" 2  198.51.100.7 (198.51.100.7)  12.0 ms !X  12.1 ms !X  12.2 ms !X\n")
+        self.assertEqual(h[1]["flags"], ["!X"])
+
+    def test_an_ordinary_hop_carries_no_reason(self):
+        h = self.hops(" 2  198.51.100.7 (198.51.100.7)  12.0 ms  12.1 ms\n")
+        self.assertIsNone(h[1]["flags"])
+
+    def test_a_refusal_that_stops_the_path_has_an_owner_a_silence_does_not(self):
+        m = fresh()
+        trace(m, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+                 " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms\n"
+                 " 2  198.51.100.7 (198.51.100.7)  12.0 ms !X\n")
+        v = m.diagnose("8.8.8.8", None, quick=False)["verdict"]
+        self.assertEqual(v["based_on"][0], "path_admin_prohibited")
+        self.assertNotIn("provider", v["owner"])
+
+    def test_a_filtering_device_that_still_forwards_is_not_a_fault(self):
+        """Declining traceroute probes while passing traffic is normal and
+        common. Only the same annotation on the hop where the path stops is a
+        firewall standing in the way."""
+        m = fresh()
+        trace(m, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+                 " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms\n"
+                 " 2  198.51.100.7 (198.51.100.7)  12.0 ms !X\n"
+                 " 3  8.8.8.8 (8.8.8.8)  20.0 ms  20.1 ms\n")
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("path_admin_prohibited", codes)
+
+    def test_only_a_deliberate_refusal_counts(self):
+        """A host-unreachable is a router reporting a broken path onward, not a
+        policy decision - different fault, different owner, already covered."""
+        m = fresh()
+        trace(m, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+                 " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms\n"
+                 " 2  198.51.100.7 (198.51.100.7)  12.0 ms !H\n")
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("path_admin_prohibited", codes)
+
+
 class TestABaselineThatIsNotAReport(unittest.TestCase):
     """--baseline takes a file the operator names, and being handed the wrong
     one is ordinary. The loader rejected what would not parse; what got through
@@ -6897,6 +7002,20 @@ def _(nd):
         {"name": "eth0", "speed_mbps": 1000, "max_mbps": 10000, "duplex": "full",
          "mtu": 1500, "carrier": True}]}
 
+@scenario("cpu_throttled_live")
+def _(nd): kernel_drops(nd, {"core_throttles": 4, "package_throttles": 4},
+                            {"core_throttles": 9, "package_throttles": 9})
+
+@scenario("cpu_throttled_historical")
+def _(nd): kernel_drops(nd, {"core_throttles": 31, "package_throttles": 31},
+                            {"core_throttles": 31, "package_throttles": 31})
+
+@scenario("path_admin_prohibited")
+def _(nd):
+    trace(nd, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+              " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms  0.4 ms\n"
+              " 2  198.51.100.7 (198.51.100.7)  12.0 ms !X  12.1 ms !X  12.2 ms !X\n")
+
 @scenario("resets_sent_high")
 def _(nd): kernel_drops(nd, {"OutRsts": 0, "PassiveOpens": 1_000, "EstabResets": 0},
                             {"OutRsts": 120, "PassiveOpens": 1_100, "EstabResets": 30})
@@ -7578,14 +7697,32 @@ class TestEveryFindingFires(unittest.TestCase):
 
     def test_load_is_context_not_a_check_of_its_own(self):
         """A busy box is not a network fault. This never fires on its own -
-        it only qualifies a finding that has already been made."""
+        it only qualifies a finding that has already been made.
+
+        The rule is about *load*, not about the CPU. Thermal throttling is a
+        finding, and rightly: it is a count of times the hardware clocked
+        itself down, not a reading of how busy the box is. A blanket ban on
+        the "cpu_" prefix stated the rule as a spelling convention and blocked
+        a real fault - so the ban names the load-derived codes, and the
+        assertion below is the one with teeth."""
         source = open(nd.__file__).read()
-        self.assertNotIn('"code": "high_load"', source)
-        self.assertNotIn('"code": "cpu_', source)
+        for banned in ('"code": "high_load"', '"code": "cpu_load',
+                       '"code": "cpu_busy', '"code": "load_'):
+            self.assertNotIn(banned, source)
         mod = fresh()
         mod._load_average = lambda: (99.0, 1)
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertEqual(report["verdict"]["severity"], "ok")
+
+    def test_a_busy_box_that_is_not_throttling_reports_nothing_thermal(self):
+        """The counters are what fires this, not the load beside them."""
+        mod = fresh()
+        mod._load_average = lambda: (99.0, 1)
+        kernel_drops(mod, {"core_throttles": 12, "package_throttles": 12},
+                          {"core_throttles": 12, "package_throttles": 12})
+        codes = [f["code"] for f in mod.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("cpu_throttled_live", codes)
+        self.assertIn("cpu_throttled_historical", codes)
 
     def test_the_conntrack_flow_table_is_never_read(self):
         """/proc/net/stat/nf_conntrack is counters. /proc/net/nf_conntrack is

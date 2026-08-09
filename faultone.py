@@ -2107,10 +2107,44 @@ def parse_server_limits(port_range, file_nr, somaxconn):
     return out
 
 
+def _read_thermal_throttle(base="/sys/devices/system/cpu"):
+    """How many times this CPU has been clocked down to save itself.
+
+    A count rather than a temperature on purpose. A warm box is not a fault and
+    every threshold anyone picks for one is wrong on some hardware; a box that
+    has actually been throttled has already lost cycles, and the kernel counts
+    those. It is the same preference as reading a table's refusals rather than
+    how full it looks.
+
+    Per the kernel's own documentation every CPU in a package reports the same
+    package counter, so these are maxed rather than summed - adding them would
+    multiply one throttling event by the core count.
+    """
+    out = {}
+    try:
+        names = sorted(n for n in os.listdir(base) if re.fullmatch(r"cpu\d+", n))
+    except OSError:
+        return out
+    for key, field in (("core_throttles", "core_throttle_count"),
+                       ("package_throttles", "package_throttle_count")):
+        best = None
+        for name in names:
+            try:
+                with open(os.path.join(base, name, "thermal_throttle", field)) as fh:
+                    value = int(fh.read().strip())
+            except (OSError, ValueError):
+                continue
+            best = value if best is None else max(best, value)
+        if best is not None:
+            out[key] = best
+    return out
+
+
 def _read_kernel_drops():
     """Everything this box drops on its own, in one reading."""
     out = {}
     out.update(_read_softnet())
+    out.update(_read_thermal_throttle())
     out.update(_read_listen_drops())
     out.update(_read_conntrack())
     out.update(_read_server_limits())
@@ -3786,6 +3820,27 @@ def guess_default_gateway(route_result):
 IP_ANY_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
 
+# What a router says when it refuses rather than forwards. traceroute prints
+# these next to the time, and they were being dropped along with everything
+# else that was not a number - which is how a hop that told us exactly why it
+# would not forward was reported as an unexplained silent path.
+TRACE_ANNOTATIONS = {
+    "!X": "administratively prohibited",
+    "!A": "administratively prohibited",
+    "!H": "host unreachable",
+    "!N": "network unreachable",
+    "!P": "protocol unreachable",
+    "!F": "fragmentation needed",
+    "!S": "source route failed",
+    "!C": "precedence cutoff",
+    "!T": "communication with destination network administratively prohibited",
+}
+TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]|!\d{1,3})(?=\s|$)")
+# A deliberate refusal by a policy device, as opposed to a path that is broken
+# or silent. Different owner entirely: somebody configured this.
+TRACE_PROHIBITED = ("!X", "!A", "!T")
+
+
 def parse_traceroute_hops(output):
     """Turn traceroute/tracert text into a list of hop dicts, best-effort.
 
@@ -3833,12 +3888,16 @@ def parse_traceroute_hops(output):
 
         hop_num = int(m.group(1))
         timed_out = not times and "*" in line
+        flags = TRACE_ANNOTATION_RE.findall(line)
         hops.append({
             "hop": hop_num,
             "host": host,
             "display": display,
             "times_ms": times,
             "timed_out": timed_out,
+            # Kept in the order the router gave them, deduplicated: three
+            # probes to one refusing hop print the same flag three times.
+            "flags": list(dict.fromkeys(flags)) or None,
         })
     return hops
 
@@ -4091,6 +4150,16 @@ VERDICT_RULES = [
      "Runts and giants mean something here disagrees about frame size. Compare "
      "the MTU at both ends of this link, and check for a VLAN tag being added "
      "or stripped where it is not expected."),
+    ("cpu_throttled_live", "this device's cooling, not the network",
+     "This device is too hot to run at full speed and is clocking itself down",
+     "Nothing on the wire is at fault. The lost cycles are the ones that move "
+     "packets, so read every other finding here as a consequence until the "
+     "airflow, dust and fans have been checked."),
+    ("cpu_throttled_historical", "this device's cooling",
+     "This device has been throttling itself, though not while we watched",
+     "Cooling that is marginal rather than failed - it bites under load and "
+     "clears when the load does. That is the shape of a fault that only shows "
+     "at the busiest hour and never reproduces afterwards."),
     ("nic_reset_logged", "this device's NIC or its driver",
      "The kernel has been resetting this device's network hardware",
      "The adapter or its driver is failing, not the network. Every connection "
@@ -4416,6 +4485,11 @@ VERDICT_RULES = [
      "Packets are being dropped along the path, all the way to the destination",
      "Loss that persists to the final hop is real. Take it to whoever owns the "
      "hop where it starts; if that's past the site edge, it's the provider's."),
+    ("path_admin_prohibited", "whoever owns the policy on the hop that refused",
+     "A device on the path is refusing this traffic on purpose",
+     "It answered rather than went silent, which means the decision is "
+     "configuration rather than a fault. Read the rule set on that hop - and "
+     "if it is not yours, the answer is whoever runs it, not the carrier."),
     ("latency_wall", "see the finding - it names the segment",
      "A single hop adds most of the round-trip delay",
      "Everything past that hop inherits the delay; take it up with whoever owns "
@@ -4675,6 +4749,8 @@ LATENT = {
     "syncookies_historical",
     # Real, dated, and not yet refusing anyone.
     "own_tls_expiring",
+    # It throttled earlier and is not throttling now.
+    "cpu_throttled_historical",
 }
 
 
@@ -4762,6 +4838,7 @@ _LOCAL_FAULTS = (
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
     "nic_ring_overruns", "frame_length_errors",
+    "cpu_throttled_live", "cpu_throttled_historical",
     "conntrack_drops_live", "conntrack_drops_historical", "conntrack_near_limit",
     "aborts_on_memory", "aborts_on_timeout",
     # Its own stack and clock.
@@ -4819,6 +4896,7 @@ FINDING_SIDE.update({
     "inet_icmp_filtered": "upstream",
     "path_loss": "upstream",
     "path_loss_cosmetic": "upstream",
+    "path_admin_prohibited": "upstream",
     "latency_wall": "upstream",
     "trace_stalls": "upstream",
     "loop": "upstream",
@@ -4893,11 +4971,12 @@ STAGE_RULES = [
     ("link", {"link_errors_live", "duplex_mismatch", "tcp_flow_loss_all_peers",
               "optics_alarm", "optics_rx_low", "link_flapping_live", "nic_drops_live",
               "rcv_buffer_pruned", "link_flapping_logged", "nic_reset_logged",
-              "nic_ring_overruns", "frame_length_errors"},
+              "nic_ring_overruns", "frame_length_errors", "cpu_throttled_live"},
      {"slow_link", "negotiated_below_capacity", "bond_degraded",
       "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
-      "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical"}),
+      "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical",
+      "cpu_throttled_historical"}),
     ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict"},
      {"interfaces_unreadable", "routes_unreadable",
       "neigh_table_full", "neigh_table_near_limit"}),
@@ -4908,7 +4987,7 @@ STAGE_RULES = [
     ("internet", {"inet_unreachable", "destination_unresponsive", "loop",
                   "conntrack_drops_live"},
      {"inet_partial_loss", "inet_loss_unmeasured", "path_loss", "trace_stalls",
-      "latency_wall", "latency_high", "tcp_retransmits",
+      "latency_wall", "latency_high", "tcp_retransmits", "path_admin_prohibited",
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
@@ -5926,6 +6005,45 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_accept_queues(stats, findings, counter_window)
     _check_connection_setup(stats, findings, counter_window)
     _check_server_limits(stats, findings, counter_window, raw)
+    _check_thermal(stats, findings, counter_window)
+
+
+def _check_thermal(stats, findings, counter_window):
+    """A CPU clocking itself down, which every network check reads as the network.
+
+    Throttling costs cycles exactly where a box that moves packets needs them:
+    the softnet backlog fills, latency spikes, retransmits climb, and every one
+    of those is a finding here that points somewhere else. None of them is
+    wrong - they are all downstream of a box that is too hot to run at speed.
+    """
+    delta, lifetime = stats.get("delta") or {}, stats.get("lifetime") or {}
+    live = max(delta.get("core_throttles", 0), delta.get("package_throttles", 0))
+    total = max(lifetime.get("core_throttles", 0), lifetime.get("package_throttles", 0))
+    if live:
+        findings.append({
+            "severity": "critical",
+            "layer": 1,
+            "code": "cpu_throttled_live",
+            "message": f"This device's CPU was thermally throttled {live:,} time(s) in the "
+                       f"last {counter_window}s ({total:,} since boot). It is clocking itself "
+                       f"down to survive, right now, and the cycles it loses are the ones "
+                       f"that move packets - a full receive backlog, latency that spikes for "
+                       f"no reason on the wire, and retransmits are all downstream of this "
+                       f"rather than faults of their own. Check airflow, intake dust and fan "
+                       f"health before anything on the network." + _load_context(),
+        })
+    elif total:
+        findings.append({
+            "severity": "warning",
+            "layer": 1,
+            "code": "cpu_throttled_historical",
+            "message": f"This device's CPU has been thermally throttled {total:,} time(s) "
+                       f"since boot, but not during this {counter_window}s check. Cooling "
+                       f"that is marginal rather than failed: it happens under load and "
+                       f"stops when the load does, which is exactly the shape of a problem "
+                       f"that only appears at the busiest time of day and never reproduces "
+                       f"afterwards.",
+        })
 
 def _check_clock(raw, findings):
     """A clock that has drifted, which is a device fault reported as a service one.
@@ -7669,6 +7787,29 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                            f"{final_loss:.0f}%, so the path is fine - those routers are rate-"
                            f"limiting ICMP replies rather than dropping traffic.",
             })
+    # A hop that refused and said why. The distinction that matters is whether
+    # the path still completed: a policy device that declines traceroute probes
+    # while forwarding traffic is normal and common, and the same annotation on
+    # the hop where the path stops is a firewall standing in the way. Only the
+    # second is a fault, and it has an owner a silent path does not - somebody
+    # configured this, so there is a person to ask rather than a carrier.
+    refused = [h for h in hops
+               if any(f in TRACE_PROHIBITED for f in (h.get("flags") or []))]
+    if refused and not trace_reached(hops, target):
+        hop = refused[-1]
+        reasons = sorted({TRACE_ANNOTATIONS.get(f, f) for f in hop["flags"]
+                          if f in TRACE_PROHIBITED})
+        findings.append({
+            "severity": "critical",
+            "layer": 3,
+            "code": "path_admin_prohibited",
+            "message": f"The path stops at hop {hop['hop']} ({hop['display']}), and that hop "
+                       f"said why: {', '.join(reasons)}. This is not a broken path or a "
+                       f"router that has stopped answering - it is a device that received "
+                       f"the traffic, decided against forwarding it, and reported the "
+                       f"decision. Somebody configured that, so there is a policy to read "
+                       f"and a person to ask rather than a carrier to open a ticket with.",
+        })
     stalled = [h for h in hops if h["timed_out"]] if not quick else []
     if stalled and hops and not stalled[-1]["hop"] == hops[-1]["hop"]:
         # a timeout in the middle of the path, with hops succeeding after it, usually just

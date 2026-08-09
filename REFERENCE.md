@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 135
+difference is which one it puts at the top, and that is the whole product: 138
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -212,6 +212,58 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## Too hot to move packets
+
+A CPU that is clocking itself down loses cycles exactly where a box that moves
+packets needs them. The receive backlog fills, latency spikes for no reason
+visible on the wire, retransmits climb — and every one of those is a finding
+here that points somewhere else. None of them is wrong. All of them are
+downstream of a box too hot to run at speed.
+
+This reads a **count of throttling events**, not a temperature. Every threshold
+anyone picks for "too warm" is wrong on some hardware, whereas a box that has
+actually been throttled has already lost the cycles. It is the same preference
+as reading a table's refusals rather than how full it looks.
+
+| | |
+|---|---|
+| `cpu_throttled_live` | the count moved during the check — it is happening now |
+| `cpu_throttled_historical` | non-zero since boot, not moving — cooling that is marginal rather than failed, which bites at the busiest hour and never reproduces afterwards |
+
+The kernel documents every CPU in a package as reporting the same package
+counter, so these are **maxed, not summed** — adding them reports sixteen
+throttling events on a sixteen-core box that had one.
+
+This is not a load check, and the distinction is the point. A busy box is not a
+fault; a box being clocked down by its own hardware is. The guard that keeps
+load out of the findings used to ban the `cpu_` prefix outright, which stated
+the rule as a spelling convention and blocked a real fault — it now names the
+load-derived codes, and the assertion with teeth is still there: load average
+99 on one core, and the verdict is `ok`.
+
+## A hop that said why
+
+traceroute prints the ICMP reason next to the time — `!X`, `!H`, `!N`, `!F` and
+the rest. All of it was being dropped along with everything else that was not a
+number, which is how a hop that told us **exactly** why it would not forward got
+reported as an unexplained silent path.
+
+The reasons are now kept on the hop and shown in the path panel, and one of them
+produces a finding. `!X` / `!A` / `!T` mean *administratively prohibited*: a
+device received the traffic, decided against forwarding it, and reported the
+decision. That is configuration, not a fault — so there is a policy to read and
+a person to ask, rather than a carrier to open a ticket with.
+
+The condition that matters is **whether the path still completed**. A policy
+device that declines traceroute probes while forwarding traffic normally is
+common and benign; the same annotation on the hop where the path stops is a
+firewall standing in the way. Only the second fires.
+
+`!H` and `!N` are deliberately excluded. A router reporting that it cannot reach
+onward is describing a broken path, not making a policy decision — a different
+fault with a different owner, and one the existing reachability rules already
+cover.
 
 ## A baseline that is not a report
 
@@ -674,11 +726,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **135** | Distinct conclusions it can reach and state in plain language. 118 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **118** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 696 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **138** | Distinct conclusions it can reach and state in plain language. 121 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **121** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 709 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 135 findings are the useful figure** if you want to know what the tool can
+**The 138 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -793,7 +845,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 696 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 709 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2101,7 +2153,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-696 tests, no dependencies, no network, a few seconds — so they run
+709 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2177,7 +2229,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 135 findings with readable rules instead of
+> way out - and who owns it. Ranks 138 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

@@ -5067,8 +5067,29 @@ def _dominant_client(raw):
 # and needs no storage, no service and no network.
 # ---------------------------------------------------------------------------
 
+def looks_like_a_report(data):
+    """Is this JSON one of ours, or just JSON?
+
+    --baseline takes a file the operator names, and being handed the wrong one
+    is ordinary: a truncated write, an mtr export, last week's inventory. The
+    loader already rejects what will not parse. What got through was valid JSON
+    with a foreign shape, which crashed the comparison half way through a run
+    and lost the diagnosis - over a piece of optional context.
+    """
+    return (isinstance(data, dict)
+            and isinstance(data.get("findings"), list)
+            and isinstance(data.get("verdict"), dict))
+
+
+def _dict(value):
+    """A mapping, whatever arrived. A key present and null is not a key absent,
+    and `.get(k, {})` returns the None rather than the default for it."""
+    return value if isinstance(value, dict) else {}
+
+
 def _iface_map(report, key):
-    return {i["name"]: i for i in ((report.get("raw", {}).get(key) or {}).get("interfaces") or [])}
+    ifaces = _dict(_dict(_dict(report).get("raw")).get(key)).get("interfaces")
+    return {i["name"]: i for i in (ifaces or []) if isinstance(i, dict) and i.get("name")}
 
 
 def compare_reports(current, baseline):
@@ -5118,7 +5139,8 @@ def compare_reports(current, baseline):
     # Switch port / VLAN: a device that moved, or a re-patched port, explains a
     # great deal on its own.
     def nb_map(rep):
-        return {n["iface"]: n for n in (rep.get("neighbours") or [])}
+        return {n["iface"]: n for n in (_dict(rep).get("neighbours") or [])
+                if isinstance(n, dict) and n.get("iface")}
     cur_nb, base_nb = nb_map(current), nb_map(baseline)
     for iface in sorted(set(cur_nb) | set(base_nb)):
         c, b = cur_nb.get(iface, {}), base_nb.get(iface, {})
@@ -5162,7 +5184,7 @@ def compare_reports(current, baseline):
                         "direction": "worse" if cq["mos"] < bq["mos"] else "better"})
 
     def resolver_set(rep):
-        return sorted(r["server"] for r in ((rep.get("raw", {}).get("dns_health") or {})
+        return sorted(r["server"] for r in (_dict(_dict(_dict(rep).get("raw")).get("dns_health"))
                                             .get("resolvers") or []))
     note("DNS resolvers", ", ".join(resolver_set(baseline)) or None,
          ", ".join(resolver_set(current)) or None)
@@ -5170,7 +5192,7 @@ def compare_reports(current, baseline):
     def answer_set(rep):
         """What the probe name resolved to, across every resolver that answered."""
         answers = set()
-        for r in ((rep.get("raw", {}).get("dns_health") or {}).get("resolvers") or []):
+        for r in (_dict(_dict(_dict(rep).get("raw")).get("dns_health")).get("resolvers") or []):
             answers.update(r.get("answers") or [])
         return sorted(answers)
 
@@ -5253,7 +5275,25 @@ def _sides_can_agree(a, b):
 # latency_high reports and the wall is that delay located on the path, so
 # treating them as separate families let one number read as three agreeing
 # opinions and put a slow path at high confidence on a single measurement.
+# Which check a finding came from, where the first word of its code does not
+# say. The heuristic below splits on that word, which is right for four port
+# results and wrong in two directions - it can put one check's outputs in
+# different families, and it can merge two checks that happen to share a
+# prefix. Both are corrected here.
 SHARED_FAMILY = {
+    # "own_" marks whose service it is, not which check looked at it. Reading
+    # the certificate this box serves and making an HTTP request to it are two
+    # separate checks of two separate things, and grouping them meant an
+    # expired certificate could not corroborate the service erroring - two
+    # independent signals counted as one, which understates a real fault.
+    "own_tls_expired": "own_cert",
+    "own_tls_expiring": "own_cert",
+    "own_tls_handshake_failed": "own_cert",
+    "own_tls_untrusted": "own_cert",
+    "own_service_erroring": "own_service",
+    "own_service_not_http": "own_service",
+    "own_service_silent": "own_service",
+    "own_service_upstream_error": "own_service",
     # This box failing to take delivery, counted in two places. The kernel's
     # own backlog and the adapter's ring are the same complaint at two depths,
     # so neither is independent evidence for the other.
@@ -10225,6 +10265,10 @@ def main():
                 baseline = load_report_file(args.baseline)
             except (OSError, ValueError) as e:
                 print(f"Could not read baseline {args.baseline}: {e}", file=sys.stderr)
+                raise SystemExit(EXIT_UNKNOWN)
+            if not looks_like_a_report(baseline):
+                print(f"{args.baseline} parsed, but it is not a FaultOne report - "
+                      f"no findings or verdict in it.", file=sys.stderr)
                 raise SystemExit(EXIT_UNKNOWN)
         progress = Progress(enabled=False if args.quiet else None)
         try:

@@ -2092,6 +2092,89 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestABaselineThatIsNotAReport(unittest.TestCase):
+    """--baseline takes a file the operator names, and being handed the wrong
+    one is ordinary. The loader rejected what would not parse; what got through
+    was valid JSON with a foreign shape, which crashed the comparison half way
+    through a run and lost the whole diagnosis over optional context."""
+
+    CURRENT = {"version": "1.6.4", "target": "8.8.8.8", "raw": {}, "neighbours": [],
+               "hops": [], "findings": [], "verdict": {}}
+
+    def test_a_real_report_is_recognised(self):
+        self.assertTrue(nd.looks_like_a_report(
+            {"findings": [], "verdict": {"headline": "x"}}))
+
+    def test_json_that_is_not_a_report_is_not(self):
+        for data in ({}, None, [], "a string", {"hello": "world"},
+                     {"findings": [], "verdict": None},
+                     {"findings": None, "verdict": {}},
+                     {"report": {"hubs": []}}):          # an mtr export
+            with self.subTest(data=data):
+                self.assertFalse(nd.looks_like_a_report(data))
+
+    def test_the_comparison_survives_a_foreign_shape_anyway(self):
+        """Belt and braces: the guard above stops these reaching the
+        comparison, and the comparison no longer breaks if one does."""
+        for base in ({"version": "1.0.0", "raw": None, "neighbours": None, "hops": None},
+                     {"version": "1.0.0", "raw": [], "neighbours": "nope", "hops": 42},
+                     {}, {"hello": "world"}):
+            with self.subTest(base=base):
+                nd.compare_reports(base, self.CURRENT)
+
+    def test_a_key_present_and_null_is_not_a_key_absent(self):
+        """`.get(k, {})` returns the None, not the default - which is how a
+        null in someone's JSON became an AttributeError mid-run."""
+        self.assertEqual(nd._dict(None), {})
+        self.assertEqual(nd._dict({"a": 1}), {"a": 1})
+        self.assertEqual(nd._dict("string"), {})
+
+    def test_an_interface_row_without_a_name_is_skipped_not_crashed_on(self):
+        rep = {"raw": {"link_modes": {"interfaces": [{"speed_mbps": 1000}, None,
+                                                     {"name": "eth0"}]}}}
+        self.assertEqual(list(nd._iface_map(rep, "link_modes")), ["eth0"])
+
+
+class TestOwnMarksWhoseServiceNotWhichCheck(unittest.TestCase):
+    """The family heuristic splits a code on its first word. For "own_" that
+    word says whose service it is, not which check looked at it."""
+
+    def test_the_certificate_and_the_service_are_different_checks(self):
+        """Reading the certificate this box serves and making an HTTP request
+        to it are two separate things. Grouped, an expired certificate could
+        not corroborate the service erroring - two independent signals counted
+        as one, which understates a real fault."""
+        self.assertNotEqual(nd._finding_family("own_tls_expired"),
+                            nd._finding_family("own_service_erroring"))
+
+    def test_two_readings_of_one_certificate_are_still_one_check(self):
+        self.assertEqual(nd._finding_family("own_tls_expired"),
+                         nd._finding_family("own_tls_expiring"))
+
+    def test_two_readings_of_one_service_are_still_one_check(self):
+        self.assertEqual(nd._finding_family("own_service_silent"),
+                         nd._finding_family("own_service_erroring"))
+
+    def test_they_now_corroborate_each_other(self):
+        v = nd.build_verdict([
+            {"code": "own_service_erroring", "severity": "critical", "layer": 7,
+             "message": "erroring"},
+            {"code": "own_tls_expired", "severity": "critical", "layer": 7,
+             "message": "expired"}])
+        self.assertTrue(v["corroborated_by"])
+
+    def test_every_override_names_a_real_finding_and_does_something(self):
+        """An override for a code that does not exist, or one that puts a code
+        in a family of its own, is a line that reads as a rule and is not one.
+        Asked of the whole table rather than of the entries we remembered."""
+        import collections
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        self.assertEqual([k for k in nd.SHARED_FAMILY if k not in codes], [])
+        counts = collections.Counter(nd.SHARED_FAMILY.values())
+        self.assertEqual([f for f, n in counts.items() if n < 2], [],
+                         "a family of one overrides nothing")
+
+
 class TestWhatRealToolsActuallyPrint(unittest.TestCase):
     """Every fixture in this suite was written from an idea of what these
     commands emit. These are the places that idea was wrong - each one found

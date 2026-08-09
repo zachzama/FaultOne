@@ -213,6 +213,49 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## A baseline that is not a report
+
+`--baseline` takes a file the operator names, and being handed the wrong one is
+ordinary: a truncated write, an mtr export, last week's inventory, a typo that
+lands on a different JSON file. The loader already rejected anything that would
+not parse. What got through was **valid JSON with a foreign shape** — and it
+crashed the comparison half way through the run, losing the entire diagnosis
+over a piece of optional context.
+
+Two layers now. The file is checked at load for the shape of a report — a
+findings list and a verdict object — and rejected with a message that says what
+was wrong rather than a traceback. And the comparison itself no longer breaks if
+one gets past: a key that is *present and null* is not a key that is absent, and
+`.get(k, {})` hands back the `None` rather than the default for it, which is
+exactly how somebody else's JSON became an `AttributeError` mid-run.
+
+The rejection is deliberately fatal rather than a warning-and-continue. Somebody
+who asked for a comparison and silently did not get one would read the report as
+though it had been compared.
+
+## "own" says whose service, not which check
+
+The family heuristic splits a finding's code on its first word — right for four
+port results, and wrong when the first word is a scope marker. `own_` means
+*this box's own*, and it was putting two genuinely separate checks in one
+family: reading the certificate this box serves, and making an HTTP request to
+it.
+
+The effect was an understatement rather than an overstatement — an expired
+certificate could not corroborate the service erroring, so two independent
+signals were counted as one and the confidence came out lower than the evidence
+justified. That is the safer direction to be wrong in, and still wrong.
+
+`link_` was looked at for the same reason and deliberately left alone. Errors,
+flapping and saturation are arguably three measurements of one cable or one
+check of it depending on how you count, and changing it would move the
+confidence of many verdicts on a judgement call rather than on a demonstrable
+error.
+
+A test now asks the whole override table two things: that every key names a
+finding that exists, and that no override puts a code in a family of its own —
+a line that reads as a rule while doing nothing.
+
 ## What the tools actually print
 
 Every fixture in this suite was written from an *idea* of what these commands
@@ -633,7 +676,7 @@ they're spelled out:
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **135** | Distinct conclusions it can reach and state in plain language. 118 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **118** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 686 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 696 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 135 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -750,7 +793,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 686 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 696 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2058,7 +2101,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-686 tests, no dependencies, no network, a few seconds — so they run
+696 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

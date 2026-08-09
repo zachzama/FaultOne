@@ -1,6 +1,6 @@
 # dev/
 
-Three harnesses that are **not part of the tool**. Nothing here ships to a box,
+Four harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
 nothing about what the tool does. They exist because two questions come up
 before every release and neither is answerable by the test suite.
@@ -63,3 +63,26 @@ against the live box.
 
 Needs the network and an authenticated `gh`, which is why it is here and not in
 the suite. Run it when you tag.
+
+## `release.py` — cut a release without forgetting half of it
+
+```bash
+python3 dev/release.py 1.7.0 --notes-file notes.md            # bump, test, commit, tag
+python3 dev/release.py 1.7.0 --notes-file notes.md --push     # ...and ship it
+python3 dev/release.py 1.7.0 --notes-file notes.md --dry-run  # print the plan
+```
+
+`git push --follow-tags` creates a tag and nothing else. A GitHub Release is a
+separate object built on top of one, and it is what drives the "Latest" badge
+and notifies watchers. Nine tags shipped without a Release before anyone
+noticed, so the Releases page went on showing a version eight releases behind
+while every tag was correct.
+
+It bumps the version in **both** places that carry it, runs the suite **before**
+committing — and reverts the bump if the suite fails, so a release that cannot
+pass its own tests never reaches a tag — then commits, tags, and with `--push`
+pushes and publishes the Release together. Publishing together is the point:
+doing the second half separately is what got forgotten nine times.
+
+It never pushes without `--push`. That decision is the user's and this file
+should not be able to make it by accident.

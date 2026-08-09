@@ -989,6 +989,13 @@ rather than leaving you to wonder why a measurement moved.
 
 ## Versioning
 
+Releases are cut with `python3 dev/release.py <version> --push`, which bumps the
+version in both files that carry it, runs the suite before committing, tags, and
+publishes the GitHub Release in the same step. That last part is why the script
+exists: `git push --follow-tags` creates a tag and nothing else, so nine tagged
+versions once shipped with no Release and the Releases page kept showing one
+from eight releases back.
+
 `python3 faultone.py --version` prints what's on the box, and every report
 carries the version that produced it — in the JSON, at the top of the terminal
 output, and in the badge of a self-contained page:

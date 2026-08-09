@@ -1679,24 +1679,45 @@ def find_arp_conflicts(entries):
 # traffic, and reading it needs no privileges and records nothing.
 # ---------------------------------------------------------------------------
 
-def _tcp_counters_linux():
+def _snmp_counters_linux():
+    """The counters in /proc/net/snmp, by protocol.
+
+    The file was already being opened and only the Tcp: line read out of it,
+    which left the box's UDP and fragmentation counters on the floor. Both
+    matter here: DNS is UDP, so a box dropping datagrams presents as a resolver
+    problem while every TCP check passes, and reassembly failures are the
+    receiving half of the MTU story the path probe measures from the sending
+    side.
+
+    Tcp keys keep their bare names because the rest of the tool already reads
+    them that way. The others are prefixed, because the protocols reuse names -
+    InErrors and InCsumErrors exist on both Tcp and Udp and mean different
+    things - and a collision here would be silent.
+    """
     try:
         with open("/proc/net/snmp") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return {}
+    out = {}
     for i, line in enumerate(lines):
-        if line.startswith("Tcp:") and i + 1 < len(lines) and lines[i + 1].startswith("Tcp:"):
-            keys = line.split()[1:]
-            vals = lines[i + 1].split()[1:]
-            out = {}
-            for k, v in zip(keys, vals):
-                try:
-                    out[k] = int(v)
-                except ValueError:
-                    pass   # non-numeric counter: skip it, others are still usable
-            return out
-    return {}
+        head = line.split(":", 1)[0]
+        if head not in ("Tcp", "Udp", "Ip"):
+            continue
+        if i + 1 >= len(lines) or not lines[i + 1].startswith(head + ":"):
+            continue
+        prefix = "" if head == "Tcp" else head.lower() + "_"
+        for k, v in zip(line.split()[1:], lines[i + 1].split()[1:]):
+            try:
+                out[prefix + k] = int(v)
+            except ValueError:
+                pass   # non-numeric counter: skip it, others are still usable
+    return out
+
+
+def _tcp_counters_linux():
+    """Kept as the name the BSD twin is paired with."""
+    return _snmp_counters_linux()
 
 
 def _tcp_counters_bsd():
@@ -1806,6 +1827,24 @@ RESETS_PER_CONN_PCT = 100
 # of that is normal - a client walking away, an application aborting - so the
 # line sits where it stops looking like ordinary abandonment.
 ESTAB_RESET_PCT = 20
+
+# Share of arriving datagrams this box failed to take delivery of before it is
+# worth saying so. UDP has no retransmission and no window: a datagram dropped
+# at the socket is gone, and the sender is never told. Netdata warns above ten
+# a minute; this is a share instead, for the same reason the discard rule is -
+# ten a minute means nothing without knowing whether ten thousand or ten
+# million arrived.
+UDP_DROP_PCT = 1.0
+
+# Share of reassembly attempts that failed. Fragments are already unusual on a
+# healthy path, so the bar is on how many of the ones that were tried never
+# came back together rather than on the raw count.
+REASM_FAIL_PCT = 10.0
+
+# How full the orphan table gets before it is worth saying so. The kernel
+# charges an orphan at two to four times its weight when deciding whether it is
+# under memory pressure, so the ceiling bites earlier than the number suggests.
+ORPHAN_WARN_PCT = 25
 
 # A TLS handshake is one or two round trips. Past this multiple of the connect
 # that preceded it, the extra time is the server doing work - key exchange, or
@@ -2167,9 +2206,46 @@ def _read_kernel_drops():
                 # Resets this box sent, and connections torn down rather than
                 # closed. On a proxy these are the wire-level shape of every
                 # refusal it makes, and nothing here was reading them.
-                "OutRsts", "EstabResets", "PassiveOpens"):
+                "OutRsts", "EstabResets", "PassiveOpens",
+                # Datagrams this box could not take delivery of, and the wider
+                # bucket that contains them. DNS is UDP: a box dropping these
+                # looks like a resolver problem from every other check here.
+                "udp_InDatagrams", "udp_InErrors", "udp_RcvbufErrors",
+                "udp_SndbufErrors", "udp_NoPorts",
+                # Fragments that never came back together. The receiving half
+                # of what the path-MTU probe measures on the way out.
+                "ip_ReasmReqds", "ip_ReasmOKs", "ip_ReasmFails"):
         if isinstance(tcp.get(key), int):
             out[key] = tcp[key]
+    out.update(_read_orphans())
+    return out
+
+
+def _read_orphans(base="/proc"):
+    """Sockets torn down without being closed, against the ceiling on them.
+
+    An orphan holds kernel memory with no file descriptor left to close it, and
+    the kernel charges them at twice or four times their weight when deciding
+    whether it is under pressure. Past tcp_max_orphans it stops being polite
+    about it and resets them, which arrives at the far end as a connection
+    dropped for no reason anybody here can see.
+    """
+    out = {}
+    text = _read_text(os.path.join(base, "net/sockstat"))
+    for line in (text or "").splitlines():
+        if line.startswith("TCP:"):
+            parts = line.split()
+            for i, token in enumerate(parts):
+                if token == "orphan" and i + 1 < len(parts):
+                    try:
+                        out["tcp_orphans"] = int(parts[i + 1])
+                    except ValueError:
+                        pass
+    limit = _read_text(os.path.join(base, "sys/net/ipv4/tcp_max_orphans"))
+    try:
+        out["tcp_max_orphans"] = int(limit)
+    except (TypeError, ValueError):
+        pass
     return out
 
 
@@ -4698,6 +4774,28 @@ VERDICT_RULES = [
      "This box is not the one sending most of these. Look for a "
      "session-tracking firewall timing connections out, a load balancer "
      "recycling them, or a service at the far end restarting."),
+    ("udp_recv_buffer_full", "this device, not the resolver it looks like",
+     "This device is dropping incoming datagrams because it cannot take them",
+     "UDP has no retransmission, so these are gone and the sender was never "
+     "told. DNS runs over it: read every resolver finding here as a "
+     "consequence until the receive buffers and whatever reads them have been "
+     "looked at."),
+    ("tcp_orphans_high", "this device's socket table",
+     "Orphaned connections are filling this device's socket table",
+     "Each one holds kernel memory with nothing left to close it, and the "
+     "kernel weighs them at two to four times their size. Past the ceiling it "
+     "resets them, which the far end sees as a connection dropped for no "
+     "reason. Find what is abandoning connections rather than closing them."),
+    ("udp_datagrams_corrupt", "a device in the path, or an offload engine here",
+     "Datagrams are arriving damaged rather than being dropped for space",
+     "This box had room for them; they failed a checksum or arrived malformed. "
+     "Ethernet has its own CRC, so the corruption happened somewhere that "
+     "re-framed the packet after that check."),
+    ("fragments_lost", "the path, over how big a packet may be",
+     "Fragmented packets are arriving incomplete and being discarded",
+     "Some pieces are not turning up inside the reassembly timeout. Look for "
+     "an MTU step on the path with the ICMP that would report it filtered - "
+     "the sender never learns to send smaller packets and keeps trying."),
     ("resets_sent_high", "this device, which is the one sending them",
      "This device is resetting the connections it takes part in",
      "The resets originate here, so this is not something arriving from the "
@@ -4852,6 +4950,7 @@ TRANSPORT_SYMPTOMS = {
     # like from one layer up - unlike a resolver that answers with the wrong
     # address, which is a fault of its own.
     "dns_resolver_slow", "dns_fail", "tls_handshake_slow", "port_timeout",
+    "fragments_lost", "udp_datagrams_corrupt",
     "own_service_silent",
 }
 
@@ -5009,6 +5108,10 @@ FINDING_SIDE.update({
     "pmtu_unmeasurable": "upstream",
     "latency_high": "upstream",
     "resets_sent_high": "local",
+    "udp_recv_buffer_full": "local",
+    "tcp_orphans_high": "local",
+    "udp_datagrams_corrupt": "upstream",
+    "fragments_lost": "upstream",
     "connections_reset_by_peer": "upstream",
     "call_quality_bad": "upstream",
     "call_quality_degraded": "upstream",
@@ -5101,6 +5204,8 @@ STAGE_RULES = [
       "path_jitter_backends", "path_jitter_clients",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
       "resets_sent_high", "connections_reset_by_peer",
+      "udp_recv_buffer_full", "udp_datagrams_corrupt", "fragments_lost",
+      "tcp_orphans_high",
       "retrans_spurious",
       # Listed as warnings, but build_stages promotes a critical to fail, so
       # "degraded" warns the stage and "unusable" fails it without a second rule.
@@ -5593,6 +5698,7 @@ SHARED_FAMILY = {
     "nic_drops_live": "backlog",
     "nic_drops_historical": "backlog",
     "nic_ring_overruns": "backlog",
+    "udp_recv_buffer_full": "backlog",
     # One link running below par, said two ways. slow_link owns the absolute
     # case and this owns the relative one, so they are the same check and must
     # not confirm each other.
@@ -6267,6 +6373,109 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_connection_setup(stats, findings, counter_window)
     _check_server_limits(stats, findings, counter_window, raw)
     _check_thermal(stats, findings, counter_window)
+    _check_udp(stats, findings, counter_window)
+    _check_fragments(stats, findings, counter_window)
+    _check_orphans(stats, findings, counter_window)
+
+
+def _check_udp(stats, findings, counter_window):
+    """Datagrams this box did not take delivery of.
+
+    Nothing else here looks at UDP, and DNS is UDP. A box overflowing its
+    receive buffers loses resolver answers while every TCP check in this tool
+    passes - so the report reads as a slow or failing resolver, and the fault
+    is on this side of the wire.
+    """
+    delta = stats.get("delta") or {}
+    got = delta.get("udp_InDatagrams", 0)
+    rcvbuf = delta.get("udp_RcvbufErrors", 0)
+    errors = delta.get("udp_InErrors", 0)
+    if rcvbuf and got:
+        pct = round(100.0 * rcvbuf / (got + rcvbuf), 1)
+        if pct >= UDP_DROP_PCT:
+            findings.append({
+                "severity": "warning",
+                "layer": 4,
+                "code": "udp_recv_buffer_full",
+                "message": f"This device dropped {rcvbuf:,} incoming datagram(s) in the last "
+                           f"{counter_window}s because the receiving socket had no room "
+                           f"({pct}% of the {got + rcvbuf:,} that arrived). UDP has no "
+                           f"retransmission and no window, so a datagram dropped here is "
+                           f"gone and the sender is never told. DNS runs over UDP: this "
+                           f"presents as a resolver that is slow or flaky while every other "
+                           f"check here passes, and the resolver is fine." + _load_context(),
+            })
+
+    # InErrors contains RcvbufErrors one for one. What is left over arrived and
+    # failed before any socket saw it - a bad checksum, a truncated header -
+    # which is damage in the path rather than this box failing to keep up, and
+    # a different thing to go and look at.
+    other = errors - rcvbuf
+    if other > 0 and got:
+        pct = round(100.0 * other / (got + errors), 1)
+        if pct >= UDP_DROP_PCT:
+            findings.append({
+                "severity": "warning",
+                "layer": 3,
+                "code": "udp_datagrams_corrupt",
+                "message": f"{other:,} incoming datagram(s) were discarded in the last "
+                           f"{counter_window}s for something other than a full buffer "
+                           f"({pct}% of arrivals). This box had room for them; they failed "
+                           f"a checksum or arrived malformed, so they were damaged on the "
+                           f"way here. Ethernet has its own CRC, so whatever re-framed them "
+                           f"after that did it - a device in the path or an offload engine "
+                           f"on this one, not the cable.",
+            })
+
+
+def _check_fragments(stats, findings, counter_window):
+    """Fragments that arrived and never came back together.
+
+    The path-MTU probe measures this from the sending side. This is the same
+    problem seen from the receiving side, and it is evidence the probe cannot
+    produce: it is about traffic other people sent to this box.
+    """
+    delta = stats.get("delta") or {}
+    tried, failed = delta.get("ip_ReasmReqds", 0), delta.get("ip_ReasmFails", 0)
+    if failed and tried:
+        pct = round(100.0 * failed / tried, 1)
+        if pct >= REASM_FAIL_PCT:
+            findings.append({
+                "severity": "warning",
+                "layer": 3,
+                "code": "fragments_lost",
+                "message": f"{failed:,} of {tried:,} fragmented packet(s) failed to "
+                           f"reassemble in the last {counter_window}s ({pct}%). The pieces "
+                           f"arrived and the whole never did, which means some of them did "
+                           f"not turn up inside the reassembly timeout. Something on the "
+                           f"path is fragmenting traffic to this box and losing part of it "
+                           f"- the usual cause is an MTU step somewhere with the ICMP that "
+                           f"would report it filtered, so the sender never learns to send "
+                           f"smaller packets.",
+            })
+
+
+def _check_orphans(stats, findings, counter_window):
+    """Connections torn down without being closed, against the ceiling."""
+    live = stats.get("lifetime") or {}
+    count, limit = live.get("tcp_orphans"), live.get("tcp_max_orphans")
+    if not count or not limit:
+        return
+    pct = round(100.0 * count / limit)
+    if pct >= ORPHAN_WARN_PCT:
+        findings.append({
+            "severity": "warning",
+            "layer": 4,
+            "code": "tcp_orphans_high",
+            "message": f"{count:,} orphaned TCP socket(s) against a ceiling of {limit:,} "
+                       f"({pct}%). An orphan is a connection with no file descriptor left "
+                       f"to close it, still holding kernel memory. The kernel counts them "
+                       f"at two to four times their weight when it decides whether it is "
+                       f"under pressure, so the ceiling bites sooner than the number looks "
+                       f"- and past it the kernel stops being polite and resets them, which "
+                       f"arrives at the far end as a connection dropped for no reason "
+                       f"visible from there.",
+        })
 
 
 def _check_thermal(stats, findings, counter_window):

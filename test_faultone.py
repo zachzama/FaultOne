@@ -2461,6 +2461,139 @@ class TestConnectionsKilledByTheOtherEnd(unittest.TestCase):
         self.assertEqual(nd.finding_side("connections_reset_by_peer"), "upstream")
 
 
+class TestUdpAndFragments(unittest.TestCase):
+    """/proc/net/snmp was already being opened and only the Tcp: line read out
+    of it. DNS is UDP, so a box dropping datagrams presented as a resolver
+    problem while every other check here passed."""
+
+    def codes(self, **after):
+        before = {k: 0 for k in after}
+        m = fresh()
+        kernel_drops(m, before, dict(after))
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_a_full_receive_buffer_is_this_box(self):
+        c = self.codes(udp_InDatagrams=10_000, udp_RcvbufErrors=400, udp_InErrors=400)
+        self.assertIn("udp_recv_buffer_full", c)
+        self.assertNotIn("udp_datagrams_corrupt", c)
+
+    def test_errors_beyond_the_buffer_drops_are_damage_not_pressure(self):
+        """InErrors contains RcvbufErrors one for one. What is left arrived and
+        failed before a socket saw it, which is a different fault with a
+        different owner."""
+        c = self.codes(udp_InDatagrams=10_000, udp_RcvbufErrors=0, udp_InErrors=400)
+        self.assertIn("udp_datagrams_corrupt", c)
+        self.assertNotIn("udp_recv_buffer_full", c)
+
+    def test_the_two_are_not_double_counted(self):
+        """400 errors of which 400 are buffer drops is one fault, not two."""
+        c = self.codes(udp_InDatagrams=10_000, udp_RcvbufErrors=400, udp_InErrors=400)
+        self.assertEqual(sum(x.startswith("udp_") for x in c), 1)
+
+    def test_a_trickle_of_drops_is_not_reported(self):
+        self.assertNotIn("udp_recv_buffer_full",
+                         self.codes(udp_InDatagrams=1_000_000, udp_RcvbufErrors=5,
+                                    udp_InErrors=5))
+
+    def test_the_buffer_drop_faces_this_box_and_the_damage_does_not(self):
+        self.assertEqual(nd.finding_side("udp_recv_buffer_full"), "local")
+        self.assertEqual(nd.finding_side("udp_datagrams_corrupt"), "upstream")
+
+    def test_it_does_not_corroborate_the_other_backlog_findings(self):
+        """A full socket buffer and a full kernel backlog are this box failing
+        to take delivery, counted at two depths."""
+        self.assertEqual(nd._finding_family("udp_recv_buffer_full"),
+                         nd._finding_family("nic_drops_live"))
+
+    def test_fragments_that_never_reassembled(self):
+        self.assertIn("fragments_lost", self.codes(ip_ReasmReqds=500, ip_ReasmFails=120))
+
+    def test_a_few_failures_among_many_fragments_are_not(self):
+        self.assertNotIn("fragments_lost", self.codes(ip_ReasmReqds=5_000, ip_ReasmFails=20))
+
+    def test_the_udp_and_tcp_checksum_counters_do_not_collide(self):
+        """Both protocols export InErrors and InCsumErrors and they mean
+        different things. Unprefixed, one would silently overwrite the other."""
+        import os, tempfile, builtins
+        snmp = ("Tcp: ActiveOpens InCsumErrors\nTcp: 10 0\n"
+                "Udp: InDatagrams InCsumErrors\nUdp: 500 20\n")
+        d = tempfile.mkdtemp(); path = os.path.join(d, "snmp")
+        with open(path, "w") as fh:
+            fh.write(snmp)
+        real = builtins.open
+        builtins.open = lambda p, *a, **k: (real(path, *a, **k)
+                                            if p == "/proc/net/snmp" else real(p, *a, **k))
+        try:
+            c = nd._snmp_counters_linux()
+        finally:
+            builtins.open = real
+        self.assertEqual(c["InCsumErrors"], 0)
+        self.assertEqual(c["udp_InCsumErrors"], 20)
+
+    def test_a_signed_counter_does_not_break_the_parser(self):
+        """Tcp: MaxConn is -1, and it is the single most common bug in code
+        that reads this file."""
+        import os, tempfile, builtins
+        d = tempfile.mkdtemp(); path = os.path.join(d, "snmp")
+        with open(path, "w") as fh:
+            fh.write("Tcp: MaxConn ActiveOpens\nTcp: -1 10\n")
+        real = builtins.open
+        builtins.open = lambda p, *a, **k: (real(path, *a, **k)
+                                            if p == "/proc/net/snmp" else real(p, *a, **k))
+        try:
+            c = nd._snmp_counters_linux()
+        finally:
+            builtins.open = real
+        self.assertEqual(c["MaxConn"], -1)
+        self.assertEqual(c["ActiveOpens"], 10)
+
+
+class TestOrphanedSockets(unittest.TestCase):
+    """A connection with no file descriptor left to close it, still holding
+    kernel memory. The kernel weighs them at two to four times their size."""
+
+    def test_a_filling_orphan_table_is_reported(self):
+        m = fresh()
+        kernel_drops(m, {"tcp_orphans": 9_000, "tcp_max_orphans": 16_384},
+                        {"tcp_orphans": 9_000, "tcp_max_orphans": 16_384})
+        self.assertIn("tcp_orphans_high",
+                      [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]])
+
+    def test_a_quiet_table_is_not(self):
+        m = fresh()
+        kernel_drops(m, {"tcp_orphans": 40, "tcp_max_orphans": 16_384},
+                        {"tcp_orphans": 40, "tcp_max_orphans": 16_384})
+        self.assertNotIn("tcp_orphans_high",
+                         [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]])
+
+    def test_no_ceiling_means_no_claim(self):
+        """Without tcp_max_orphans there is no denominator, and a count on its
+        own says nothing about whether it is a lot."""
+        m = fresh()
+        kernel_drops(m, {"tcp_orphans": 9_000}, {"tcp_orphans": 9_000})
+        self.assertNotIn("tcp_orphans_high",
+                         [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]])
+
+    def test_the_sockstat_line_is_parsed(self):
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        os.makedirs(os.path.join(base, "net"))
+        os.makedirs(os.path.join(base, "sys", "net", "ipv4"))
+        with open(os.path.join(base, "net", "sockstat"), "w") as fh:
+            fh.write("sockets: used 380\n"
+                     "TCP: inuse 12 orphan 7 tw 41 alloc 20 mem 3\n"
+                     "UDP: inuse 6 mem 2\n")
+        with open(os.path.join(base, "sys", "net", "ipv4", "tcp_max_orphans"), "w") as fh:
+            fh.write("16384\n")
+        got = nd._read_orphans(base)
+        self.assertEqual(got["tcp_orphans"], 7)
+        self.assertEqual(got["tcp_max_orphans"], 16384)
+
+    def test_a_box_without_sockstat_reports_nothing(self):
+        self.assertEqual(nd._read_orphans("/nonexistent/path"), {})
+
+
 class TestTooHotToMovePackets(unittest.TestCase):
     """A count of times the hardware clocked itself down, not a temperature.
     Every threshold anyone picks for "warm" is wrong on some hardware; a box
@@ -7679,6 +7812,24 @@ def _(nd):
 def _(nd):
     sided_flows(nd, jittery_sock("203.0.113.9", "443", 80.0, 50.0),
                     jittery_sock("203.0.113.9", "443", 82.0, 48.0))
+
+@scenario("udp_recv_buffer_full")
+def _(nd): kernel_drops(nd, {"udp_InDatagrams": 0, "udp_RcvbufErrors": 0, "udp_InErrors": 0},
+                            {"udp_InDatagrams": 10_000, "udp_RcvbufErrors": 400,
+                             "udp_InErrors": 400})
+
+@scenario("udp_datagrams_corrupt")
+def _(nd): kernel_drops(nd, {"udp_InDatagrams": 0, "udp_RcvbufErrors": 0, "udp_InErrors": 0},
+                            {"udp_InDatagrams": 10_000, "udp_RcvbufErrors": 0,
+                             "udp_InErrors": 400})
+
+@scenario("fragments_lost")
+def _(nd): kernel_drops(nd, {"ip_ReasmReqds": 0, "ip_ReasmFails": 0},
+                            {"ip_ReasmReqds": 500, "ip_ReasmFails": 120})
+
+@scenario("tcp_orphans_high")
+def _(nd): kernel_drops(nd, {"tcp_orphans": 9_000, "tcp_max_orphans": 16_384},
+                            {"tcp_orphans": 9_000, "tcp_max_orphans": 16_384})
 
 @scenario("cpu_throttled_live")
 def _(nd): kernel_drops(nd, {"core_throttles": 4, "package_throttles": 4},

@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 144
+difference is which one it puts at the top, and that is the whole product: 148
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -213,6 +213,49 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## The rest of /proc/net/snmp
+
+The file was already being opened and only the `Tcp:` line read out of it. Two
+protocols' worth of counters were going past every run, and both answer
+questions nothing else here can.
+
+**DNS runs over UDP.** A box overflowing its receive buffers loses resolver
+answers while every TCP check in this tool passes — so the report reads as a
+slow or flaky resolver, and the resolver is fine. `udp_recv_buffer_full` is the
+finding, and it is owned by **this device, not the resolver it looks like**.
+
+`InErrors` contains `RcvbufErrors` one for one. What is left over arrived and
+failed *before any socket saw it* — a bad checksum, a malformed header — which
+is damage in the path rather than this box failing to keep up:
+
+| | |
+|---|---|
+| `udp_recv_buffer_full` | this box had no room. **Local.** No retransmission and no window: the datagram is gone and the sender is never told |
+| `udp_datagrams_corrupt` | this box had room; the datagram was already broken. **Upstream.** Ethernet has its own CRC, so whatever re-framed it after that did the damage |
+
+Subtracting the one from the other is what keeps them from being counted twice,
+and the two have different owners — which is the whole reason for splitting them.
+
+**Fragments that arrived and never came back together** are the receiving half
+of what the path-MTU probe measures on the way out, and evidence that probe
+cannot produce: it is about traffic *other people* sent here. `fragments_lost`
+fires when a tenth of reassembly attempts fail, and names the usual cause — an
+MTU step on the path with the ICMP that would report it filtered, so the sender
+never learns to send smaller packets and keeps trying.
+
+## Orphaned sockets
+
+A connection with no file descriptor left to close it, still holding kernel
+memory. The kernel counts an orphan at **two to four times its weight** when it
+decides whether it is under pressure, so `tcp_max_orphans` bites sooner than the
+number suggests — and past it the kernel stops being polite and resets them,
+which arrives at the far end as a connection dropped for no reason visible from
+there.
+
+Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
+denominator and nothing is claimed: a count on its own says nothing about
+whether it is a lot.
 
 ## A change is not a fault on its own
 
@@ -875,11 +918,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **144** | Distinct conclusions it can reach and state in plain language. 127 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **127** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 764 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **148** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 779 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 144 findings are the useful figure** if you want to know what the tool can
+**The 148 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1039,7 +1082,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 764 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 779 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1092,6 +1135,9 @@ can say what the bar was rather than "the tool said so".
 | `SOFTNET_DROP_PPM` | **10** | receive-backlog drops per million packets processed |
 | `NEIGH_TABLE_WARN_PCT` | **80** | how full the neighbour (ARP) table gets before it is worth saying so. Same figure as the connection-tracking table and for the same reason: both refuse outright at 100% with no back pressure, so the useful moment to speak is before that. Its own constant all the same - two tables, two ceilings, and sharing a number would mean tuning either retuned the other |
 | `RESETS_PER_CONN_PCT` | **100** | resets this box sent, as a share of the connections it opened or accepted. A reset is not by itself a fault - an application closing with data unread sends one - so the line sits where the count stops looking like a by-product: at least one reset per connection handled. A dead listener, an unbound port or a scan all produce exactly that |
+| `UDP_DROP_PCT` | **1.0** | share of arriving datagrams this box failed to take delivery of. UDP has no retransmission and no window, so a datagram dropped at the socket is gone and the sender is never told. A share rather than a count per minute, because ten a minute means nothing without knowing whether ten thousand or ten million arrived |
+| `REASM_FAIL_PCT` | **10.0** | share of reassembly attempts that failed. Fragments are already unusual on a healthy path, so the bar is on how many of the ones tried never came back together rather than on the raw count |
+| `ORPHAN_WARN_PCT` | **25** | how full the orphan table gets before it is worth saying so. The kernel charges an orphan at two to four times its weight when deciding whether it is under memory pressure, so the ceiling bites earlier than the number suggests |
 | `CONNTRACK_WARN_PCT` | **80** | how full the connection tracking table gets before it's mentioned |
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
@@ -2358,7 +2404,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-764 tests, no dependencies, no network, a few seconds — so they run
+779 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2434,7 +2480,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 144 findings with readable rules instead of
+> way out - and who owns it. Ranks 148 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

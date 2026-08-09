@@ -3113,6 +3113,52 @@ LINK_COUNTERS = (
 )
 
 
+# NIC drivers that present a paravirtual or cloud-hypervisor interface rather
+# than a wire. What matters here is not that the box is a VM - it is that on
+# these drivers the physical-layer counters are hardwired to zero. There is no
+# CRC to fail, no duplex to mismatch, no optic to dim, so a clean physical layer
+# on one of them is not evidence that anything is well: it is evidence that the
+# question cannot be asked.
+#
+# That is the same rule this tool applies everywhere else - a check that could
+# not run is never reported as a fault - pointed at a check that runs, returns
+# zero, and could never have returned anything else.
+VIRTUAL_NIC_DRIVERS = {
+    "virtio_net": "a KVM or QEMU paravirtual adapter",
+    "vmxnet3": "a VMware paravirtual adapter",
+    "vmxnet": "a VMware paravirtual adapter",
+    "hv_netvsc": "a Hyper-V synthetic adapter",
+    "netvsc": "a Hyper-V synthetic adapter",
+    "xen-netfront": "a Xen paravirtual adapter",
+    "ena": "an AWS Elastic Network Adapter",
+    "gve": "a Google Compute Engine virtual adapter",
+    "veth": "one end of a container pair",
+}
+
+
+def _link_drivers_linux(base="/sys/class/net"):
+    """The kernel driver behind each interface, from the sysfs symlink.
+
+    `base` is a parameter for the same reason its neighbours take one: so the
+    link handling can be driven from a fixture tree rather than stubbed a layer
+    above.
+    """
+    out = {}
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return {}
+    for name in names:
+        link = os.path.join(base, name, "device", "driver")
+        try:
+            out[name] = os.path.basename(os.readlink(link))
+        except OSError:
+            # Bonds, VLANs and tunnels have no device behind them at all, which
+            # is not a failure to read - there is nothing there to name.
+            continue
+    return out
+
+
 def _link_stats_linux(base="/sys/class/net"):
     """Read counters straight from sysfs - no parsing of human-facing output.
 
@@ -3482,6 +3528,7 @@ def _link_modes_linux(base="/sys/class/net"):
     was never exercised at all.
     """
     modes = {}
+    drivers = _link_drivers_linux(base)
     try:
         names = sorted(os.listdir(base))
     except OSError:
@@ -3509,6 +3556,7 @@ def _link_modes_linux(base="/sys/class/net"):
             "mtu": int(mtu) if mtu and mtu.isdigit() else None,
             "carrier": read("carrier") == "1",
             "operstate": read("operstate") or "unknown",
+            "driver": drivers.get(name),
         }
     return modes
 
@@ -4981,7 +5029,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   "tunnel_mtu",
                   # Which of three things is limiting throughput. Always true
                   # of a box that is sending anything, so never a fault.
-                  "throughput_limited_by"}
+                  "throughput_limited_by",
+                  # What kind of adapter this is. Context that reframes every
+                  # physical-layer reading below it, never a fault itself.
+                  "virtual_nic"}
 
 
 # Findings too weak to be evidence for anything else: a count of errors that
@@ -5132,7 +5183,7 @@ _LOCAL_FAULTS = (
     "link_flapping_live", "link_flapping_logged", "nic_reset_logged",
     "optics_alarm", "optics_rx_low", "optics_rx_marginal", "optics_warning",
     "duplex_mismatch", "slow_link", "negotiated_below_capacity", "bond_degraded",
-    "tunnel_mtu",
+    "tunnel_mtu", "virtual_nic",
     "collisions", "link_saturated", "link_busy",
     "neigh_table_full", "neigh_table_near_limit",
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
@@ -7075,6 +7126,26 @@ def _check_link_modes(raw, findings):
                            f"figure in this report is measured against is a fraction of the "
                            f"one that was bought. A cable or optic rated below the port, or a "
                            f"speed forced at one end, is the usual reason.",
+            })
+
+        # What the physical-layer checks on this interface are worth. On a
+        # paravirtual adapter every one of them is hardwired to zero, so their
+        # silence says nothing - and a stage strip reading "link PASS" on a box
+        # where the link could not have failed the check is the most misleading
+        # thing this tool can print.
+        kind = VIRTUAL_NIC_DRIVERS.get((mode.get("driver") or "").lower())
+        if kind:
+            findings.append({
+                "severity": "ok",
+                "code": "virtual_nic", "scope": name,
+                "layer": 1,
+                "message": f"{name} is {kind} ({mode['driver']}). Its CRC, frame, collision "
+                           f"and optical counters are hardwired to zero by the driver - "
+                           f"there is no cable to damage and no duplex to mismatch - so a "
+                           f"clean physical layer here is not evidence that anything is "
+                           f"well. It means the question cannot be asked from inside this "
+                           f"guest. If the physical link is genuinely suspect, it has to be "
+                           f"read on the host.",
             })
 
         mtu = mode.get("mtu")

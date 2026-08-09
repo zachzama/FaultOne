@@ -2461,6 +2461,87 @@ class TestConnectionsKilledByTheOtherEnd(unittest.TestCase):
         self.assertEqual(nd.finding_side("connections_reset_by_peer"), "upstream")
 
 
+class TestAVirtualNicCannotFailAPhysicalCheck(unittest.TestCase):
+    """On a paravirtual adapter the CRC, frame, collision and optical counters
+    are hardwired to zero by the driver. Their silence says nothing, and a
+    stage strip reading "link PASS" on a box where the link could not have
+    failed the check is the most misleading thing this tool can print."""
+
+    def report(self, driver):
+        m = fresh()
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": None, "duplex": None, "mtu": 1500,
+             "carrier": True, "operstate": "up", "driver": driver}]}
+        return m.diagnose("8.8.8.8", None, quick=False)
+
+    def test_a_paravirtual_adapter_is_named_as_one(self):
+        f = [x for x in self.report("virtio_net")["findings"] if x["code"] == "virtual_nic"]
+        self.assertTrue(f)
+        self.assertIn("KVM or QEMU", f[0]["message"])
+        self.assertIn("hardwired to zero", f[0]["message"])
+
+    def test_a_real_nic_says_nothing(self):
+        codes = [x["code"] for x in self.report("ixgbe")["findings"]]
+        self.assertNotIn("virtual_nic", codes)
+
+    def test_an_interface_with_no_driver_says_nothing(self):
+        """Bonds, VLANs and tunnels have no device behind them at all."""
+        codes = [x["code"] for x in self.report(None)["findings"]]
+        self.assertNotIn("virtual_nic", codes)
+
+    def test_the_drivers_it_knows(self):
+        for drv in ("virtio_net", "vmxnet3", "hv_netvsc", "xen-netfront", "ena", "gve"):
+            with self.subTest(driver=drv):
+                self.assertIn(drv, nd.VIRTUAL_NIC_DRIVERS)
+        for drv in ("ixgbe", "e1000e", "mlx5_core", "bnxt_en", "igb", "tg3"):
+            with self.subTest(driver=drv):
+                self.assertNotIn(drv, nd.VIRTUAL_NIC_DRIVERS)
+
+    def test_it_is_context_and_never_a_fault(self):
+        rep = self.report("virtio_net")
+        f = next(x for x in rep["findings"] if x["code"] == "virtual_nic")
+        self.assertEqual(f["severity"], "ok")
+        self.assertIn("virtual_nic", nd.VERDICT_EXEMPT)
+        self.assertEqual(rep["verdict"]["severity"], "ok")
+
+    def test_the_driver_is_read_from_the_sysfs_symlink(self):
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        for name, drv in (("eth0", "virtio_net"), ("eth1", "ixgbe"), ("bond0", None)):
+            os.makedirs(os.path.join(base, name))
+            if drv:
+                os.makedirs(os.path.join(base, name, "device"))
+                target = os.path.join(base, "_drivers", drv)
+                os.makedirs(target, exist_ok=True)
+                os.symlink(target, os.path.join(base, name, "device", "driver"))
+        got = nd._link_drivers_linux(base)
+        self.assertEqual(got.get("eth0"), "virtio_net")
+        self.assertEqual(got.get("eth1"), "ixgbe")
+        self.assertNotIn("bond0", got, "an interface with no device behind it has no driver")
+
+    def test_no_sysfs_tree_yields_nothing(self):
+        self.assertEqual(nd._link_drivers_linux("/nonexistent/path"), {})
+
+    def test_the_driver_reaches_the_interface_summary(self):
+        """Reading the symlink and putting the answer where the check looks are
+        two different things, and stubbing cmd_link_modes tests neither. A
+        mutation that dropped the driver on the floor between them passed every
+        test above."""
+        import os, shutil, tempfile
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        d = os.path.join(base, "eth0")
+        os.makedirs(os.path.join(d, "device"))
+        for field, value in (("mtu", "1500"), ("carrier", "1"), ("operstate", "up")):
+            with open(os.path.join(d, field), "w") as fh:
+                fh.write(value)
+        target = os.path.join(base, "_drivers", "virtio_net")
+        os.makedirs(target)
+        os.symlink(target, os.path.join(d, "device", "driver"))
+        self.assertEqual(nd._link_modes_linux(base)["eth0"]["driver"], "virtio_net")
+
+
 class TestATunnelIsNotAMisconfiguredWire(unittest.TestCase):
     """A reduced MTU on a tunnel is the header overhead of whatever is wrapping
     the traffic. Reported as a fault, it made a healthy VPN box come back with
@@ -8133,6 +8214,12 @@ def _(nd):
 def _(nd):
     sided_flows(nd, sided_sock("10.0.0.90", "44120", sent=900_000_000, port="5432")
                 .replace("cubic wscale:7,7", "cubic busy:52344ms wscale:7,7"))
+
+@scenario("virtual_nic")
+def _(nd):
+    nd.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+        {"name": "eth0", "speed_mbps": None, "duplex": None, "mtu": 1500,
+         "carrier": True, "operstate": "up", "driver": "virtio_net"}]}
 
 @scenario("tunnel_mtu")
 def _(nd):

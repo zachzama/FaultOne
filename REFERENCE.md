@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 150
+difference is which one it puts at the top, and that is the whole product: 151
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -317,6 +317,34 @@ there.
 Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
+
+## A virtual NIC cannot fail a physical check
+
+On a paravirtual adapter — `virtio_net`, `vmxnet3`, `hv_netvsc`, `xen-netfront`,
+`ena`, `gve` — the CRC, frame, collision and optical counters are **hardwired to
+zero by the driver**. There is no cable to damage, no duplex to mismatch, no
+optic to dim.
+
+So every physical-layer check passes, and the stage strip reads `link PASS` on a
+box where the link could not have failed the check. That is the most misleading
+sentence this tool can print, and it was printing it on every cloud instance and
+every VM.
+
+`virtual_nic` names the adapter and says what its silence is worth: not that
+anything is well, but that the question cannot be asked from inside the guest.
+If the physical link is genuinely suspect, it has to be read on the host.
+
+It is context and exempt from the verdict — a virtual NIC is not a fault, and
+most boxes this runs on will have one.
+
+The driver comes from the sysfs symlink at
+`/sys/class/net/<iface>/device/driver`. Interfaces with no device behind them —
+bonds, VLANs, tunnels — have no driver to read, which is not a failure: there is
+nothing there to name.
+
+This is the same rule applied everywhere else here — *a check that could not run
+is never reported as a fault* — pointed at a check that **does** run, returns
+zero, and could never have returned anything else.
 
 ## Which of three is holding throughput back
 
@@ -1039,11 +1067,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **150** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 809 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 817 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 150 findings are the useful figure** if you want to know what the tool can
+**The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1203,7 +1231,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 809 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 817 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2528,7 +2556,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-809 tests, no dependencies, no network, a few seconds — so they run
+817 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2604,7 +2632,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 150 findings with readable rules instead of
+> way out - and who owns it. Ranks 151 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

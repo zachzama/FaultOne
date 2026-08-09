@@ -213,6 +213,47 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## What the tools actually print
+
+Every fixture in this suite was written from an *idea* of what these commands
+emit. That idea was checked by describing the real output independently, then
+diffing it against the parsers. Four places it was wrong — none of which any
+test could have caught, because the tests asserted the same idea the code did.
+
+**A receiver seeing nothing prints `-inf`.** A module with no light arriving
+reports `0.0000 mW / -inf dBm`. The dBm regex matches numbers, `-inf` is not
+one, so the reading was dropped and **the single fault the optical check exists
+for produced no finding at all**. It is now recorded as `rx_dark` — its own
+fact, deliberately not a very low dBm figure, because a sentinel chosen to work
+as a number ends up printed in the report as a measurement. The message says
+what it means: nothing is arriving, check the receive strand specifically,
+because the pair can be crossed so this end transmits fine and hears nothing.
+
+**BSD does not zero-pad MAC addresses.** macOS prints `0:0:5e:0:1:1` where
+Linux prints `00:00:5e:00:01:01`. Same VRRP virtual router; only one of them
+was recognised as one. On a Mac the tool saw two routers arguing over an
+address and reported a **duplicate IP** instead of the failover pair it was
+looking at — wrong owner, wrong advice, and no way to notice from the output.
+Addresses are now normalised at the single point they enter the table.
+
+**Drivers have several ways of saying they don't know the link speed.** Modern
+tools print `Speed: Unknown!`, which no number regex matches. Older ethtool
+prints the raw u16 sentinel as `65535Mb/s`, and some kernels put the u32 one in
+sysfs as `4294967295`. Both parse cleanly as enormous link speeds — and a link
+that claims 4 Tbps has a utilisation of zero forever, which **silently retires
+every saturation check** rather than failing anywhere visible. The sentinels are
+now named as the specific values they are, rather than bounded by "faster than
+any real Ethernet", which is a claim that ages badly: 400G was implausible not
+long ago.
+
+**A share of an aggregate cannot exceed it.** Many drivers wire
+`rx_over_errors` and `rx_missed_errors` to the same hardware counter, so adding
+them counts one overrun twice — enough to print *"80 of 40 errors"* and to
+drive the comparison in the section below from a number larger than the total
+it is a share of. The host share is now the larger of the two rather than their
+sum, both shares are capped at the aggregate, and the remainder left to the link
+is never negative.
+
 ## One error burst, three owners
 
 `rx_errors` is an aggregate. The kernel documents it as including the length,
@@ -592,7 +633,7 @@ they're spelled out:
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **135** | Distinct conclusions it can reach and state in plain language. 118 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **118** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 677 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 686 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 135 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -709,7 +750,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 677 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 686 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2017,7 +2058,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-677 tests, no dependencies, no network, a few seconds — so they run
+686 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

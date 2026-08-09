@@ -2092,6 +2092,92 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestWhatRealToolsActuallyPrint(unittest.TestCase):
+    """Every fixture in this suite was written from an idea of what these
+    commands emit. These are the places that idea was wrong - each one found
+    by describing the real output first and diffing it against the parser."""
+
+    def test_a_receiver_seeing_no_light_is_reported(self):
+        """A module with nothing arriving prints "0.0000 mW / -inf dBm". The
+        dBm regex does not match "-inf", so the reading was dropped and the
+        one fault the optical check exists for produced no finding at all."""
+        p = nd.parse_ethtool_optics(
+            "\tReceiver signal average optical power     : 0.0000 mW / -inf dBm\n")
+        self.assertTrue(p.get("rx_dark"))
+        self.assertIsNone(p.get("rx_dbm"), "there is no dBm figure - inventing one "
+                                           "puts a sentinel in the report as a measurement")
+
+    def test_a_dark_receiver_reaches_the_verdict(self):
+        m = fresh()
+        m.cmd_optics = lambda i: {"ok": True, "cmd": "ethtool -m", "stdout": "", "parsed": {
+            "identifier": "0x03 (SFP)", "alarms": [], "warnings": [], "rx_dark": True}}
+        m.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbours": [
+            {"iface": "eth0", "switch": "SW-1", "port": "Gi1/0/1", "via": "LLDP"}]}
+        rep = m.diagnose("8.8.8.8", None, quick=False)
+        fired = [f for f in rep["findings"] if f["code"] == "optics_rx_low"]
+        self.assertTrue(fired)
+        self.assertIn("no received light", fired[0]["message"])
+
+    def test_bsd_prints_mac_octets_without_padding(self):
+        """macOS prints 0:0:5e:0:1:1 where Linux prints 00:00:5e:00:01:01.
+        Both are the same VRRP virtual router and only one was recognised, so
+        a Mac saw two routers arguing over an address and called it a
+        duplicate IP instead of the failover pair it was looking at."""
+        self.assertEqual(nd.normalise_mac("0:0:5e:0:1:1"), "00:00:5e:00:01:01")
+        self.assertEqual(nd.virtual_router_mac(nd.normalise_mac("0:0:5e:0:1:1"))[0],
+                         "VRRP or CARP")
+
+    def test_a_bsd_arp_table_resolves_to_the_same_addresses_as_a_linux_one(self):
+        bsd = nd.parse_arp_table(
+            "? (192.168.1.1) at 0:0:5e:0:1:1 on en0 ifscope [ethernet]\n")
+        linux = nd.parse_arp_table("192.168.1.1 dev eth0 lladdr 00:00:5e:00:01:01 REACHABLE\n")
+        self.assertEqual(bsd[0]["mac"], linux[0]["mac"])
+
+    def test_an_incomplete_bsd_entry_is_still_no_address(self):
+        e = nd.parse_arp_table("? (192.168.1.55) at (incomplete) on en0 ifscope [ethernet]\n")
+        self.assertIsNone(e[0]["mac"])
+
+    def test_the_ways_a_driver_says_it_does_not_know_the_speed(self):
+        """65535 is the u16 sentinel older ethtool prints raw; 4294967295 is
+        the u32 one some kernels put in sysfs. Both parse cleanly as enormous
+        link speeds, and a link claiming 4 Tbps has a utilisation of zero
+        forever - which retires the saturation checks silently."""
+        for sentinel in (65535, 4294967295, -1, 0):
+            with self.subTest(sentinel=sentinel):
+                self.assertIsNone(nd.plausible_mbps(sentinel))
+        for real in (10, 1000, 10000, 400000):
+            with self.subTest(real=real):
+                self.assertEqual(nd.plausible_mbps(real), real)
+
+    def test_the_sentinel_never_becomes_a_speed(self):
+        self.assertNotIn("speed_mbps", nd.parse_ethtool("\tSpeed: 65535Mb/s\n"))
+        self.assertEqual(nd.parse_ethtool("\tSpeed: 10000Mb/s\n")["speed_mbps"], 10000)
+
+    def test_unknown_speed_does_not_silently_retire_the_saturation_check(self):
+        """The failure this guards is invisible: no error, no finding, just a
+        link that is never full because its capacity is astronomical."""
+        m = fresh()
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": None, "duplex": "full", "mtu": 1500,
+             "carrier": True}]}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("link_saturated", codes)
+        self.assertNotIn("negotiated_below_capacity", codes)
+
+    def test_a_share_of_an_aggregate_never_exceeds_it(self):
+        """Many drivers wire rx_over_errors and rx_missed_errors to the same
+        hardware counter, so adding them counts one overrun twice - enough to
+        print "80 of 40 errors" and to drive the share comparison from a
+        number larger than the total it is a share of."""
+        m = fresh()
+        counters(m, rx_errors=900, d_rx_errors=40, d_rx_over_errors=40,
+                 d_rx_missed_errors=40, d_rx_packets=2_000)
+        fired = [f for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+                 if f["code"] == "nic_ring_overruns"]
+        self.assertTrue(fired)
+        self.assertIn("40 of 40", fired[0]["message"])
+
+
 class TestAnErrorBurstIsSplitByWhoOwnsIt(unittest.TestCase):
     """rx_errors is an aggregate - the kernel documents it as including the
     length, CRC and frame counters "and other errors not otherwise counted".

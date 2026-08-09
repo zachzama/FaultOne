@@ -393,6 +393,11 @@ OPTIC_RX_WARN_DBM = -20.0   # marginal: works now, first thing to go
 
 OPTIC_LINE_RE = re.compile(r"^\s*([A-Za-z][^:]*?)\s*:\s*(.+?)\s*$", re.M)
 DBM_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*dBm")
+# A receiver seeing nothing at all prints "0.0000 mW / -inf dBm". The number
+# regex above does not match "-inf", so the reading was dropped and the fault
+# that most deserves reporting - a dark fibre - produced no optical finding
+# whatsoever, on a check that exists to catch exactly that.
+DARK_RE = re.compile(r"-inf\s*dBm", re.I)
 
 
 def parse_ethtool_optics(text):
@@ -414,6 +419,13 @@ def parse_ethtool_optics(text):
             d = DBM_RE.search(value)
             if d:
                 out["rx_dbm"] = float(d.group(1))
+            elif DARK_RE.search(value):
+                # Not a number, and not a missing reading either: it is the
+                # module reporting no light. Kept as its own fact rather than
+                # forced into a dBm figure, because there isn't one - and
+                # because a sentinel low enough to work as a number is a
+                # sentinel that leaks into the report as a measurement.
+                out["rx_dark"] = True
         elif key.startswith("module temperature"):
             out["temperature"] = value
         elif value.lower() == "on" and ("alarm" in key or "warning" in key):
@@ -478,6 +490,22 @@ def cmd_traceroute_tcp(target, port=443):
     return None
 
 
+# Unknown speed has been spelled several ways. Modern tools print "Unknown!",
+# which no number regex matches, but older ethtool prints the raw u16 sentinel
+# as "65535Mb/s" and some kernels put the u32 one in sysfs as 4294967295. Both
+# parse cleanly as enormous link speeds, and a link that claims 4 Tbps is a
+# link whose utilisation is always zero - which silently retires the
+# saturation checks rather than failing where anyone would see it.
+# Named as the specific values they are rather than bounded by "faster than
+# any real Ethernet", which is a claim that ages badly - 400G was implausible
+# not long ago.
+SPEED_SENTINELS = frozenset((65535, 4294967295))
+
+
+def plausible_mbps(value):
+    """The speed, or None if it is one of the ways drivers say they don't know."""
+    return None if value is None or value <= 0 or value in SPEED_SENTINELS else value
+
 ETHTOOL_SPEED_RE = re.compile(r"^\s*Speed:\s*(\d+)", re.M)
 ETHTOOL_DUPLEX_RE = re.compile(r"^\s*Duplex:\s*(\w+)", re.M)
 ETHTOOL_AUTONEG_RE = re.compile(r"^\s*Auto-negotiation:\s*(\w+)", re.M)
@@ -498,7 +526,7 @@ def parse_ethtool(text):
     """
     out = {}
     m = ETHTOOL_SPEED_RE.search(text or "")
-    if m:
+    if m and plausible_mbps(int(m.group(1))) is not None:
         out["speed_mbps"] = int(m.group(1))
     m = ETHTOOL_DUPLEX_RE.search(text or "")
     if m and m.group(1).lower() in ("full", "half"):
@@ -1554,12 +1582,31 @@ ARP_LINUX_RE = re.compile(
     r"(?:.*?\b(REACHABLE|STALE|DELAY|PROBE|FAILED|INCOMPLETE|PERMANENT))?", re.M)
 
 
+def normalise_mac(mac):
+    """Zero-pad and lowercase, so one address has one spelling.
+
+    BSD and macOS print `0:0:5e:0:1:1` where Linux prints `00:00:5e:00:01:01`.
+    Both are the same VRRP virtual router, and only one of them was recognised
+    as one - so on a Mac the tool saw two routers arguing over an address and
+    reported a duplicate IP instead of the failover pair it was looking at.
+    """
+    if not mac:
+        return mac
+    parts = mac.split(":")
+    if len(parts) != 6 or not all(p and len(p) <= 2 for p in parts):
+        return mac.lower()
+    try:
+        return ":".join(f"{int(p, 16):02x}" for p in parts)
+    except ValueError:
+        return mac.lower()
+
+
 def parse_arp_table(text):
     """Entries as {ip, mac, state}. Handles `ip neigh` and BSD/macOS `arp -a`."""
     entries = []
     for m in ARP_LINUX_RE.finditer(text or ""):
         ip, _dev, mac, state = m.group(1), m.group(2), m.group(3), m.group(4)
-        entries.append({"ip": ip, "mac": (mac or "").lower() or None,
+        entries.append({"ip": ip, "mac": normalise_mac(mac) or None,
                         "state": (state or "").lower() or None})
     if entries:
         return entries
@@ -1570,7 +1617,7 @@ def parse_arp_table(text):
         mac = m.group(2)
         incomplete = mac.startswith("(")
         entries.append({"ip": m.group(1),
-                        "mac": None if incomplete else mac.lower(),
+                        "mac": None if incomplete else normalise_mac(mac),
                         "state": "incomplete" if incomplete else None})
     return entries
 
@@ -3123,8 +3170,12 @@ def _finish_link_sample(first, source, sample_seconds, already_waited=False,
             # take delivery; an invalid length is a frame that arrived the
             # wrong size. Neither is the cable the aggregate counter sends
             # people to check.
-            "delta_host_errors": (_nonneg(d.get("rx_over_errors", 0)
-                                          + d.get("rx_missed_errors", 0)) if d else None),
+            # max, not sum: many drivers wire rx_over_errors and
+            # rx_missed_errors to the same hardware counter, so adding them
+            # counts one overrun twice - enough to make the host share exceed
+            # the total it is a share of, and print "80 of 40 errors".
+            "delta_host_errors": (_nonneg(max(d.get("rx_over_errors", 0),
+                                              d.get("rx_missed_errors", 0))) if d else None),
             "delta_length_errors": _nonneg(d.get("rx_length_errors", 0)) if d else None,
             # Throughput over the sampling window: the answer to "the network
             # is slow" is often "your link is full", which no other check sees.
@@ -3214,8 +3265,7 @@ def _link_modes_linux(base="/sys/class/net"):
         speed = read("speed")
         try:
             speed = int(speed) if speed is not None else None
-            if speed is not None and speed <= 0:
-                speed = None
+            speed = plausible_mbps(speed)
         except ValueError:
             speed = None
         mtu = read("mtu")
@@ -6089,9 +6139,14 @@ def _check_counters(raw, findings, duplex_by_iface):
         # Which sub-counter moved decides the owner. rx_errors is an
         # aggregate, and blaming all of it on the cable sent someone to a
         # switch port over a box that could not drain its own ring buffer.
-        host_errs = iface.get("delta_host_errors") or 0
-        length_errs = iface.get("delta_length_errors") or 0
-        link_errs = (iface["delta_errors"] or 0) - host_errs - length_errs
+        # rx_errors is the aggregate; these are shares of it. A driver that
+        # reports a share larger than the whole is a driver being inconsistent,
+        # not evidence - so the shares are capped at the total and what is left
+        # over is the link's, never a negative number.
+        total_errs = iface["delta_errors"] or 0
+        host_errs = min(iface.get("delta_host_errors") or 0, total_errs)
+        length_errs = min(iface.get("delta_length_errors") or 0, total_errs - host_errs)
+        link_errs = max(total_errs - host_errs - length_errs, 0)
         if iface["delta_errors"] and host_errs > max(link_errs, length_errs):
             findings.append({
                 "severity": "critical",
@@ -6313,6 +6368,18 @@ def _check_neighbours_and_optics(raw, findings):
                            + (f", receiving {rx} dBm" if rx is not None else "")
                            + f". These thresholds come from the {desc} itself, so they beat any "
                              f"generic figure - the link is outside what this optic is rated for.",
+            })
+        elif p.get("rx_dark"):
+            findings.append({
+                "severity": "critical",
+                "layer": 1,
+                "code": "optics_rx_low", "scope": name,
+                "message": f"{name}: the optical module reports no received light at all "
+                           f"(-inf dBm). This is not a weak signal to be cleaned up - nothing "
+                           f"is arriving. The fibre is unplugged, broken, or patched to a port "
+                           f"whose laser is off or dead. Check the receive strand specifically: "
+                           f"the pair can be crossed so that this end transmits fine and hears "
+                           f"nothing back.",
             })
         elif rx is not None and rx <= OPTIC_RX_CRIT_DBM:
             findings.append({

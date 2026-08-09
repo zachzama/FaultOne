@@ -150,10 +150,24 @@ def main():
     else:
         create += ["--notes", notes or f"FaultOne {args.version}"]
     run(create, dry=args.dry_run)
-    if not args.dry_run:
-        print(f"\npublished https://github.com/{REPO}/releases/tag/v{args.version}")
-        print("checking the About box")
-        subprocess.run([sys.executable, os.path.join(ROOT, "dev", "about.py")], cwd=ROOT)
+    about = [sys.executable, os.path.join(ROOT, "dev", "about.py"), "--fix"]
+    if args.dry_run:
+        print(f"  would run: {' '.join(about)}")
+        return 0
+
+    print(f"\npublished https://github.com/{REPO}/releases/tag/v{args.version}")
+    # Set rather than compare. The finding count lives in REFERENCE.md, where
+    # the suite pins it, and on GitHub, where nothing can - so it drifted on
+    # three releases running and was caught each time by a check that only ever
+    # reported it. There is no version of this where the two should disagree.
+    #
+    # Deliberately not fatal. The release is already published by this point;
+    # a description that could not be set is worth saying loudly and is not
+    # worth making a successful release look like a failed one.
+    print("setting the About box from REFERENCE.md")
+    if subprocess.run(about, cwd=ROOT).returncode != 0:
+        print("\n  the About box could not be set - the release itself is fine.\n"
+              "  Fix it with: python3 dev/about.py --fix", file=sys.stderr)
     return 0
 
 

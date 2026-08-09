@@ -54,6 +54,9 @@ python3 dev/about.py          # compare, exit 1 if they differ
 python3 dev/about.py --fix    # set it from REFERENCE.md
 ```
 
+`release.py --push` runs the `--fix` form for you, so this is the manual door
+for when something went out without it.
+
 The About box lives on someone else's server, so the test suite cannot read it.
 It sat quoting a finding count eighteen out of date while every number inside
 the repository stayed green — the drift the guards exist to catch, in the one
@@ -83,6 +86,14 @@ committing — and reverts the bump if the suite fails, so a release that cannot
 pass its own tests never reaches a tag — then commits, tags, and with `--push`
 pushes and publishes the Release together. Publishing together is the point:
 doing the second half separately is what got forgotten nine times.
+
+With `--push` it also sets the GitHub About box from `REFERENCE.md`, because
+that number drifted on three releases running and was caught every time by a
+check that only ever reported it. There is no version of this where the two
+should disagree, so the release sets it rather than asking. That step is
+deliberately not fatal: by the time it runs the release is published, and a
+description that could not be set is worth saying loudly without making a
+successful release look like a failed one.
 
 It never pushes without `--push`. That decision is the user's and this file
 should not be able to make it by accident.

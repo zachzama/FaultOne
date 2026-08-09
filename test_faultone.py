@@ -2507,7 +2507,11 @@ class TestATunnelIsNotAMisconfiguredWire(unittest.TestCase):
                      "gre1", "nordlynx", "tailscale0"):
             with self.subTest(name=name):
                 self.assertTrue(nd.is_tunnel(name))
-        for name in ("eth0", "eno1", "enp3s0", "bond0", "br0", "em1"):
+        # tsn0 is a Time-Sensitive Networking port - a physical NIC on
+        # industrial and automotive hardware. A "ts" prefix for Tailscale
+        # matched it, and "tailscale" already covers the real interface name.
+        for name in ("eth0", "eno1", "enp3s0", "bond0", "br0", "em1", "tsn0",
+                     "team0", "dummy0", "veth1a2b"):
             with self.subTest(name=name):
                 self.assertFalse(nd.is_tunnel(name))
 
@@ -2549,6 +2553,70 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
     def test_an_unrelated_failure_adds_nothing(self):
         self.assertIsNone(nd.own_cert_trust_note("certificate has expired"))
         self.assertIsNone(nd.own_cert_trust_note(None))
+
+
+class TestAShareNeedsASample(unittest.TestCase):
+    """The defect this file has now been written with three times: a finding
+    computes what share of something went wrong and fires on a sample too small
+    for a share to mean anything. One dropped datagram out of one. One failed
+    fragment out of two. Two new errors since a baseline.
+
+    Swept over the counter-driven findings together, because writing the
+    guard once per check is what let the third one through."""
+
+    TINY = (
+        ("udp_recv_buffer_full", {"udp_InDatagrams": 2, "udp_RcvbufErrors": 1,
+                                  "udp_InErrors": 1}),
+        ("udp_datagrams_corrupt", {"udp_InDatagrams": 2, "udp_InErrors": 1,
+                                   "udp_RcvbufErrors": 0}),
+        ("fragments_lost", {"ip_ReasmReqds": 2, "ip_ReasmFails": 1}),
+        ("resets_sent_high", {"OutRsts": 2, "PassiveOpens": 1}),
+        ("connections_reset_by_peer", {"EstabResets": 2, "PassiveOpens": 2}),
+        ("syn_retrans_high", {"TCPSynRetrans": 1, "ActiveOpens": 2}),
+        ("connect_failures_high", {"AttemptFails": 1, "ActiveOpens": 2}),
+        # tcp_checksum_errors is deliberately not here. It is count-based by
+        # intent - a bad checksum should never happen, so one is worth saying -
+        # and the test below covers what it must not do instead.
+    )
+
+    def test_none_of_them_fire_on_a_sample_of_two(self):
+        for code, counters in self.TINY:
+            with self.subTest(code=code):
+                m = fresh()
+                kernel_drops(m, {k: 0 for k in counters}, dict(counters))
+                fired = [f["code"] for f in
+                         m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+                self.assertNotIn(code, fired,
+                                 f"{code} fired on a sample of two, which is not a rate")
+
+    def test_a_count_based_finding_does_not_quote_a_rate_it_cannot_support(self):
+        """The exception that proves the rule. A bad TCP checksum should never
+        happen, so one is reported - but one error in two segments is 500,000
+        per million, and printing that reads as a catastrophe rather than as a
+        single packet on a nearly idle box."""
+        m = fresh()
+        kernel_drops(m, {"InCsumErrors": 0, "InSegs": 0},
+                        {"InCsumErrors": 1, "InSegs": 2})
+        fired = [f for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+                 if f["code"] == "tcp_checksum_errors"]
+        self.assertTrue(fired, "one bad checksum is still worth reporting")
+        self.assertNotIn("per million", fired[0]["message"])
+        self.assertIn("too few for a rate", fired[0]["message"])
+
+    def test_and_does_quote_one_when_it_can(self):
+        m = fresh()
+        kernel_drops(m, {"InCsumErrors": 0, "InSegs": 0},
+                        {"InCsumErrors": 40, "InSegs": 2_000_000})
+        fired = [f for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+                 if f["code"] == "tcp_checksum_errors"]
+        self.assertIn("per million", fired[0]["message"])
+
+    def test_the_sweep_covers_findings_that_can_actually_fire(self):
+        """A list of codes that no longer exist would pass this silently."""
+        import re
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        for code, _ in self.TINY:
+            self.assertIn(code, codes, f"{code} is in the sweep and not in the tool")
 
 
 class TestUdpAndFragments(unittest.TestCase):

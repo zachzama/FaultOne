@@ -214,6 +214,30 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## A share needs a sample
+
+This file has now been written with the same defect four times. A finding works
+out what share of something went wrong, and fires on a sample too small for a
+share to mean anything:
+
+| | |
+|---|---|
+| `drops_live` | one discarded packet, at any volume |
+| `regression_since_baseline` | one new error between two visits |
+| `udp_recv_buffer_full` | one dropped datagram out of one |
+| `fragments_lost` | one failed fragment out of two |
+
+The last two were written **hours after** fixing the first two, which is the
+point: knowing the rule does not stop you breaking it, and a guard written per
+check is a guard that covers the checks you remembered. One test now sweeps
+every counter-driven finding with a sample of two and asserts silence.
+
+It found a fifth on its first run — `tcp_checksum_errors`, which fires on a
+single bad checksum by design, because one should never happen. That one is not
+the same bug, and the fix was different: it still reports the error, and no
+longer quotes "500,000 per million received" for one packet on an idle box.
+Below a sample that supports a rate it gives the count and says so.
+
 ## A tunnel is not a misconfigured wire
 
 `mtu_nonstandard` fires on any interface not at 1500. On a box terminating a
@@ -957,7 +981,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **149** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 790 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 794 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 149 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1119,7 +1143,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 790 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 794 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1173,7 +1197,9 @@ can say what the bar was rather than "the tool said so".
 | `NEIGH_TABLE_WARN_PCT` | **80** | how full the neighbour (ARP) table gets before it is worth saying so. Same figure as the connection-tracking table and for the same reason: both refuse outright at 100% with no back pressure, so the useful moment to speak is before that. Its own constant all the same - two tables, two ceilings, and sharing a number would mean tuning either retuned the other |
 | `RESETS_PER_CONN_PCT` | **100** | resets this box sent, as a share of the connections it opened or accepted. A reset is not by itself a fault - an application closing with data unread sends one - so the line sits where the count stops looking like a by-product: at least one reset per connection handled. A dead listener, an unbound port or a scan all produce exactly that |
 | `UDP_DROP_PCT` | **1.0** | share of arriving datagrams this box failed to take delivery of. UDP has no retransmission and no window, so a datagram dropped at the socket is gone and the sender is never told. A share rather than a count per minute, because ten a minute means nothing without knowing whether ten thousand or ten million arrived |
+| `UDP_DROP_FLOOR` | **10** | and enough of them for the share to be a share. Netdata alerts on more than ten of these a minute with no share at all - a receive-buffer overflow is never routine, unlike a discard, so a small absolute count already means something and the share is what stops a busy box reporting its own noise |
 | `REASM_FAIL_PCT` | **10.0** | share of reassembly attempts that failed. Fragments are already unusual on a healthy path, so the bar is on how many of the ones tried never came back together rather than on the raw count |
+| `REASM_FAIL_FLOOR` | **10** | same pair, same reason: one failure out of two attempted fragments is 50%, and is two fragments |
 | `ORPHAN_WARN_PCT` | **25** | how full the orphan table gets before it is worth saying so. The kernel charges an orphan at two to four times its weight when deciding whether it is under memory pressure, so the ceiling bites earlier than the number suggests |
 | `CONNTRACK_WARN_PCT` | **80** | how full the connection tracking table gets before it's mentioned |
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
@@ -2441,7 +2467,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-790 tests, no dependencies, no network, a few seconds — so they run
+794 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

@@ -1866,10 +1866,22 @@ ESTAB_RESET_PCT = 20
 # million arrived.
 UDP_DROP_PCT = 1.0
 
+# ...and enough of them for the share to be a share. This is the third time the
+# same defect has been written in this file: a percentage of three datagrams
+# fired on one datagram lost. The number is Netdata's, which alerts on more than
+# ten of these a minute with no share at all - a receive-buffer overflow is
+# never routine, unlike a discard, so a small absolute count is already worth
+# something and the share is what stops a busy box reporting its own noise.
+UDP_DROP_FLOOR = 10
+
 # Share of reassembly attempts that failed. Fragments are already unusual on a
 # healthy path, so the bar is on how many of the ones that were tried never
 # came back together rather than on the raw count.
 REASM_FAIL_PCT = 10.0
+
+# Same pair, same reason: one failure out of two attempted fragments is 50% and
+# is two fragments.
+REASM_FAIL_FLOOR = 10
 
 # How full the orphan table gets before it is worth saying so. The kernel
 # charges an orphan at two to four times its weight when deciding whether it is
@@ -3411,9 +3423,13 @@ STANDARD_MTU = 1500
 # Matched on the name because that is what the kernel gives us: there is no
 # flag in sysfs that says "this is a tunnel". utun is macOS, nordlynx and
 # proton are WireGuard under other names, and the rest are the kernel's own.
+# "ts" is not here on purpose. It was, for Tailscale, and it matched tsn0 -
+# a Time-Sensitive Networking port, which is a physical NIC on industrial and
+# automotive hardware. "tailscale" already covers the real interface name, so
+# the short form bought nothing and mislabelled a wire as an encapsulation.
 TUNNEL_PREFIXES = ("tun", "tap", "utun", "wg", "ppp", "ipsec", "vti", "gre",
                    "sit", "gif", "nordlynx", "proton", "wireguard", "ovpn",
-                   "zt", "tailscale", "ts")
+                   "zt", "tailscale")
 
 
 def is_tunnel(name):
@@ -6179,8 +6195,18 @@ def _check_connection_setup(stats, findings, counter_window):
                 "severity": "warning",
                 "layer": 3,
                 "code": "tcp_checksum_errors",
+                # The rate is quoted only when there were enough segments for
+                # it to be one. This finding is deliberately count-based - a
+                # bad checksum should never happen, so one is worth saying -
+                # but one error in two segments is 500,000 per million, and
+                # printing that reads as a catastrophe rather than as a single
+                # packet on a nearly idle box.
                 "message": f"{live_csum} segment(s) arrived with a bad TCP checksum in the "
-                           f"last {counter_window}s ({ppm} per million received). Ethernet "
+                           f"last {counter_window}s"
+                           + (f" ({ppm} per million received)"
+                              if live_in >= MIN_WINDOW_PACKETS_FOR_RATE else
+                              f" (out of {live_in:,} received - too few for a rate)")
+                           + f". Ethernet "
                            f"has its own CRC, so these passed the link layer and failed "
                            f"here - the corruption happened somewhere that re-framed the "
                            f"packet after that check, which means a device in the path or "
@@ -6441,7 +6467,7 @@ def _check_udp(stats, findings, counter_window):
     got = delta.get("udp_InDatagrams", 0)
     rcvbuf = delta.get("udp_RcvbufErrors", 0)
     errors = delta.get("udp_InErrors", 0)
-    if rcvbuf and got:
+    if rcvbuf >= UDP_DROP_FLOOR and got:
         pct = round(100.0 * rcvbuf / (got + rcvbuf), 1)
         if pct >= UDP_DROP_PCT:
             findings.append({
@@ -6462,7 +6488,7 @@ def _check_udp(stats, findings, counter_window):
     # which is damage in the path rather than this box failing to keep up, and
     # a different thing to go and look at.
     other = errors - rcvbuf
-    if other > 0 and got:
+    if other >= UDP_DROP_FLOOR and got:
         pct = round(100.0 * other / (got + errors), 1)
         if pct >= UDP_DROP_PCT:
             findings.append({
@@ -6488,7 +6514,7 @@ def _check_fragments(stats, findings, counter_window):
     """
     delta = stats.get("delta") or {}
     tried, failed = delta.get("ip_ReasmReqds", 0), delta.get("ip_ReasmFails", 0)
-    if failed and tried:
+    if failed >= REASM_FAIL_FLOOR and tried:
         pct = round(100.0 * failed / tried, 1)
         if pct >= REASM_FAIL_PCT:
             findings.append({

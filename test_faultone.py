@@ -2555,6 +2555,86 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestWhichOfThreeIsHoldingThroughputBack(unittest.TestCase):
+    """The kernel times how long a connection could not send because the far
+    end had no window left, and because this box had nothing queued. Whatever
+    is left of its busy time is time spent waiting on the path.
+
+    Two of the three already produced findings and the third never did, which
+    left the tool able to say "it is the far end" and "it is this box" and not
+    "it is the network" - on a run whose whole subject is the network."""
+
+    HEAD = "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+
+    def flow(self, busy, rwnd, snd):
+        return (self.HEAD +
+                "ESTAB 0 0 10.0.0.5:44120 10.0.0.90:5432\n"
+                f"\t cubic rtt:20.0/3.0 minrtt:19.0 mss:1448 cwnd:10 bytes_sent:900000000"
+                f" bytes_acked:900000000 segs_out:600000 busy:{busy}ms"
+                f" rwnd_limited:1ms({rwnd}%) sndbuf_limited:1ms({snd}%)\n")
+
+    def limits(self, busy, rwnd, snd):
+        return nd.analyze_tcp_flows(nd.parse_tcp_flows(self.flow(busy, rwnd, snd))).get("limits")
+
+    def test_the_three_shares_are_derived_from_busy_time(self):
+        l = self.limits(52344, 2.4, 1.5)
+        self.assertEqual((l["receiver_pct"], l["sender_pct"], l["path_pct"]), (2.4, 1.5, 96.1))
+
+    def test_a_receiver_that_stopped_reading_shows_up_as_such(self):
+        self.assertEqual(self.limits(52344, 61.0, 1.0)["receiver_pct"], 61.0)
+
+    def test_an_idle_socket_is_not_classified_at_all(self):
+        """The percentages are shares of busy time, so on a connection that has
+        barely moved they are all zero - and subtracting zero from a hundred
+        would report an idle socket as limited by the network, confidently, on
+        no evidence whatsoever."""
+        self.assertIsNone(self.limits(12, 0, 0))
+
+    def test_the_shares_can_never_go_negative(self):
+        """The two the kernel reports can overlap slightly, and a negative
+        share of anything would be nonsense to print."""
+        self.assertEqual(self.limits(52344, 70.0, 70.0)["path_pct"], 0.0)
+
+    def test_it_is_context_and_never_a_verdict(self):
+        """A transfer limited by the path is usually TCP working correctly."""
+        self.assertIn("throughput_limited_by", nd.VERDICT_EXEMPT)
+        m = fresh()
+        sided_flows(m, sided_sock("10.0.0.90", "44120", sent=900_000_000, port="5432")
+                    .replace("cubic wscale:7,7", "cubic busy:52344ms wscale:7,7"))
+        rep = m.diagnose("8.8.8.8", None, quick=False)
+        fired = [f for f in rep["findings"] if f["code"] == "throughput_limited_by"]
+        self.assertTrue(fired)
+        self.assertEqual(fired[0]["severity"], "ok")
+        self.assertEqual(rep["verdict"]["severity"], "ok")
+
+    def fired_for(self, rwnd, snd):
+        """The finding, from a socket built here rather than patched into shape -
+        the first version of this test edited a string that turned out not to
+        contain what it was replacing, so all three cases silently tested the
+        same one."""
+        m = fresh()
+        stats = nd.analyze_tcp_flows(nd.parse_tcp_flows(self.flow(52344, rwnd, snd)))
+        res = {"ok": True, "cmd": "ss -tin", "stdout": "", "stderr": "", "code": 0}
+        res.update(stats)
+        m.cmd_tcp_flows = lambda listen_ports=None: res
+        return [f for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]
+                if f["code"] == "throughput_limited_by"]
+
+    def test_it_names_whichever_of_the_three_is_largest(self):
+        for rwnd, snd, expect in ((2.0, 1.0, "the path"),
+                                  (61.0, 1.0, "the far end"),
+                                  (1.0, 55.0, "send buffer")):
+            with self.subTest(rwnd=rwnd, snd=snd):
+                fired = self.fired_for(rwnd, snd)
+                self.assertTrue(fired, f"nothing fired for rwnd={rwnd} snd={snd}")
+                self.assertIn(expect, fired[0]["message"])
+
+    def test_the_three_cases_do_not_all_produce_the_same_sentence(self):
+        """What the first version of the test above accidentally asserted."""
+        said = {self.fired_for(r, s)[0]["message"] for r, s in ((2.0, 1.0), (61.0, 1.0), (1.0, 55.0))}
+        self.assertEqual(len(said), 3)
+
+
 class TestALinkThatWasUpLastTime(unittest.TestCase):
     """The live checks say nothing about an interface being down, because from
     one visit there is no telling a failed link from a spare NIC nobody ever
@@ -8048,6 +8128,11 @@ def _(nd):
 def _(nd):
     sided_flows(nd, jittery_sock("203.0.113.9", "443", 80.0, 50.0),
                     jittery_sock("203.0.113.9", "443", 82.0, 48.0))
+
+@scenario("throughput_limited_by")
+def _(nd):
+    sided_flows(nd, sided_sock("10.0.0.90", "44120", sent=900_000_000, port="5432")
+                .replace("cubic wscale:7,7", "cubic busy:52344ms wscale:7,7"))
 
 @scenario("tunnel_mtu")
 def _(nd):

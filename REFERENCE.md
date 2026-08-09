@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 149
+difference is which one it puts at the top, and that is the whole product: 150
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -317,6 +317,35 @@ there.
 Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
+
+## Which of three is holding throughput back
+
+The kernel times how long a connection could not send because the far end had
+no window left, and how long because this box had nothing queued. Whatever is
+left of its busy time is time spent **waiting on the path**.
+
+Two of those three already produced findings here — `tcp_flow_receiver_limited`
+and `tcp_flow_sendbuf_limited` — and the third never did. So the tool could say
+*"it is the far end"* and *"it is this box"*, and could not say *"it is the
+network"*, on a run whose entire subject is the network.
+
+```
+receiver 2%  +  sender 2%  ->  path 96%
+```
+
+Reported as **context, never a fault**: a transfer limited by the path is
+usually TCP working exactly as designed. The value is in being able to answer
+*why is it slow* with which of three things is responsible, since the three have
+three different owners — and to answer it from the traffic the box is really
+carrying rather than from a probe.
+
+Only connections that have actually been sending for **1 second** are counted.
+The percentages are shares of busy time, so on a connection that has barely
+moved they are all zero — and subtracting zero from a hundred would report an
+idle socket as limited by the network, confidently, on no evidence at all.
+
+The remainder is clamped at zero. The two shares the kernel reports can overlap
+slightly, and a negative share of anything is a nonsense to print.
 
 ## A link that was up last time
 
@@ -1010,11 +1039,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **149** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Findings** | **150** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 802 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 809 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 149 findings are the useful figure** if you want to know what the tool can
+**The 150 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1174,7 +1203,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 802 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 809 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1270,6 +1299,7 @@ can say what the bar was rather than "the tool said so".
 | `COVERAGE_GOOD_PCT` | **70** | share of checks that must return data before a verdict can be called well-supported |
 | `COVERAGE_THIN_PCT` | **40** | below this, any verdict is low confidence however well corroborated |
 | `FLOW_LIMITED_PCT` | **20.0** | share of a connection's active time blocked before the blocker is named |
+| `FLOW_BUSY_MS` | **1000.0** | how long a connection must actually have been sending before the three-way split below means anything. Those percentages are shares of *busy* time, so on a connection that has barely moved they are all zero - and subtracting zero from a hundred would report an idle socket as limited by the network, confidently, on no evidence |
 | `SYN_SENT_WARN` | **3** | half-open outbound connections before it's a backlog |
 | `CLOSE_WAIT_WARN` | **20** | sockets the application never closed before it's a backlog |
 | `DNS_SLOW_MS` | **500** | a resolver's answer time before it's called slow |
@@ -2498,7 +2528,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-802 tests, no dependencies, no network, a few seconds — so they run
+809 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2574,7 +2604,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 149 findings with readable rules instead of
+> way out - and who owns it. Ranks 150 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

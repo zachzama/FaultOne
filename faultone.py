@@ -2618,6 +2618,13 @@ JITTER_SHARE = 0.5
 # named as the bottleneck rather than the network.
 FLOW_LIMITED_PCT = 20.0
 
+# How long a connection has to have been actively sending before the split
+# below means anything. The percentages ss reports are shares of *busy* time,
+# so on a connection that has barely moved they are all zero - and subtracting
+# zero from a hundred would report an idle socket as limited by the network,
+# confidently, on no evidence at all.
+FLOW_BUSY_MS = 1000.0
+
 # ss prints roughly 430 bytes per socket, so MAX_OUTPUT_BYTES starts cutting in
 # around here. Past this the sample is a biased prefix, and it says so.
 FLOW_MAX = 20_000
@@ -2737,6 +2744,9 @@ def parse_tcp_flows(text, max_flows=FLOW_MAX):
         # retrans:cur/total - the running total is the one worth keeping.
         retrans = kv.get("retrans")
         flow["retrans_total"] = _flow_num(retrans.split("/")[-1]) if retrans else None
+        # How long this connection has actually been sending. Needed because
+        # the two percentages below are shares of it.
+        flow["busy_ms"] = _flow_num((kv.get("busy") or "").replace("ms", ""))
         for key in ("rwnd_limited", "sndbuf_limited"):
             found = FLOW_PCT_RE.search(kv.get(key) or "")
             flow[key + "_pct"] = float(found.group(1)) if found else 0.0
@@ -2932,6 +2942,29 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
     out["receiver_limited_pct"] = max((f["rwnd_limited_pct"] for f in limited), default=None)
     out["sendbuf_limited"] = len(stalled)
     out["sendbuf_limited_pct"] = max((f["sndbuf_limited_pct"] for f in stalled), default=None)
+
+    # Which of the three is holding throughput back. The kernel times how long
+    # a connection spent unable to send because the receiver had no window left
+    # and because this box's own send buffer was empty; whatever is left of its
+    # busy time is time it spent waiting on the path.
+    #
+    # Two of the three already produce findings here and the third never did,
+    # which left the tool able to say "it is the far end" and "it is this box"
+    # and not "it is the network" - on a run whose whole subject is the
+    # network. It is reported as context rather than as a fault, because a
+    # transfer being limited by the path is usually TCP working correctly.
+    busy = [f for f in measurable if (f.get("busy_ms") or 0) >= FLOW_BUSY_MS]
+    if busy:
+        rwnd = sum(f["rwnd_limited_pct"] for f in busy) / len(busy)
+        sndbuf = sum(f["sndbuf_limited_pct"] for f in busy) / len(busy)
+        out["limits"] = {
+            "connections": len(busy),
+            "receiver_pct": round(rwnd, 1),
+            "sender_pct": round(sndbuf, 1),
+            # Clamped: the two the kernel reports can overlap slightly, and a
+            # negative share of anything would be a nonsense to print.
+            "path_pct": round(max(100.0 - rwnd - sndbuf, 0.0), 1),
+        }
     return out
 
 
@@ -4945,7 +4978,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # everything below it, never a fault in itself.
                   "target_is_a_backend", "target_auto_failed", "target_is_forwarded",
                   # A tunnel being smaller than a wire is the tunnel working.
-                  "tunnel_mtu"}
+                  "tunnel_mtu",
+                  # Which of three things is limiting throughput. Always true
+                  # of a box that is sending anything, so never a fault.
+                  "throughput_limited_by"}
 
 
 # Findings too weak to be evidence for anything else: a count of errors that
@@ -7816,6 +7852,31 @@ def _check_flows(raw, findings):
             "severity": "warning", "layer": 3, "code": "path_jitter_clients",
             "message": _jitter_message(sides["client"],
                                        "between this box and the people using it"),
+        })
+
+    # Which of the three is holding throughput back, on the traffic this box is
+    # actually carrying. Context rather than a fault: a transfer limited by the
+    # path is usually TCP working correctly, and the value is in being able to
+    # say which of the three it is when somebody asks why something is slow.
+    limits = stats.get("limits") or {}
+    if limits:
+        lead = max((("the path between them", limits["path_pct"]),
+                    ("the far end, which stopped reading", limits["receiver_pct"]),
+                    ("this box's own send buffer", limits["sender_pct"])),
+                   key=lambda pair: pair[1])
+        findings.append({
+            "severity": "ok",
+            "layer": 4,
+            "code": "throughput_limited_by",
+            "message": f"Across {limits['connections']} connection(s) that were actually "
+                       f"sending, throughput was held back mostly by {lead[0]} "
+                       f"({lead[1]:.0f}% of the time they spent busy). The full split is "
+                       f"{limits['path_pct']:.0f}% waiting on the path, "
+                       f"{limits['receiver_pct']:.0f}% on the far end having no window left, "
+                       f"and {limits['sender_pct']:.0f}% on this box having nothing queued to "
+                       f"send. This is measured on real traffic rather than a probe, and it "
+                       f"is the question behind \"why is it slow\" - the three answers have "
+                       f"three different owners.",
         })
 
     if shape == "all_peers":

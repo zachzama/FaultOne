@@ -227,6 +227,18 @@
     letter-spacing:0.06em; color:var(--text-dim); margin-bottom:3px;
   }
   .finding .tagline{display:flex; align-items:center; gap:7px; margin-bottom:3px;}
+  /* Where a finding stands to the verdict: the answer, something backing it
+     up, one of its consequences, or a separate problem. Deliberately quiet -
+     the severity colour is the thing to see first, and this is the structure
+     underneath it. The cause is the one that gets weight, because on a long
+     report it is the line the reader is looking for. */
+  .finding .rel{
+    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    letter-spacing:0.06em; padding:1px 6px; border-radius:9px;
+    border:1px solid var(--line); color:var(--text-dim); white-space:nowrap;
+  }
+  .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
+  .finding .rel-unrelated{border-style:dashed;}
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
@@ -576,6 +588,11 @@ function renderHopChain(data){
     `).join('') + '</div>';
 }
 
+// Where each finding stands to the verdict. The words come from the report so
+// the page and the terminal say the same thing.
+const RELATION_LABEL = {cause: 'the cause', corroborates: 'backs it up',
+                        explained: 'caused by it', unrelated: 'separate problem'};
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -659,7 +676,8 @@ function renderDiagnosis(data, opts){
     <div class="finding ${f.severity}">
       <div class="sev"></div>
       <div>
-        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}</div>
+        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
+          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>

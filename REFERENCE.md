@@ -318,6 +318,47 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## The list says what explains what
+
+The relationships were already in the verdict — `based_on`, `explains`,
+`unrelated` — and the report printed them as a line of **raw finding codes**
+above a flat list:
+
+```
+this also accounts for: inet_partial_loss, call_quality_degraded
+```
+
+So a reader had to match `inet_partial_loss` against the entries below by eye to
+see which fault was the answer and which were its consequences. That structure
+is the whole product, and it was the one thing the report did not say.
+
+Every finding now carries where it stands, in both the terminal and the page:
+
+```
+[CRIT] L2 Data link   eth0 is running at 1000.0 Mbps on a 1000 Mbps link...
+                      ^ the cause
+[WARN] L3 Network     Packet loss (7%, 1 of 20 probes) reaching 8.8.8.8...
+                      ^ caused by it
+```
+
+| | |
+|---|---|
+| **the cause** | the verdict's own finding — the first entry of `based_on` |
+| **backs it up** | an independent fault that corroborates it |
+| **caused by it** | a consequence: fix the cause and this goes with it |
+| **separate problem** | it will still be there afterwards |
+
+No diagram, and deliberately. A fault tree drawn as a graph would need a layout
+library, and this file ships no external assets — but the thing a fault tree is
+*for* is knowing which node is the root and which hang off it, and a flat list
+that labels each entry says that without drawing anything.
+
+The relation is worked out **once, in Python**, and attached to each finding
+before the report is written. The viewer reads it rather than recomputing it:
+two copies of a rule are two chances to disagree, and a test pins the page's
+wording to the terminal's so the two cannot drift into different vocabularies
+for the same idea.
+
 ## A virtual NIC cannot fail a physical check
 
 On a paravirtual adapter — `virtio_net`, `vmxnet3`, `hv_netvsc`, `xen-netfront`,
@@ -1069,7 +1110,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 817 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 825 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1231,7 +1272,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 817 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 825 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2556,7 +2597,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-817 tests, no dependencies, no network, a few seconds — so they run
+825 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

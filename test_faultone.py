@@ -2636,6 +2636,75 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestTheListSaysWhatExplainsWhat(unittest.TestCase):
+    """The relationships already existed in the verdict - based_on, explains,
+    unrelated - and the report printed them as a line of raw finding codes
+    above a flat list. A reader had to match "inet_partial_loss" against the
+    entries below by eye to see which fault was the answer and which were its
+    consequences, which is the one thing this tool exists to work out."""
+
+    def report(self):
+        setup, kw = S["link_saturated"]
+        m = fresh(); setup(m)
+        return m, m.diagnose(quick=False, **scenario_kwargs(kw))
+
+    def test_each_finding_carries_where_it_stands(self):
+        _, rep = self.report()
+        by_code = {f["code"]: f.get("relation") for f in rep["findings"]}
+        self.assertEqual(by_code["link_saturated"], "cause")
+        self.assertEqual(by_code["inet_partial_loss"], "explained")
+
+    def test_the_relation_is_derived_once_not_twice(self):
+        """Attached to the finding in Python rather than worked out again in
+        the viewer. Two copies of a rule are two chances to disagree."""
+        _, rep = self.report()
+        self.assertTrue(any("relation" in f for f in rep["findings"]))
+
+    def test_a_finding_with_no_relationship_is_left_alone(self):
+        v = {"based_on": ["a"], "explains": [], "unrelated": []}
+        self.assertIsNone(nd.finding_relation("z", v))
+        self.assertIsNone(nd.finding_relation(None, v))
+        self.assertIsNone(nd.finding_relation("a", None))
+
+    def test_every_relation_it_can_return_has_a_label(self):
+        """A relation with no label would render as a raw identifier in the one
+        place the report is trying to stop showing raw identifiers."""
+        v = {"based_on": ["a", "b"], "explains": ["c"],
+             "unrelated": [{"code": "d", "message": "m"}]}
+        for code in ("a", "b", "c", "d"):
+            rel = nd.finding_relation(code, v)
+            self.assertIn(rel, nd.FINDING_RELATIONS, f"{code} -> {rel}")
+
+    def test_the_cause_is_the_first_of_based_on_not_any_of_it(self):
+        """based_on is the cause followed by whatever corroborates it, and
+        calling all of them the cause would name several."""
+        v = {"based_on": ["a", "b"], "explains": [], "unrelated": []}
+        self.assertEqual(nd.finding_relation("a", v), "cause")
+        self.assertEqual(nd.finding_relation("b", v), "corroborates")
+
+    def test_it_reaches_the_terminal(self):
+        m, rep = self.report()
+        text = m.render_text_report(rep)
+        self.assertIn("^ the cause", text)
+        self.assertIn("^ caused by it", text)
+
+    def test_it_reaches_the_page(self):
+        m, rep = self.report()
+        page = m.render_report_html(rep)
+        back = m.extract_embedded_report(page)
+        self.assertEqual(
+            [f.get("relation") for f in back["findings"]][:2], ["cause", "explained"])
+        self.assertIn("RELATION_LABEL[f.relation]", page)
+
+    def test_the_page_and_the_terminal_use_the_same_words(self):
+        """Two renderers with two vocabularies for the same idea is how a
+        report starts contradicting itself."""
+        src = open(nd.__file__).read()
+        template = src.split("const RELATION_LABEL", 1)[1].split("};", 1)[0]
+        for key, label in nd.FINDING_RELATIONS.items():
+            self.assertIn(f"'{label}'", template, f"{key} says something else on the page")
+
+
 class TestWhichOfThreeIsHoldingThroughputBack(unittest.TestCase):
     """The kernel times how long a connection could not send because the far
     end had no window left, and because this box had nothing queued. Whatever

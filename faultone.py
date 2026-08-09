@@ -5470,6 +5470,37 @@ def compact_report(report):
     return slim
 
 
+# How each finding stands to the verdict. The relationships already exist in
+# the verdict - based_on, explains, unrelated - and the report showed them as a
+# line of raw finding codes above a flat list, so a reader had to match
+# "inet_partial_loss" against the entries below by eye to see which fault was
+# the answer and which were its consequences. That structure is the whole
+# product; leaving it as a comma-separated string is the one place the report
+# does not say what the tool knows.
+FINDING_RELATIONS = {
+    "cause": "the cause",
+    "corroborates": "backs it up",
+    "explained": "caused by it",
+    "unrelated": "separate problem",
+}
+
+
+def finding_relation(code, verdict):
+    """Where `code` sits relative to the verdict, or None if nowhere."""
+    if not code or not verdict:
+        return None
+    based = verdict.get("based_on") or []
+    if based and code == based[0]:
+        return "cause"
+    if code in based[1:]:
+        return "corroborates"
+    if code in (verdict.get("explains") or []):
+        return "explained"
+    if code in {u.get("code") for u in (verdict.get("unrelated") or [])}:
+        return "unrelated"
+    return None
+
+
 def build_stages(findings, raw=None, checked_ports=False, quick=False):
     """Reduce the findings to pass/warn/fail per stage of the chain."""
     raw = raw or {}
@@ -9695,6 +9726,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _check_every_interface(findings, raw)
 
     verdict = build_verdict(findings, quick=quick, raw=raw)
+    for f in findings:
+        relation = finding_relation(f.get("code"), verdict)
+        if relation:
+            f["relation"] = relation
     _retarget_verdict(verdict, raw)
     _qualify_upstream_verdict(verdict, raw, uplink_mbps)
     if neighbours and verdict.get("based_on") and verdict["based_on"][0] in PORT_RELEVANT_CODES:
@@ -9750,6 +9785,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # Shipped with the report so an exported JSON stays self-describing:
         # index.html can label layer badges without knowing this table itself.
         "layers": {str(n): meta for n, meta in LAYERS.items()},
+        # Attached to each finding rather than worked out again in the
+        # viewer: the browser would need a second copy of the rule, and two
+        # copies of a rule are two chances to disagree.
         "panel_help": PANEL_HELP,
         "lowest_broken_layer": min(
             (f["layer"] for f in findings if f.get("layer") and f["severity"] != "ok"),
@@ -10004,6 +10042,18 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     letter-spacing:0.06em; color:var(--text-dim); margin-bottom:3px;
   }
   .finding .tagline{display:flex; align-items:center; gap:7px; margin-bottom:3px;}
+  /* Where a finding stands to the verdict: the answer, something backing it
+     up, one of its consequences, or a separate problem. Deliberately quiet -
+     the severity colour is the thing to see first, and this is the structure
+     underneath it. The cause is the one that gets weight, because on a long
+     report it is the line the reader is looking for. */
+  .finding .rel{
+    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    letter-spacing:0.06em; padding:1px 6px; border-radius:9px;
+    border:1px solid var(--line); color:var(--text-dim); white-space:nowrap;
+  }
+  .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
+  .finding .rel-unrelated{border-style:dashed;}
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
@@ -10353,6 +10403,11 @@ function renderHopChain(data){
     `).join('') + '</div>';
 }
 
+// Where each finding stands to the verdict. The words come from the report so
+// the page and the terminal say the same thing.
+const RELATION_LABEL = {cause: 'the cause', corroborates: 'backs it up',
+                        explained: 'caused by it', unrelated: 'separate problem'};
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -10436,7 +10491,8 @@ function renderDiagnosis(data, opts){
     <div class="finding ${f.severity}">
       <div class="sev"></div>
       <div>
-        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}</div>
+        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
+          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>
@@ -11131,12 +11187,19 @@ def render_text_report(report, color=False, width=None):
         lname = (layers.get(str(f.get("layer")), {}) or {}).get("name", "")
         lcol = f"L{f['layer']} {lname}" if f.get("layer") else ""
         head = f"  {tag} {lcol:<16} "
+        # Which of these is the answer, and which are its consequences. Without
+        # it the list is ordered by layer and says nothing about what explains
+        # what, which is the one thing this tool exists to work out.
+        relation = finding_relation(f.get("code"), report.get("verdict"))
         # Indent wrapped lines under the message, not under the tag, so the
         # severity column stays scannable on a narrow terminal.
         body = textwrap.wrap(f.get("message", ""), width=max(width - 26, 30)) or [""]
         out.append(head + body[0])
         for extra in body[1:]:
             out.append(" " * 26 + extra)
+        if relation:
+            out.append(" " * 26 + tint(f"^ {FINDING_RELATIONS[relation]}",
+                                       "critical" if relation == "cause" else "ok"))
 
     low = report.get("lowest_broken_layer")
     if low:

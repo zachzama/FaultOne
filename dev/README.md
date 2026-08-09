@@ -1,6 +1,6 @@
 # dev/
 
-Two harnesses that are **not part of the tool**. Nothing here ships to a box,
+Three harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
 nothing about what the tool does. They exist because two questions come up
 before every release and neither is answerable by the test suite.
@@ -46,3 +46,20 @@ are identical and only the tool differs. That is what makes the comparison mean
 anything, and it also means this reaches back only as far as the current
 fixtures still drive the old tool — a few versions, in practice. Past that it
 says so and stops rather than comparing two different questions.
+
+## `about.py` — does the GitHub About box still say what we think?
+
+```bash
+python3 dev/about.py          # compare, exit 1 if they differ
+python3 dev/about.py --fix    # set it from REFERENCE.md
+```
+
+The About box lives on someone else's server, so the test suite cannot read it.
+It sat quoting a finding count eighteen out of date while every number inside
+the repository stayed green — the drift the guards exist to catch, in the one
+place they cannot look. The canonical text lives in REFERENCE.md under **The
+repository description**, where the suite does pin it; this compares that block
+against the live box.
+
+Needs the network and an authenticated `gh`, which is why it is here and not in
+the suite. Run it when you tag.

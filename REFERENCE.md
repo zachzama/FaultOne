@@ -2364,8 +2364,21 @@ instead, where the same guard that pins every other number scans it:
 > listens.
 
 Update this block and the About box together. If the finding count moves and
-only one of them is changed, the test suite fails on this file — which is the
-best that can be done for a string stored on someone else's server.
+only one of them is changed, the test suite fails on this file.
+
+That only ever caught half of it: the suite pins the block, and nothing could
+see the box itself. It sat quoting a count eighteen findings out of date while
+every number inside the repository stayed green — the exact drift the guards
+exist to prevent, in the one place they cannot look. `dev/about.py` closes it:
+
+```bash
+python3 dev/about.py          # compare, exit 1 if they differ
+python3 dev/about.py --fix    # set the About box from this block
+```
+
+It is a dev harness rather than a test because it needs the network and an
+authenticated `gh`, and the suite has to run on a box with neither. Run it when
+you tag.
 
 ## Licence
 

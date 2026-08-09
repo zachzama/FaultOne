@@ -1800,6 +1800,13 @@ ATTEMPT_FAIL_PCT = 10
 # bound to, produces exactly that, and so does a scan.
 RESETS_PER_CONN_PCT = 100
 
+# Share of this box's connections that reached ESTABLISHED and were then torn
+# down abruptly rather than closed. A well-behaved connection ends with a FIN;
+# a reset on an established one means somebody gave up on it mid-flight. Some
+# of that is normal - a client walking away, an application aborting - so the
+# line sits where it stops looking like ordinary abandonment.
+ESTAB_RESET_PCT = 20
+
 # A TLS handshake is one or two round trips. Past this multiple of the connect
 # that preceded it, the extra time is the server doing work - key exchange, or
 # fetching something it needed - rather than distance.
@@ -2475,6 +2482,19 @@ FLOW_LOSSY_PCT = 2.0
 QUEUE_RTT_MULTIPLE = 2.0
 QUEUE_DELAY_MS = 30.0
 
+# How unstable a path's delay has to be before it is worth naming, measured as
+# TCP's own round-trip variance on the connections this box is carrying.
+#
+# Two tests again, and for the same reason as the pair above. The absolute
+# figure alone fires on any long path, where tens of milliseconds of variance
+# is ordinary; the share alone fires on a LAN where 0.2ms becomes 0.5ms and
+# nothing is wrong. Variance at half the round trip means the delay is moving
+# about as much as it lasts - which is what makes TCP's retransmit timer back
+# off and hold recovery, so it is felt long before any packet is lost.
+JITTER_MS = 30.0
+JITTER_SHARE = 0.5
+
+
 # Share of a connection's active time spent blocked before the blocking side is
 # named as the bottleneck rather than the network.
 FLOW_LIMITED_PCT = 20.0
@@ -2585,6 +2605,13 @@ def parse_tcp_flows(text, max_flows=FLOW_MAX):
         # buffering", which have different owners and different fixes. Parsed
         # and thrown away until now; the kernel has always offered it.
         flow["minrtt_ms"] = _flow_num(kv.get("minrtt"))
+        # rtt: is "smoothed/variance". The second half was being discarded by
+        # the parser that takes the first number, and it is the only jitter
+        # figure here measured on the traffic this box actually carries -
+        # everything else comes from probes a router is free to deprioritise.
+        rtt_raw = kv.get("rtt") or ""
+        flow["rtt_var_ms"] = (_flow_num(rtt_raw.split("/", 1)[1])
+                              if "/" in rtt_raw else None)
         flow["bytes_sent"] = _flow_num(kv.get("bytes_sent")) or 0.0
         flow["bytes_retrans"] = _flow_num(kv.get("bytes_retrans")) or 0.0
         flow["segs_out"] = _flow_num(kv.get("segs_out")) or 0.0
@@ -2730,6 +2757,7 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
             if not group:
                 continue
             rtts = sorted(f["rtt_ms"] for f in group if f.get("rtt_ms"))
+            jitter = sorted(f["rtt_var_ms"] for f in group if f.get("rtt_var_ms"))
             queued = _queue_summary(group)
             worst_flow = max(group, key=lambda f: f.get("retrans_pct") or 0)
             peers = {}
@@ -2740,6 +2768,8 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # Median, not worst: one stalled connection should not stand in
                 # for how the other side is being served.
                 "rtt_ms": rtts[len(rtts) // 2] if rtts else None,
+                # Median for the same reason as the round trip beside it.
+                "jitter_ms": jitter[len(jitter) // 2] if jitter else None,
                 "worst_loss_pct": worst_flow.get("retrans_pct"),
                 "worst_peer": worst_flow["peer"],
                 "via": dominant_peer(peers),
@@ -3540,6 +3570,30 @@ def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version,
                     "error": f"Connection refused (port {port_num} closed or filtered by firewall)",
                     "reason": "refused",
                 }
+            # No route, and the kernel said so before a packet left. Everything
+            # here used to land in the timeout bucket, which describes the
+            # opposite situation - a packet sent and nothing coming back - and
+            # sent the reader looking at the network for a routing table on
+            # this box. The two are told apart by how fast the answer came as
+            # much as by the code: this one is instant.
+            if result in (errno_module.ENETUNREACH, 101):
+                return {
+                    "ok": False,
+                    "cmd": f"tcp connect {host}:{port_num}",
+                    "ip_version": ip_version,
+                    "error": f"Network unreachable - this device has no route to {host}. "
+                             f"The kernel refused before sending anything.",
+                    "reason": "no_route",
+                }
+            if result in (errno_module.EHOSTUNREACH, 113):
+                return {
+                    "ok": False,
+                    "cmd": f"tcp connect {host}:{port_num}",
+                    "ip_version": ip_version,
+                    "error": f"Host unreachable - a router on the path reported it cannot "
+                             f"reach {host}.",
+                    "reason": "host_unreachable",
+                }
             else:
                 return {
                     "ok": False,
@@ -4160,6 +4214,11 @@ VERDICT_RULES = [
      "Cooling that is marginal rather than failed - it bites under load and "
      "clears when the load does. That is the shape of a fault that only shows "
      "at the busiest hour and never reproduces afterwards."),
+    ("fault_on_every_interface", "whatever the interfaces share - not any one cable",
+     "Every interface on this device has the same problem",
+     "They do not share a cable, so the cable is not it. Check what they do "
+     "share: the driver, the adapter or its firmware, the heat and power "
+     "around it, or the single switch they all land in."),
     ("nic_reset_logged", "this device's NIC or its driver",
      "The kernel has been resetting this device's network hardware",
      "The adapter or its driver is failing, not the network. Every connection "
@@ -4311,6 +4370,16 @@ VERDICT_RULES = [
      "The same connections have been far faster, so this is not the internet "
      "being far away - traffic is waiting somewhere on the way in. A full uplink "
      "and an over-buffered edge device both look like this."),
+    ("path_jitter_backends", "the path between this box and what it depends on",
+     "The delay to the backends will not sit still",
+     "Measured on the real connections rather than probes. Nothing needs to be "
+     "lost for this to bite: a retransmit timer sized for the worst case is a "
+     "timer that waits, so recovery stalls while the loss figures stay clean."),
+    ("path_jitter_clients", "the path between this box and the people using it",
+     "The delay to the clients will not sit still",
+     "Measured on the connections the users are actually on. This is felt as "
+     "inconsistency rather than slowness - most requests fine, some very much "
+     "not - which is the complaint that never reproduces on demand."),
     ("queuing_delay", "whatever is buffering on the path out of this box",
      "The delay on this box's connections is queue, not distance",
      "The same connections have been far faster. Something on the path is "
@@ -4485,6 +4554,17 @@ VERDICT_RULES = [
      "Packets are being dropped along the path, all the way to the destination",
      "Loss that persists to the final hop is real. Take it to whoever owns the "
      "hop where it starts; if that's past the site edge, it's the provider's."),
+    ("no_route_to_target", "this device's routing table, not the network",
+     "This device has no route to the target and never sent anything",
+     "Nothing reached the wire, so nothing on the network had a chance to "
+     "fail. Check this device's routes: either nothing covers that "
+     "destination, or the route that should points at an interface that is "
+     "down."),
+    ("port_host_unreachable", "the router that answered - the trace names it",
+     "A router on the path says it cannot reach the target",
+     "Something forwarded the traffic partway and then reported the "
+     "destination unreachable from there. That router knows why, and it is a "
+     "more specific answer than a silent path."),
     ("path_admin_prohibited", "whoever owns the policy on the hop that refused",
      "A device on the path is refusing this traffic on purpose",
      "It answered rather than went silent, which means the decision is "
@@ -4634,6 +4714,11 @@ VERDICT_RULES = [
      "Services here have been turning connections away under load",
      "None during this run, so it tracks load rather than a fault you can reproduce now. "
      "Worth quoting when the complaint is that the network drops connections at busy times."),
+    ("connections_reset_by_peer", "the far end, or a middlebox between - not this device",
+     "Established connections are being killed rather than closed",
+     "This box is not the one sending most of these. Look for a "
+     "session-tracking firewall timing connections out, a load balancer "
+     "recycling them, or a service at the far end restarting."),
     ("resets_sent_high", "this device, which is the one sending them",
      "This device is resetting the connections it takes part in",
      "The resets originate here, so this is not something arriving from the "
@@ -4777,6 +4862,7 @@ TRANSPORT_SYMPTOMS = {
     "path_loss", "trace_stalls", "destination_unresponsive",
     "latency_wall", "latency_high", "call_quality_bad", "call_quality_degraded",
     "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
+    "path_jitter_backends", "path_jitter_clients",
     # TCP reacting to a path that is losing or delaying traffic.
     "tcp_retransmits", "syn_retrans_high", "connect_failures_high",
     "retrans_spurious", "tcp_flow_loss_all_peers", "tcp_flow_loss_some_peers",
@@ -4869,10 +4955,11 @@ _LOCAL_FAULTS = (
     "collisions", "link_saturated", "link_busy",
     "neigh_table_full", "neigh_table_near_limit",
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
+    "no_route_to_target",
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
     "nic_ring_overruns", "frame_length_errors",
-    "cpu_throttled_live", "cpu_throttled_historical",
+    "cpu_throttled_live", "cpu_throttled_historical", "fault_on_every_interface",
     "conntrack_drops_live", "conntrack_drops_historical", "conntrack_near_limit",
     "aborts_on_memory", "aborts_on_timeout",
     # Its own stack and clock.
@@ -4892,6 +4979,7 @@ FINDING_SIDE.update({
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
     "queuing_delay_clients": "downstream",
+    "path_jitter_clients": "downstream",
     "syncookies_live": "downstream",
     "syncookies_historical": "downstream",
     "syn_recv_backlog": "downstream",
@@ -4915,6 +5003,7 @@ FINDING_SIDE.update({
 
     # --- upstream: the way out -------------------------------------------
     "tcp_flow_loss_backends": "upstream",
+    "path_jitter_backends": "upstream",
     "queuing_delay_backends": "upstream",
     "queuing_delay": "upstream",
     "tcp_flow_loss_some_peers": "upstream",
@@ -4930,6 +5019,7 @@ FINDING_SIDE.update({
     "inet_icmp_filtered": "upstream",
     "path_loss": "upstream",
     "path_loss_cosmetic": "upstream",
+    "port_host_unreachable": "upstream",
     "path_admin_prohibited": "upstream",
     "latency_wall": "upstream",
     "trace_stalls": "upstream",
@@ -4940,6 +5030,7 @@ FINDING_SIDE.update({
     "pmtu_unmeasurable": "upstream",
     "latency_high": "upstream",
     "resets_sent_high": "local",
+    "connections_reset_by_peer": "upstream",
     "call_quality_bad": "upstream",
     "call_quality_degraded": "upstream",
     "uplink_saturated": "upstream",
@@ -5005,7 +5096,8 @@ STAGE_RULES = [
     ("link", {"link_errors_live", "duplex_mismatch", "tcp_flow_loss_all_peers",
               "optics_alarm", "optics_rx_low", "link_flapping_live", "nic_drops_live",
               "rcv_buffer_pruned", "link_flapping_logged", "nic_reset_logged",
-              "nic_ring_overruns", "frame_length_errors", "cpu_throttled_live"},
+              "nic_ring_overruns", "frame_length_errors", "cpu_throttled_live",
+              "fault_on_every_interface"},
      {"slow_link", "negotiated_below_capacity", "bond_degraded",
       "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
@@ -5027,8 +5119,9 @@ STAGE_RULES = [
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
       "tcp_flow_loss_backends", "tcp_flow_loss_clients",
       "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
+      "path_jitter_backends", "path_jitter_clients",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
-      "resets_sent_high",
+      "resets_sent_high", "connections_reset_by_peer",
       "retrans_spurious",
       # Listed as warnings, but build_stages promotes a critical to fail, so
       # "degraded" warns the stage and "unusable" fails it without a second rule.
@@ -5043,7 +5136,8 @@ STAGE_RULES = [
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
     ("mtu", {"pmtu_blackhole"}, {"pmtu_unmeasurable", "mtu_nonstandard"}),
-    ("ports", {"tls_handshake_failed", "tls_expired", "tls_not_yet_valid",
+    ("ports", {"no_route_to_target", "port_host_unreachable",
+               "tls_handshake_failed", "tls_expired", "tls_not_yet_valid",
                "own_tls_expired", "own_tls_handshake_failed",
                "own_service_silent", "own_service_erroring",
                "own_service_upstream_error"},
@@ -5778,6 +5872,32 @@ def _check_connection_setup(stats, findings, counter_window):
                              "an application aborting instead of closing all look like this. "
                              "Whoever is on the other end sees a connection dropped, not a "
                              "slow one, and reports it as the network.",
+            })
+
+    # Connections that were up and were then killed. The counter cannot say
+    # which end sent the reset - it counts the transition, not the direction -
+    # but this box knows how many resets *it* sent, and when that is a small
+    # part of the total the rest arrived from outside. Said as an inference
+    # rather than a measurement, because that is what it is.
+    live_estab = delta.get("EstabResets", 0)
+    if live_estab and live_conns >= 20:
+        pct = round(100.0 * live_estab / live_conns)
+        ours = delta.get("OutRsts", 0)
+        if pct >= ESTAB_RESET_PCT and ours < live_estab:
+            findings.append({
+                "severity": "warning",
+                "layer": 4,
+                "code": "connections_reset_by_peer",
+                "message": f"{live_estab:,} connection(s) that had been established were "
+                           f"torn down abruptly in the last {counter_window}s rather than "
+                           f"closed - {pct}% of the {live_conns:,} this device opened or "
+                           f"accepted. This box sent {ours:,} reset(s) of its own, so most "
+                           f"of these came from the other end or from something in the "
+                           f"middle. The counter records the teardown and not who sent it, "
+                           f"so that last part is inference rather than measurement. A "
+                           f"session-tracking firewall timing connections out, a load "
+                           f"balancer recycling them, or a backend restarting all look "
+                           f"like this from here.",
             })
 
     # How much of the retransmission was unnecessary. A DSACK is the far end
@@ -7240,6 +7360,38 @@ def _check_flows(raw, findings):
             "message": _queue_message(stats["queue"], "on the path out of this box"),
         })
 
+    # Delay that will not sit still, from TCP's own variance on the
+    # connections this box is carrying. Every other jitter figure here comes
+    # from probes, which a router is free to deprioritise; this one is the
+    # traffic. Written out per side rather than looped for the same reason as
+    # the block above - a loop hides the codes from every guard in the suite.
+    def _jitter_bad(side):
+        var, rtt = side.get("jitter_ms"), side.get("rtt_ms")
+        return bool(var and rtt and var >= JITTER_MS and var >= rtt * JITTER_SHARE)
+
+    def _jitter_message(side, where):
+        return (f"The round trip {where} is moving about as much as it lasts: "
+                f"{side['jitter_ms']:.0f}ms of variance on a {side['rtt_ms']:.0f}ms "
+                f"trip, across {side['connections']} connection(s). This is TCP's own "
+                f"measurement of the traffic rather than a probe, so it is what the "
+                f"connections are actually experiencing. Nothing has to be lost for it "
+                f"to hurt - a retransmit timer sized for the worst case is a timer that "
+                f"waits, so recovery stalls and throughput falls while every loss "
+                f"figure here stays clean.")
+
+    if _jitter_bad(sides.get("backend") or {}):
+        findings.append({
+            "severity": "warning", "layer": 3, "code": "path_jitter_backends",
+            "message": _jitter_message(sides["backend"],
+                                       "between this box and what it depends on"),
+        })
+    elif _jitter_bad(sides.get("client") or {}):
+        findings.append({
+            "severity": "warning", "layer": 3, "code": "path_jitter_clients",
+            "message": _jitter_message(sides["client"],
+                                       "between this box and the people using it"),
+        })
+
     if shape == "all_peers":
         findings.append({
             "severity": "critical",
@@ -7714,6 +7866,34 @@ def _check_ports(raw, findings, target, check_ports, quick, speculative=False):
                                f"{port_result.get('error', 'connection refused')}. The service "
                                f"may not be running, or a firewall is blocking it." + suffix,
                 })
+            elif reason == "no_route":
+                findings.append({
+                    # Never speculative: a missing route is this box's own
+                    # configuration whichever port asked the question, and a
+                    # preset port finding one is the preset doing its job.
+                    "severity": "critical",
+                    "code": "no_route_to_target",
+                    "layer": 3,
+                    "message": f"This device has no route to {target} at all - the kernel "
+                               f"refused port {port_spec} instantly rather than sending "
+                               f"anything and waiting. Nothing was put on the wire, so no "
+                               f"part of the network had the chance to fail. Read this "
+                               f"device's routing table: either the destination is not "
+                               f"covered by any route, or the route that should cover it "
+                               f"points at an interface that is down.",
+                })
+            elif reason == "host_unreachable":
+                findings.append({
+                    "severity": severity,
+                    "code": "port_host_unreachable",
+                    "layer": 3,
+                    "message": f"A router on the way to {target} reported that it cannot "
+                               f"reach the host, for port {port_spec}. That is different "
+                               f"from silence: something forwarded the traffic partway and "
+                               f"then told us the destination is not reachable from there. "
+                               f"The router that answered knows why - the trace names the "
+                               f"hop." + suffix,
+                })
             else:  # timeout
                 findings.append({
                     "severity": severity,
@@ -8047,6 +8227,50 @@ def _check_call_quality(raw, findings, target, inet_loss):
                                f"erratic fast one.",
                 })
     return call_quality
+
+
+# Interfaces carrying the same fault before it stops being about a cable. Two
+# is a coincidence worth nothing - a box with two bad patch leads is a box with
+# two bad patch leads. Three of them, and every active interface, is a common
+# factor.
+SHARED_FAULT_INTERFACES = 3
+
+
+def _check_every_interface(findings, raw):
+    """The same fault on every interface is not a fault of any of them.
+
+    This is the reasoning the flow checks already do for peers - loss to one
+    destination is that destination, loss to all of them is the local link -
+    applied to the cables instead, where it was missing. A box with eight NICs
+    all reporting errors produced eight findings, and the verdict picked
+    whichever happened to be first and called it that cable, at medium
+    confidence, on a box where the cable was demonstrably not the thing they
+    had in common.
+    """
+    active = {i["name"] for i in (raw.get("link_stats") or {}).get("interfaces", [])
+              if i.get("packets") and not i["name"].startswith("lo")}
+    if len(active) < SHARED_FAULT_INTERFACES:
+        return
+    by_code = {}
+    for f in findings:
+        if f.get("scope") and f["severity"] in ("warning", "critical"):
+            by_code.setdefault(f["code"], set()).add(f["scope"])
+    for code in sorted(by_code):
+        scopes = by_code[code] & active
+        if len(scopes) < SHARED_FAULT_INTERFACES or scopes != active:
+            continue
+        findings.append({
+            "severity": "critical",
+            "layer": 2,
+            "code": "fault_on_every_interface",
+            "message": f"Every active interface on this device is reporting the same "
+                       f"problem - {code} on all {len(scopes)} of them "
+                       f"({', '.join(sorted(scopes))}). Whatever they have in common is "
+                       f"the cause, and it is not a cable: they do not share one. Look at "
+                       f"what they do share - the driver, the NIC or its firmware, the "
+                       f"power or heat around it, or the one switch they all land in.",
+        })
+        return
 
 
 def _all_clear(raw, findings, check_ports, dns_failed):
@@ -8909,6 +9133,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
             "message": f"{len(comparison)} difference(s) from the baseline, none of them a "
                        f"regression. See the comparison section.",
         })
+
+    _check_every_interface(findings, raw)
 
     verdict = build_verdict(findings, quick=quick, raw=raw)
     _retarget_verdict(verdict, raw)

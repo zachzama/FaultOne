@@ -2092,6 +2092,118 @@ class TestDownVersusUnreachable(unittest.TestCase):
         self.assertEqual(v["based_on"][0], "inet_unreachable")
 
 
+class TestWhyAConnectFailed(unittest.TestCase):
+    """A connect that fails instantly because there is no route, and one that
+    fails after waiting because nothing came back, are opposite situations.
+    Both landed in the timeout bucket, which describes only the second and
+    sends the reader to the network for a routing table on this box."""
+
+    def reason_for(self, errno_code):
+        """Drive the real socket path, not a stub of it. Stubbing cmd_check_port
+        is what let three mutations of this mapping pass unnoticed."""
+        import errno, socket
+        class FakeSock:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def settimeout(self, t): pass
+            def connect_ex(self, addr): return errno_code
+            def recv(self, n): return b""
+        orig = socket.socket
+        socket.socket = lambda *a, **k: FakeSock()
+        try:
+            return nd.cmd_check_port("192.0.2.1", 443).get("reason")
+        finally:
+            socket.socket = orig
+
+    def test_no_route_is_not_a_timeout(self):
+        import errno
+        self.assertEqual(self.reason_for(errno.ENETUNREACH), "no_route")
+
+    def test_a_router_saying_it_cannot_reach_is_not_a_timeout_either(self):
+        import errno
+        self.assertEqual(self.reason_for(errno.EHOSTUNREACH), "host_unreachable")
+
+    def test_refused_and_timed_out_still_mean_what_they_did(self):
+        import errno
+        self.assertEqual(self.reason_for(errno.ECONNREFUSED), "refused")
+        self.assertEqual(self.reason_for(errno.ETIMEDOUT), "timeout")
+
+    def test_the_linux_numbers_are_accepted_where_the_platform_differs(self):
+        """errno values differ across platforms - ENETUNREACH is 101 on Linux
+        and 51 on BSD. The mapping names the constant and the Linux number, the
+        way the refused branch beside it already did."""
+        self.assertEqual(self.reason_for(101), "no_route")
+        self.assertEqual(self.reason_for(113), "host_unreachable")
+
+    def test_no_route_is_a_fault_even_from_a_speculative_port(self):
+        """A port from the preset asserts nothing about the service. A missing
+        route is this box's configuration whichever port asked."""
+        m = fresh()
+        m.cmd_check_port = lambda h, p, timeout=5: {
+            "ok": False, "cmd": "tcp", "reason": "no_route", "error": "no route"}
+        rep = m.diagnose("8.8.8.8", ["443"], quick=False, ports_speculative=True)
+        fired = [f for f in rep["findings"] if f["code"] == "no_route_to_target"]
+        self.assertTrue(fired)
+        self.assertEqual(fired[0]["severity"], "critical")
+
+    def test_nothing_reached_the_wire_so_nothing_upstream_is_blamed(self):
+        m = fresh()
+        m.cmd_check_port = lambda h, p, timeout=5: {
+            "ok": False, "cmd": "tcp", "reason": "no_route", "error": "no route"}
+        v = m.diagnose("8.8.8.8", ["443"], quick=False)["verdict"]
+        self.assertNotIn("provider", v["owner"])
+        self.assertIn("routing table", v["owner"])
+
+
+class TestDelayThatWillNotSitStill(unittest.TestCase):
+    """TCP reports its round trip as smoothed/variance. The parser took the
+    first number, so the only jitter figure measured on the traffic this box
+    actually carries - rather than on probes a router may deprioritise - was
+    dropped on the floor."""
+
+    def test_the_variance_half_is_kept(self):
+        flows = nd.parse_tcp_flows(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "ESTAB 0 0 10.0.0.1:443 10.0.0.9:52544\n"
+            "\t cubic rtt:87.5/45.2 minrtt:85.2 mss:1448\n")
+        self.assertEqual(flows[0]["rtt_ms"], 87.5)
+        self.assertEqual(flows[0]["rtt_var_ms"], 45.2)
+
+    def test_a_socket_without_a_variance_half_reports_none(self):
+        flows = nd.parse_tcp_flows(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "ESTAB 0 0 10.0.0.1:443 10.0.0.9:52544\n"
+            "\t cubic rtt:87.5 minrtt:85.2 mss:1448\n")
+        self.assertIsNone(flows[0]["rtt_var_ms"])
+
+    def codes(self, rtt, var):
+        m = fresh()
+        sided_flows(m, jittery_sock("10.0.0.90", "44120", rtt, var, port="5432"))
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_variance_at_half_the_round_trip_is_reported(self):
+        self.assertIn("path_jitter_backends", self.codes(80.0, 50.0))
+
+    def test_a_long_but_steady_path_is_not(self):
+        """200ms that never moves is distance. The absolute figure alone would
+        fire on it."""
+        self.assertNotIn("path_jitter_backends", self.codes(200.0, 2.0))
+
+    def test_a_lan_whose_variance_is_most_of_a_tiny_round_trip_is_not(self):
+        """0.3ms of variance on 0.4ms is proportionally enormous and matters
+        to nobody. The share test alone would fire on it."""
+        self.assertNotIn("path_jitter_backends", self.codes(0.4, 0.3))
+
+    def test_the_two_sides_are_told_apart(self):
+        """A path to the backends and a path to the users are two pieces of
+        equipment with two owners, which is the whole reason for the split."""
+        m = fresh()
+        sided_flows(m, jittery_sock("203.0.113.9", "443", 80.0, 50.0))
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertIn("path_jitter_clients", codes)
+        self.assertNotIn("path_jitter_backends", codes)
+
+
 class TestWhatTheCauseAccountsFor(unittest.TestCase):
     """The verdict said what it could not explain and never what it could. A
     full link reported the loss it was causing as "also, unrelated - suggests
@@ -2194,6 +2306,93 @@ class TestWhatTheCauseAccountsFor(unittest.TestCase):
         the set is where the cause-versus-consequence answer comes from."""
         codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
         self.assertEqual(sorted(nd.TRANSPORT_SYMPTOMS - codes), [])
+
+
+class TestTheSameFaultOnEveryCable(unittest.TestCase):
+    """The reasoning the flow checks already do for peers - loss to one
+    destination is that destination, loss to all of them is the local link -
+    applied to the cables, where it was missing."""
+
+    def box(self, bad, total):
+        m = fresh()
+        ifaces = [dict(name=f"eth{i}", packets=10_000_000, errors=900 if i < bad else 0,
+                       drops=0, crc=900 if i < bad else 0, frame=0, overruns=0,
+                       collisions=0, err_ppm=90 if i < bad else 0, coll_ppm=0,
+                       unknown_counters=[], delta_errors=40 if i < bad else 0,
+                       delta_drops=0, delta_packets=2_000, delta_host_errors=0,
+                       delta_length_errors=0, sample_seconds=2, rx_mbps=1, tx_mbps=1,
+                       operstate="up", carrier_changes=0, delta_carrier_changes=0,
+                       rate_series=None, peak_mbps=None, series_seconds=None)
+                  for i in range(total)]
+        m.cmd_link_stats = lambda *a, **k: {"ok": True, "cmd": "s", "stdout": "",
+                                            "interfaces": ifaces, "sample_seconds": 2,
+                                            "source": "sysfs"}
+        return m.diagnose("8.8.8.8", None, quick=False)["verdict"]
+
+    def test_every_interface_means_the_cable_is_not_it(self):
+        v = self.box(8, 8)
+        self.assertEqual(v["based_on"][0], "fault_on_every_interface")
+        self.assertNotIn("cable", v["owner"].replace("not any one cable", ""))
+
+    def test_some_interfaces_is_still_about_those_cables(self):
+        self.assertNotEqual(self.box(2, 8)["based_on"][0], "fault_on_every_interface")
+
+    def test_enough_of_them_is_not_the_same_as_all_of_them(self):
+        """Three bad cables out of eight is three bad cables. The count alone
+        would call that a shared cause on a box where five interfaces are
+        demonstrably fine - and the five clean ones are the evidence that
+        whatever they all share is working."""
+        self.assertNotEqual(self.box(3, 8)["based_on"][0], "fault_on_every_interface")
+
+    def test_two_bad_leads_are_two_bad_leads(self):
+        """A box with two bad patch leads is a box with two bad patch leads.
+        Three is where coincidence stops being the simpler explanation."""
+        self.assertNotEqual(self.box(2, 2)["based_on"][0], "fault_on_every_interface")
+
+    def test_three_is_enough_when_it_is_all_of_them(self):
+        self.assertEqual(self.box(3, 3)["based_on"][0], "fault_on_every_interface")
+
+    def test_a_single_interface_box_never_reaches_it(self):
+        """One NIC is always "every interface", and saying so would turn the
+        commonest hardware there is into a shared-cause fault."""
+        self.assertNotEqual(self.box(1, 1)["based_on"][0], "fault_on_every_interface")
+
+
+class TestConnectionsKilledByTheOtherEnd(unittest.TestCase):
+    """A well-behaved connection ends with a FIN. A reset on an established one
+    means somebody gave up mid-flight - and the counter records the teardown
+    without saying who sent it."""
+
+    def codes(self, **after):
+        before = {"EstabResets": 0, "OutRsts": 0, "PassiveOpens": 0, "ActiveOpens": 0}
+        m = fresh()
+        kernel_drops(m, before, dict(before, **after))
+        return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_connections_dying_that_this_box_did_not_kill(self):
+        self.assertIn("connections_reset_by_peer",
+                      self.codes(EstabResets=30, OutRsts=2, PassiveOpens=100))
+
+    def test_when_this_box_sent_most_of_them_it_is_not_the_far_end(self):
+        """The inference is the whole finding. Without this guard it would
+        blame the far end for resets this box demonstrably sent itself."""
+        self.assertNotIn("connections_reset_by_peer",
+                         self.codes(EstabResets=30, OutRsts=40, PassiveOpens=100))
+
+    def test_ordinary_abandonment_is_not_reported(self):
+        self.assertNotIn("connections_reset_by_peer",
+                         self.codes(EstabResets=5, OutRsts=1, PassiveOpens=100))
+
+    def test_a_handful_of_connections_is_not_a_rate(self):
+        self.assertNotIn("connections_reset_by_peer",
+                         self.codes(EstabResets=3, OutRsts=0, PassiveOpens=6))
+
+    def test_it_faces_the_other_way_from_the_resets_this_box_sends(self):
+        """One is this box refusing and one is this box being refused. They are
+        the same wire event with opposite owners, so they must not corroborate
+        each other into a confident wrong answer."""
+        self.assertEqual(nd.finding_side("resets_sent_high"), "local")
+        self.assertEqual(nd.finding_side("connections_reset_by_peer"), "upstream")
 
 
 class TestTooHotToMovePackets(unittest.TestCase):
@@ -7105,6 +7304,57 @@ def _(nd):
     nd.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
         {"name": "eth0", "speed_mbps": 1000, "max_mbps": 10000, "duplex": "full",
          "mtu": 1500, "carrier": True}]}
+
+@scenario("no_route_to_target", check_ports=["443"])
+def _(nd): nd.cmd_check_port = lambda h, p, timeout=5: {
+    "ok": False, "cmd": f"tcp {h}:{p}", "reason": "no_route",
+    "error": "Network unreachable - this device has no route"}
+
+@scenario("port_host_unreachable", check_ports=["443"])
+def _(nd): nd.cmd_check_port = lambda h, p, timeout=5: {
+    "ok": False, "cmd": f"tcp {h}:{p}", "reason": "host_unreachable",
+    "error": "Host unreachable - a router reported it cannot reach the host"}
+
+@scenario("connections_reset_by_peer")
+def _(nd): kernel_drops(nd, {"EstabResets": 0, "OutRsts": 0, "PassiveOpens": 0},
+                            {"EstabResets": 30, "OutRsts": 2, "PassiveOpens": 100})
+
+@scenario("fault_on_every_interface")
+def _(nd):
+    ifaces = [dict(name=f"eth{i}", packets=10_000_000, errors=900, drops=0, crc=900,
+                   frame=0, overruns=0, collisions=0, err_ppm=90, coll_ppm=0,
+                   unknown_counters=[], delta_errors=40, delta_drops=0,
+                   delta_packets=2_000, delta_host_errors=0, delta_length_errors=0,
+                   sample_seconds=2, rx_mbps=1, tx_mbps=1, operstate="up",
+                   carrier_changes=0, delta_carrier_changes=0, rate_series=None,
+                   peak_mbps=None, series_seconds=None) for i in range(3)]
+    nd.cmd_link_stats = lambda *a, **k: {"ok": True, "cmd": "s", "stdout": "",
+                                         "interfaces": ifaces, "sample_seconds": 2,
+                                         "source": "sysfs"}
+
+def jittery_sock(peer, local_port, rtt, var, **kw):
+    """One socket whose round trip varies by nearly as much as it lasts.
+
+    minrtt is pulled up to sit just under the smoothed rtt on purpose. Left at
+    the default it is far below, which is a queue - a different finding that
+    ranks above this one and would have made the scenario pass while proving
+    nothing about jitter.
+    """
+    return (sided_sock(peer, local_port, sent=40_000_000, **kw)
+            .replace("rtt:12.4/3.1", f"rtt:{rtt}/{var}")
+            .replace("minrtt:11.9", f"minrtt:{rtt - 1}"))
+
+@scenario("path_jitter_backends")
+def _(nd):
+    # 80ms out to the backend, moving 50ms either way. Nothing is lost - the
+    # retransmit timer is simply sized for the worst of it.
+    sided_flows(nd, jittery_sock("10.0.0.90", "44120", 80.0, 50.0, port="5432"),
+                    jittery_sock("10.0.0.90", "44121", 82.0, 48.0, port="5432"))
+
+@scenario("path_jitter_clients")
+def _(nd):
+    sided_flows(nd, jittery_sock("203.0.113.9", "443", 80.0, 50.0),
+                    jittery_sock("203.0.113.9", "443", 82.0, 48.0))
 
 @scenario("cpu_throttled_live")
 def _(nd): kernel_drops(nd, {"core_throttles": 4, "package_throttles": 4},

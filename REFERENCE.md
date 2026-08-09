@@ -22,7 +22,7 @@ reaches the wrong conclusion:
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 138
+difference is which one it puts at the top, and that is the whole product: 144
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -212,6 +212,84 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## The same fault on every cable
+
+The flow checks have always reasoned this way about peers: loss to one
+destination is that destination, loss to every destination is the local link.
+The same reasoning was missing for the cables. A box with eight NICs all
+reporting errors produced eight findings, and the verdict picked whichever came
+first and blamed **that cable**, at medium confidence, on a box where the cable
+was demonstrably not what they had in common.
+
+`fault_on_every_interface` fires when the same interface-scoped finding covers
+**every active interface**, and there are at least three of them. Both halves
+matter and each rejects what the other lets through:
+
+| | |
+|---|---|
+| three, not two | a box with two bad patch leads is a box with two bad patch leads |
+| all of them, not merely enough | three bad out of eight is three bad cables — and the five clean ones are the evidence that whatever they all share is working |
+
+A single-NIC box can never reach it, which is the point: one interface is
+always "every interface", and saying so would turn the commonest hardware there
+is into a shared-cause fault.
+
+## Why a connect failed
+
+A connect that fails instantly because the kernel has no route, and one that
+fails after waiting because nothing came back, are opposite situations. Both
+landed in the timeout bucket — which describes only the second, and sends the
+reader to the network for a routing table on this box.
+
+| errno | reason | owner |
+|---|---|---|
+| `ENETUNREACH` | `no_route` | **this device's routing table** — nothing reached the wire, so nothing on the network had the chance to fail |
+| `EHOSTUNREACH` | `host_unreachable` | the router that answered — something forwarded partway and reported the destination unreachable from there |
+| `ECONNREFUSED` | `refused` | unchanged |
+| everything else | `timeout` | unchanged |
+
+`no_route_to_target` is critical even when the port came from the `common`
+preset. A preset port asserts nothing about a service, but a missing route is
+this box's own configuration whichever port happened to ask the question.
+
+The mapping names both the platform constant and the Linux number, the way the
+refused branch beside it already did — `ENETUNREACH` is 101 on Linux and 51 on
+BSD.
+
+## Delay that will not sit still
+
+TCP reports its round trip as `rtt:87.5/45.2` — smoothed, then variance. The
+parser took the first number, so the second was dropped on the floor. It is the
+only jitter figure here **measured on the traffic this box actually carries**;
+everything else comes from probes, which a router is free to deprioritise.
+
+It fires at **30ms of variance** *and* **half the round trip**. Both are needed
+and each rejects what the other lets through: the absolute figure alone fires on
+any long path, where tens of milliseconds of movement is ordinary, and the share
+alone fires on a LAN where 0.2ms becomes 0.5ms and nothing is wrong.
+
+Nothing has to be lost for this to bite, which is why it is worth its own
+finding: a retransmit timer sized for the worst case is a timer that waits, so
+recovery stalls and throughput falls while every loss figure in the report stays
+clean. Split by side, because a path to the backends and a path to the users are
+two pieces of equipment with two owners.
+
+## Connections killed by the other end
+
+A well-behaved connection ends with a FIN. A reset on an established one means
+somebody gave up on it mid-flight. The counter records the teardown **without
+saying who sent it** — so this box's own reset count is used as the check: when
+it sent far fewer than the number of connections that died, the rest arrived
+from outside.
+
+That last step is stated as an inference rather than a measurement, because that
+is what it is. A session-tracking firewall timing connections out, a load
+balancer recycling them, and a backend restarting all look identical from here.
+
+It faces **upstream** where `resets_sent_high` faces local — one is this box
+refusing, the other is this box being refused. The same wire event with opposite
+owners, and they must not corroborate each other into a confident wrong answer.
 
 ## What the cause accounts for
 
@@ -767,11 +845,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **138** | Distinct conclusions it can reach and state in plain language. 121 are faults; 17 are context, like which switch port you're on. |
-| **Ranked causes** | **121** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 719 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **144** | Distinct conclusions it can reach and state in plain language. 127 are faults; 17 are context, like which switch port you're on. |
+| **Ranked causes** | **127** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 742 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 138 findings are the useful figure** if you want to know what the tool can
+**The 144 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -886,7 +964,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 719 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 742 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -935,6 +1013,10 @@ can say what the bar was rather than "the tool said so".
 | `CONNTRACK_WARN_PCT` | **80** | how full the connection tracking table gets before it's mentioned |
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
+| `JITTER_MS` | **30.0** | milliseconds of round-trip variance, from TCP's own measurement on the connections this box carries, before the delay is called unstable |
+| `JITTER_SHARE` | **0.5** | and it must be at least this share of the round trip. Both are needed for the same reason as the queue pair below: the absolute figure alone fires on any long path where tens of milliseconds of variance is ordinary, and the share alone fires on a LAN where 0.2ms becomes 0.5ms |
+| `ESTAB_RESET_PCT` | **20** | share of connections that reached ESTABLISHED and were then torn down abruptly rather than closed. Some abandonment is normal, so the line sits where it stops looking like a client walking away |
+| `SHARED_FAULT_INTERFACES` | **3** | interfaces carrying the same fault before it stops being about a cable. Two is a coincidence worth nothing - a box with two bad patch leads is a box with two bad patch leads |
 | `QUEUE_RTT_MULTIPLE` | **2.0** | how far a connection's smoothed round trip must sit above its own lowest-ever before the excess counts as queue rather than distance |
 | `QUEUE_DELAY_MS` | **30.0** | and how many milliseconds of excess. Both are needed: the multiple alone fires on a LAN where 0.2ms becomes 2.2ms, the absolute alone fires on a satellite hop whose 45ms of variance is weather |
 | `FLOW_LOSSY_PCT` | **2.0** | retransmit ratio at which one connection is called lossy |
@@ -2194,7 +2276,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-719 tests, no dependencies, no network, a few seconds — so they run
+742 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2270,7 +2352,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 138 findings with readable rules instead of
+> way out - and who owns it. Ranks 144 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

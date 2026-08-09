@@ -70,8 +70,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("version", help="the new version, e.g. 1.7.0")
-    ap.add_argument("--notes-file", help="markdown for the GitHub Release; "
-                                         "defaults to the release commit body")
+    ap.add_argument("--notes-file", help="markdown for the GitHub Release")
+    ap.add_argument("--message", help="body of the release commit. Defaults to the "
+                                      "first paragraph of --notes-file, because "
+                                      "release notes are markdown written for a "
+                                      "reader and a commit message is neither")
     ap.add_argument("--push", action="store_true",
                     help="push the branch and tag, then publish the Release")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and stop")
@@ -108,7 +111,18 @@ def main():
     notes = ""
     if args.notes_file:
         notes = open(args.notes_file).read()
-    message = f"FaultOne {args.version}\n\n{notes}".rstrip() + "\n"
+    # The Release gets the markdown; the log gets prose. Rendering a page of
+    # bullets and code fences into `git log` helps nobody, and the first
+    # paragraph of any decent set of notes is already the summary.
+    body = args.message
+    if body is None:
+        first = ""
+        for para in notes.split("\n\n"):
+            if para.strip() and not para.lstrip().startswith(("#", "```", "|")):
+                first = " ".join(para.split())
+                break
+        body = re.sub(r"[*`]", "", first)
+    message = f"FaultOne {args.version}\n\n{body}".rstrip() + "\n"
     if args.dry_run:
         print(f"  would commit and tag v{args.version} with:\n")
         for line in message.splitlines():

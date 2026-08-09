@@ -1,4 +1,4 @@
-# FaultOne 1.6 reference
+# FaultOne reference
 
 Everything the tool checks, and how it decides which of those checks is the
 answer. For getting started see the
@@ -11,7 +11,7 @@ does is decide, from the same counters, which fault is the cause and which are
 its consequences — and that decision is where the wrong answer usually comes
 from, because the obvious reading of the evidence is often wrong.
 
-Four cases where a competent engineer, looking at exactly the same numbers,
+Five cases where a competent engineer, looking at exactly the same numbers,
 reaches the wrong conclusion:
 
 | The evidence says | The obvious answer | What the ordering says |
@@ -20,6 +20,7 @@ reaches the wrong conclusion:
 | Every destination is losing traffic | your link is bad | the box's own receive backlog is overflowing — it is too busy, not broken, and the signature is identical |
 | Retransmissions are high | the path is dropping packets | the far end acknowledged data it already had, so the packets arrived — reordering, not loss |
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
+| Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
 difference is which one it puts at the top, and that is the whole product: 144
@@ -844,16 +845,16 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **26** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **144** | Distinct conclusions it can reach and state in plain language. 127 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **127** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 745 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 747 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 144 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
-### The 26 things it inspects
+### The 32 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -884,6 +885,12 @@ end.
 24. Each configured DNS resolver, individually
 25. TCP reachability of specific ports
 26. TLS handshake and certificate on ports that should have one
+27. Bonded interface members, and which of them are down (Linux)
+28. Neighbour table size against its own ceiling (Linux)
+29. CPU thermal throttling counters — times the hardware clocked itself down (Linux)
+30. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
+31. The TLS certificate this box *serves*, read from the outside in
+32. This box's own service, asked over HTTP for an answer rather than a connection
 
 **Derived from the above, not separately collected:** call quality (MOS), the
 site edge and network handoffs, latency deltas and jitter per hop, link
@@ -964,7 +971,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 745 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 747 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -974,7 +981,7 @@ matters rather than hoping your laptop resembles it.
 Every report records the interpreter alongside the tool version:
 
 ```
-FaultOne 1.0.0 - Linux - python 3.11.2 - 2026-08-06T15:16:44-07:00
+FaultOne 1.6.7 - Linux - python 3.11.2 - 2026-08-06T15:16:44-07:00
 ```
 
 so a `--baseline` taken before an upgrade reports "python: 3.9.6 -> 3.11.2"
@@ -987,7 +994,7 @@ carries the version that produced it — in the JSON, at the top of the terminal
 output, and in the badge of a self-contained page:
 
 ```
-FaultOne 1.0.0 - Linux - 2026-08-06T14:58:06-07:00
+FaultOne 1.6.7 - Linux - 2026-08-06T14:58:06-07:00
 ```
 
 That matters most for `--baseline`: comparing this visit against one taken by a
@@ -2276,7 +2283,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-745 tests, no dependencies, no network, a few seconds — so they run
+747 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

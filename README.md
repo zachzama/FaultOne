@@ -1,4 +1,4 @@
-# FaultOne 1.6
+# FaultOne
 
 **144 findings it can reach. One line saying which one to fix first.**
 
@@ -68,13 +68,13 @@ nothing behind:
 ssh -J jump user@box "python3 - --report --quick" < faultone.py
 ```
 
-**On a painfully slow console?** About a fifth of the file is comments and
-docstrings. The standard library will drop them for the trip — no build step,
-no second version to keep in step, same behaviour:
+**On a painfully slow console?** Comments and docstrings are about a quarter of
+the file. The standard library will drop them for the trip — no build step, no
+second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -J jump user@box "python3 - --report" < /tmp/faultone.py    # ~20% fewer bytes
+ssh -J jump user@box "python3 - --report" < /tmp/faultone.py    # ~28% fewer bytes
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
@@ -87,8 +87,8 @@ python3 faultone.py --export report.json   # smaller - drop it on static/index.h
 ```
 
 The `.html` carries the report inside it: double-click and you're looking at the
-findings, the verdict and a hop-by-hop path diagram. The `.json` is about a
-third smaller, so it's the one to paste through a terminal — and it's what
+findings, the verdict and a hop-by-hop path diagram. The `.json` is smaller and
+carries no viewer, so it's the one to paste through a terminal — and it's what
 `--baseline` reads on the next visit.
 
 Either way there's no server, no internet, and nothing installed on either
@@ -115,7 +115,7 @@ decides, from the same counters, which fault is the cause — and that decision 
 where the wrong answer usually comes from, because the obvious reading of the
 evidence is often wrong.
 
-Four cases where a competent engineer, looking at exactly the same numbers,
+Five cases where a competent engineer, looking at exactly the same numbers,
 reaches the wrong conclusion:
 
 | The evidence says | The obvious answer | What the ordering says |
@@ -143,9 +143,18 @@ itself managed to run, names faults it can't explain, and refuses to call
 something loss when the sample can't support it:
 
 ```
-  owner: this device or its cable   confidence: medium (16 of 18 checks ran)
+  owner: capacity, not a fault   confidence: medium (16 of 18 checks ran, 2 explained by it)
+  next: Nothing here is faulty. Either the link is undersized for the traffic
+  or something is consuming more than it should.
+  this also accounts for: inet_partial_loss, call_quality_degraded
   also, unrelated: The certificate on 8.8.8.8:443 expired 40 day(s) ago
 ```
+
+Both halves matter. The line above says the packet loss and the poor call
+quality are **this fault's symptoms** — fix the saturated link and they go with
+it. The line below says the expired certificate is **not**: it will still be
+expired afterwards. Getting that backwards is how a report sends someone to
+their carrier about a fault on their own box.
 
 No model is involved — `VERDICT_RULES` is an ordered list you can read, and
 every verdict cites the findings it came from. [The rules, and the numbers
@@ -179,7 +188,7 @@ directions.
 
 ### What it actually checks
 
-**26 things are inspected**, and **144 distinct conclusions** can come out of
+**32 things are inspected**, and **144 distinct conclusions** can come out of
 them — 127 are faults, 17 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
@@ -189,7 +198,9 @@ drops itself · connection tracking table pressure · link speed, duplex and
 MTU · optical power and alarms on fibre · which switch port you're on
 (LLDP/CDP) · ARP/neighbour table · TCP socket states · TCP retransmission
 counters · per-connection TCP loss and stalls, broken down by destination ·
-clock synchronisation · listening ports · neighbour inventory
+clock synchronisation · CPU thermal throttling · bonded interface members ·
+the neighbour table against its own ceiling · listening ports · neighbour
+inventory
 
 *Serving traffic, if anything is connected:* who is connected and through
 which load balancer · loss and latency on clients' own connections, separately
@@ -241,25 +252,19 @@ of the tool ran.
 gives you "couldn't read the interface list", not "this device has no IP
 address". A false diagnosis is worse than a gap.
 
-## A note on security
+## Security, and the reports
 
 It never opens a port and never listens for anything — there's no server to
-secure. It does run real commands with your privileges, and exported reports
-are written `0600` because they map the site's network, so treat one as
-sensitive when you move it around.
-
-[Full security notes.](REFERENCE.md#security)
-
-## Careful with the reports
+secure. It does run real commands with your privileges.
 
 A report is a **map of the network it was taken on** — internal addressing, MAC
 addresses, switch names, VLANs, resolvers, listening ports. Exports are written
-`0600` for that reason.
-
-Treat one like a network diagram: fine in a ticket, fine with the people who
-own that network, **not** committed to a repository or pasted somewhere
-public. `.gitignore` here covers `report.json` and
+`0600` for that reason. Treat one like a network diagram: fine in a ticket, fine
+with the people who own that network, **not** committed to a repository or
+pasted somewhere public. `.gitignore` here covers `report.json` and
 `report.html`, but it can't know what you named yours.
+
+[Full security notes.](REFERENCE.md#security)
 
 ## Licence
 
@@ -275,7 +280,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 745 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 747 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

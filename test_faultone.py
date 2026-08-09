@@ -5449,7 +5449,7 @@ class TestDocsMatchReality(unittest.TestCase):
             "findings": (len(codes), [r"\*\*(\d+) distinct conclusions", r"(\d+)\s+findings"]),
             "faults": (len(faults), [r"(\d+)\s+are faults"]),
             "ranked causes": (len(nd.VERDICT_RULES), [r"Ranked causes\*\* \| \*\*(\d+)\*\*"]),
-            "collections": (26, [r"\*\*(\d+)\s+things are inspected",
+            "collections": (32, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -5494,6 +5494,76 @@ class TestDocsMatchReality(unittest.TestCase):
             listed = len(re.findall(r"^\d+\. ", section, re.M))
             self.assertEqual(listed, claimed[name],
                              f"{name} says {claimed[name]} inspections and lists {listed}")
+
+    # What each collector is called in the documented list. A map rather than a
+    # count, because the count is the thing that drifted: three collectors were
+    # added over one session and every counting guard stayed green, since they
+    # pin the docs to each other and to a literal in this file rather than to
+    # the code. Adding a collector now fails here until it is written down.
+    #
+    # Several collectors share one entry on purpose - two ping targets are one
+    # kind of inspection - so this maps name to a phrase, not one to one.
+    COLLECTOR_IS_DOCUMENTED_AS = {
+        "cmd_arp": "neighbour table",
+        "cmd_check_port": "TCP reachability of specific ports",
+        "cmd_clock_sync": "Clock synchronisation",
+        "cmd_dns": "DNS resolution",
+        "cmd_dns_health": "Each configured DNS resolver",
+        "cmd_ethtool": "Link speed, duplex and MTU",
+        "cmd_interfaces": "Interfaces and addresses",
+        "cmd_kernel_drops": "Packets this device drops itself",
+        "cmd_kernel_log": "Kernel log",
+        "cmd_link_modes": "Link speed, duplex and MTU",
+        "cmd_link_stats": "Interface error, drop, CRC and collision counters",
+        "cmd_listen_ports": "Listening ports",
+        "cmd_lldp": "LLDP/CDP neighbour",
+        "cmd_mtr": "Hop-by-hop path",
+        "cmd_optics": "Optical module power and alarms",
+        "cmd_own_http": "asked over HTTP for an answer",
+        "cmd_own_tls": "certificate this box *serves*",
+        "cmd_path_mtu": "Path MTU",
+        "cmd_ping": "reachability and loss",
+        "cmd_routes": "Routing table and default gateway",
+        "cmd_socket_states": "TCP socket states",
+        "cmd_tcp_flows": "Per-connection TCP statistics",
+        "cmd_tcp_health": "TCP retransmission counters",
+        "cmd_tls_check": "TLS handshake and certificate on ports",
+        "cmd_tls_check_local": "certificate this box *serves*",
+        "cmd_traceroute": "Hop-by-hop path",
+        "cmd_traceroute_tcp": "TCP-probe path",
+        "_bond_members_linux": "Bonded interface members",
+        "_read_neigh_table": "Neighbour table size against its own ceiling",
+        "_read_thermal_throttle": "CPU thermal throttling counters",
+        "_read_server_limits": "Ephemeral ports, file descriptors",
+        "_read_conntrack": "Connection tracking table",
+    }
+
+    def test_every_collector_appears_in_the_documented_list(self):
+        """A collector nobody wrote down makes the list understate the tool.
+
+        This is what the counting guards could not catch: they pin the two
+        documents to each other and to a number in this file, so three
+        collectors were added across one session and every one of them stayed
+        green while the list quietly described an older tool."""
+        import re
+        with open(nd.__file__) as fh:
+            src = fh.read()
+        collectors = set(re.findall(r"^def (cmd_\w+)", src, re.M))
+        collectors |= {n for n in ("_bond_members_linux", "_read_neigh_table",
+                                   "_read_thermal_throttle", "_read_server_limits",
+                                   "_read_conntrack") if f"def {n}(" in src}
+        undocumented = sorted(collectors - set(self.COLLECTOR_IS_DOCUMENTED_AS))
+        self.assertEqual(undocumented, [],
+                         "collectors with no entry in COLLECTOR_IS_DOCUMENTED_AS")
+        gone = sorted(set(self.COLLECTOR_IS_DOCUMENTED_AS) - collectors)
+        self.assertEqual(gone, [], "the map names collectors that no longer exist")
+
+        ref = dict(self.docs())["REFERENCE.md"]
+        section = ref.split("things it inspects", 1)[1].split("\n## ", 1)[0]
+        missing = sorted(name for name, phrase in self.COLLECTOR_IS_DOCUMENTED_AS.items()
+                         if phrase not in section)
+        self.assertEqual(missing, [],
+                         "collectors whose documented phrase is not in the list")
 
     # Every guard above pins a *count* - findings, tests, collections, flags,
     # thresholds, tools. All of them stayed green while the README drifted into
@@ -5749,6 +5819,44 @@ class TestDocsMatchReality(unittest.TestCase):
         for stage in stages:
             self.assertIn(stage, block, f"the example strip is missing '{stage}'")
 
+    def test_every_verdict_line_the_readme_shows_is_one_the_tool_prints(self):
+        """A worked example is only worth showing if it is what comes out. The
+        labels and their order both matter: the second example had the
+        consequence line above `next:`, which is not where the renderer puts
+        it, and nothing here would have noticed."""
+        readme = dict(self.docs())["README.md"]
+        m = fresh()
+        setup, kw = S["link_saturated"]
+        setup(m)
+        rendered = m.render_text_report(m.diagnose(quick=False, **scenario_kwargs(kw)))
+        self.assertIn("this also accounts for:", rendered)
+
+        # Order is checked against the renderer rather than against one run:
+        # no single scenario prints every line, and the one that does not print
+        # "also, unrelated" would let a wrong order through.
+        with open(nd.__file__) as fh:
+            src = fh.read()
+        body = src.split("def render_text_report", 1)[1]
+        # Read out of the example rather than listed here, so a label the tool
+        # has never printed cannot pass by simply not being on a list I wrote.
+        example = readme.split("owner: capacity", 1)[1].split("```", 1)[0]
+        example = "  owner: capacity" + example
+        labels = re.findall(r"^\s{2}([a-z][a-z, ]*:)", example, re.M)
+        self.assertTrue(labels, "the example has no labelled lines to check")
+        for label in labels:
+            self.assertIn(label, body,
+                          f"the README example shows '{label}' and the renderer "
+                          f"prints no such line")
+        # Sorted by where the README puts them, then checked against where the
+        # renderer emits them. Built the other way round - iterating the list
+        # above - this compared the hardcoded order with itself and passed on
+        # any README whatsoever.
+        shown = sorted((l for l in dict.fromkeys(labels) if l in body),
+                       key=example.index)
+        order = [body.index(l) for l in shown]
+        self.assertEqual(order, sorted(order),
+                         f"the README shows {shown} in an order the renderer does not use")
+
     def test_the_reference_documents_every_flag_that_exists(self):
         """The suite checked docs -> code (no flag documented that isn't real)
         but not code -> docs, so a flag could ship undocumented."""
@@ -5790,12 +5898,24 @@ class TestDocsMatchReality(unittest.TestCase):
                              f"docs quote {sorted(figures)} as runtimes; only the quick "
                              f"run and the full run are timed, so a third number is stale")
 
-    def test_the_version_is_stated_consistently(self):
+    def test_no_document_states_a_version_that_is_not_the_current_one(self):
+        """The titles used to carry the major.minor, pinned here. That was
+        consistent and still read as stale: "FaultOne 1.6" on a 1.6.7 release
+        looks to a new reader like the last release was 1.6. A version in a
+        title is also a thing to remember to bump, and the one place it cannot
+        drift is the code.
+
+        So the titles carry no version, and this asserts the stronger property
+        instead - that nowhere in the docs is a FaultOne version quoted that
+        disagrees with the one in the module."""
+        import re
         for name, text in self.docs():
-            if "FaultOne" in text.split("\n")[0]:
-                major_minor = ".".join(nd.__version__.split(".")[:2])
-                self.assertIn(major_minor, text.split("\n")[0],
-                              f"{name}'s title doesn't match version {nd.__version__}")
+            self.assertNotRegex(text.split("\n")[0], r"FaultOne\s+\d",
+                                f"{name}'s title carries a version, which will go stale")
+            quoted = set(re.findall(r"FaultOne (\d+\.\d+\.\d+)", text))
+            stale = sorted(quoted - {nd.__version__})
+            self.assertEqual(stale, [], f"{name} quotes version(s) {stale}, "
+                                        f"the tool is {nd.__version__}")
 
 
 class TestExitStatus(unittest.TestCase):

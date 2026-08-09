@@ -5530,6 +5530,18 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+# States the kernel reports for an interface. "unknown" is the awkward one and
+# has to count as up: loopback, tun devices and several virtual drivers never
+# call the operstate machinery at all, so they sit at "unknown" while working
+# perfectly. "dormant" is a port waiting on something external - 802.1X
+# authentication, most often - which is not up and is not a failure either.
+UP_OPERSTATES = ("up", "unknown")
+
+
+def _operationally_up(state):
+    return (state or "").strip().lower() in UP_OPERSTATES
+
+
 def _iface_map(report, key):
     ifaces = _dict(_dict(_dict(report).get("raw")).get(key)).get("interfaces")
     return {i["name"]: i for i in (ifaces or []) if isinstance(i, dict) and i.get("name")}
@@ -5603,6 +5615,31 @@ def compare_reports(current, baseline):
         note(f"{iface} duplex", b.get("duplex"), c.get("duplex"),
              "worse" if c.get("duplex") == "half" else "better")
         note(f"{iface} MTU", b.get("mtu"), c.get("mtu"), "worse")
+        # A link that was up on the last visit and is down on this one. The
+        # live checks deliberately say nothing about an interface being down,
+        # because from one visit there is no way to tell a failed link from a
+        # spare NIC nobody ever plugged in - and calling an unused port a fault
+        # is the kind of noise that gets a tool ignored. A baseline settles
+        # that: this one was up when somebody last looked.
+        #
+        # No rate discipline here, unlike the counters below. A link state is
+        # not a share of anything - it changed or it did not - so there is
+        # nothing for a floor to protect against.
+        before_state, after_state = b.get("operstate"), c.get("operstate")
+        if before_state and after_state and before_state != after_state:
+            was_up, now_up = _operationally_up(before_state), _operationally_up(after_state)
+            changes.append({
+                "what": f"{iface} link state", "before": before_state, "after": after_state,
+                "direction": ("worse" if was_up and not now_up
+                              else "better" if now_up and not was_up else "neutral")})
+
+    # An interface that was there last time and is not now. A NIC that has been
+    # renamed, removed, or failed to come back after a reboot is a change of
+    # the same kind as one that went down, and the loop above cannot see it -
+    # it only walks the interfaces both visits have.
+    for iface in sorted(set(base_modes) - set(cur_modes)):
+        changes.append({"what": f"{iface} interface", "before": "present",
+                        "after": "no longer present", "direction": "worse"})
 
     cur_stats, base_stats = _iface_map(current, "link_stats"), _iface_map(baseline, "link_stats")
     for iface in sorted(set(cur_stats) & set(base_stats)):

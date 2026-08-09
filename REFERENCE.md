@@ -318,6 +318,37 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## A link that was up last time
+
+The live checks say nothing about an interface being down, and that is
+deliberate: from a single visit there is no telling a failed link from a spare
+NIC nobody ever plugged in, and calling an unused port a fault is the kind of
+noise that gets a tool ignored.
+
+**A baseline settles it.** This interface was up when somebody last looked, so
+its being down now is a change with a known-good reference behind it — which is
+why mature monitoring systems pin the expected interface state at discovery
+rather than guessing it. The comparison now reports it, along with an interface
+that has gone from the box entirely: renamed, removed, or failed to come back
+after a reboot.
+
+Two details worth stating:
+
+**`unknown` counts as up.** Loopback, tun devices and several virtual drivers
+never call the kernel's operstate machinery at all, so they sit at `unknown`
+while working perfectly. Treating that as down would report every tunnel on the
+box as a regression.
+
+**`lowerlayerdown` is kept as the kernel said it.** That state is the kernel
+naming the cause for us — a VLAN or bridge member whose parent went away —
+and flattening it to "down" would throw away the one word that says where to
+look.
+
+This is the one comparison here with **no rate discipline**, and deliberately.
+A link state is not a share of anything: it changed or it did not, so there is
+nothing for a floor to protect against. Compare with the counters below, where
+the absence of a floor was a real defect.
+
 ## A change is not a fault on its own
 
 `--baseline` reports what moved since a previous visit, and anything that moved
@@ -981,7 +1012,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **149** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 794 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 802 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 149 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1143,7 +1174,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 794 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 802 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2467,7 +2498,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-794 tests, no dependencies, no network, a few seconds — so they run
+802 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

@@ -2555,6 +2555,84 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestALinkThatWasUpLastTime(unittest.TestCase):
+    """The live checks say nothing about an interface being down, because from
+    one visit there is no telling a failed link from a spare NIC nobody ever
+    plugged in. A baseline settles that: this one was up when somebody looked."""
+
+    def rep(self, ifaces):
+        return {"findings": [], "verdict": {}, "target": "8.8.8.8",
+                "raw": {"link_modes": {"interfaces": ifaces},
+                        "link_stats": {"interfaces": [
+                            {"name": i["name"], "packets": 10_000_000, "errors": 0}
+                            for i in ifaces]}}}
+
+    def iface(self, name, operstate, carrier=True, speed=1000):
+        return {"name": name, "speed_mbps": speed, "duplex": "full", "mtu": 1500,
+                "carrier": carrier, "operstate": operstate}
+
+    def change(self, before, after, ending="link state"):
+        got = nd.compare_reports(self.rep(after), self.rep(before))
+        return next((c for c in got if c["what"].endswith(ending)), None)
+
+    def test_a_link_that_went_down_is_a_regression(self):
+        c = self.change([self.iface("eth1", "up")],
+                        [self.iface("eth1", "down", carrier=False)])
+        self.assertEqual((c["before"], c["after"], c["direction"]), ("up", "down", "worse"))
+
+    def test_a_link_that_came_back_is_not(self):
+        c = self.change([self.iface("eth1", "down", carrier=False)],
+                        [self.iface("eth1", "up")])
+        self.assertEqual(c["direction"], "better")
+
+    def test_the_kernel_saying_the_layer_below_is_down_is_kept_as_said(self):
+        """lowerlayerdown is the kernel naming the cause for us - a VLAN or
+        bridge member whose parent went away. Flattening it to "down" would
+        throw away the one word that says where to look."""
+        c = self.change([self.iface("eth1", "up")],
+                        [self.iface("eth1", "lowerlayerdown", carrier=False)])
+        self.assertEqual(c["after"], "lowerlayerdown")
+        self.assertEqual(c["direction"], "worse")
+
+    def test_unknown_counts_as_up(self):
+        """Loopback, tun devices and several virtual drivers never call the
+        operstate machinery, so they sit at "unknown" while working perfectly.
+        Treating that as down would report every tunnel as a regression."""
+        self.assertTrue(nd._operationally_up("unknown"))
+        self.assertTrue(nd._operationally_up("up"))
+        for state in ("down", "lowerlayerdown", "dormant", "notpresent", "testing"):
+            with self.subTest(state=state):
+                self.assertFalse(nd._operationally_up(state))
+
+    def test_a_tunnel_sitting_at_unknown_reports_no_change(self):
+        self.assertIsNone(self.change([self.iface("tun0", "unknown")],
+                                      [self.iface("tun0", "unknown")]))
+
+    def test_an_interface_that_disappeared_is_reported(self):
+        """A NIC renamed, removed, or that failed to come back after a reboot.
+        The per-interface loop cannot see it - that walks the interfaces both
+        visits have in common."""
+        c = self.change([self.iface("eth1", "up"), self.iface("eth2", "up")],
+                        [self.iface("eth1", "up")], ending="interface")
+        self.assertEqual((c["before"], c["after"], c["direction"]),
+                         ("present", "no longer present", "worse"))
+
+    def test_a_new_interface_is_not_a_regression(self):
+        got = nd.compare_reports(
+            self.rep([self.iface("eth1", "up"), self.iface("eth2", "up")]),
+            self.rep([self.iface("eth1", "up")]))
+        self.assertEqual([c for c in got if c["direction"] == "worse"], [])
+
+    def test_a_link_state_change_needs_no_rate_discipline(self):
+        """Unlike the counters, this is not a share of anything - it changed or
+        it did not - so there is nothing for a floor to protect against, and
+        one going down must always count."""
+        c = self.change([self.iface("eth1", "up")],
+                        [self.iface("eth1", "down", carrier=False)])
+        self.assertEqual(c["direction"], "worse")
+        self.assertNotIn("per_million", c)
+
+
 class TestAShareNeedsASample(unittest.TestCase):
     """The defect this file has now been written with three times: a finding
     computes what share of something went wrong and fires on a sample too small

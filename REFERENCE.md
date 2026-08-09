@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 148
+difference is which one it puts at the top, and that is the whole product: 149
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -213,6 +213,43 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
+
+## A tunnel is not a misconfigured wire
+
+`mtu_nonstandard` fires on any interface not at 1500. On a box terminating a
+VPN that is every tunnel it has, because the reduction **is** the header
+overhead of whatever wraps the traffic — and with nothing else wrong, a healthy
+VPN box came back with *"Interface MTU is not the standard 1500"* as its
+verdict, every run.
+
+Interfaces whose names say they are encapsulations — `tun`, `tap`, `utun`,
+`wg`, `ppp`, `ipsec`, `vti`, `gre`, and the branded WireGuard names — now get
+`tunnel_mtu` instead: **context, exempt from the verdict**. Matched on the name
+because that is what the kernel offers; there is no flag in sysfs that says
+"this is a tunnel".
+
+The number is still printed, because it is the number that decides whether
+traffic inside the tunnel fits. Something inside assuming 1500 and sending
+packets that will not fit shows up as large transfers stalling while small ones
+are fine — which is worth knowing, and is not the same as the tunnel being
+misconfigured.
+
+## Why something we serve did not verify
+
+`own_tls_untrusted` checks the certificate this box serves the way a client
+would. OpenSSL reports several quite different situations with one word, and the
+distinction matters most on a box that **re-signs traffic on purpose**:
+
+| what OpenSSL said | what it means |
+|---|---|
+| self signed certificate **in certificate chain** | the chain ends at a root this box does not trust — what a certificate re-signed by a private authority looks like. If this box issues its own, that is it working, and anything never given that root refuses outright |
+| unable to get local issuer certificate | the issuer's certificate was not sent and is not held here — the incomplete chain that works from a machine which already has the intermediate and fails from one that does not |
+| self signed certificate | the leaf signed itself |
+
+Read off the error string rather than by parsing the certificate, which would
+mean the ASN.1 work this file deliberately avoids elsewhere. Both spellings are
+handled — newer OpenSSL hyphenates it — and the leaf error is a substring of the
+chain error, so the order they are tested in is load-bearing.
 
 ## The rest of /proc/net/snmp
 
@@ -918,11 +955,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **148** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Findings** | **149** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 779 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 790 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 148 findings are the useful figure** if you want to know what the tool can
+**The 149 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1082,7 +1119,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 779 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 790 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2404,7 +2441,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-779 tests, no dependencies, no network, a few seconds — so they run
+790 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2480,7 +2517,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 148 findings with readable rules instead of
+> way out - and who owns it. Ranks 149 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

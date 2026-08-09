@@ -1,6 +1,6 @@
 # FaultOne
 
-**148 findings it can reach. One line saying which one to fix first.**
+**149 findings it can reach. One line saying which one to fix first.**
 
 You're SSH'd into a box and something is broken. **Is it this box, the way in,
 or the way out?** FaultOne runs the checks you'd run by hand, then does the part
@@ -202,8 +202,8 @@ directions.
 
 ### What it actually checks
 
-**32 things are inspected**, and **148 distinct conclusions** can come out of
-them — 131 are faults, 17 are context.
+**32 things are inspected**, and **149 distinct conclusions** can come out of
+them — 131 are faults, 18 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -294,7 +294,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 779 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 790 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

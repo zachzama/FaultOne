@@ -1236,6 +1236,36 @@ def cmd_tls_check_local(port, server_name, timeout=5, address="127.0.0.1"):
     return out
 
 
+# Why a certificate this box serves failed to verify. OpenSSL says the same
+# sentence for situations that need different people to do different things, and
+# the distinction matters most on a box that re-signs traffic on purpose: a
+# private root in the chain is that box working, and an absent issuer is a chain
+# it forgot to send. Read off the error string rather than by parsing the
+# certificate, which would mean the ASN.1 work this file deliberately avoids.
+PRIVATE_CA_ERRORS = ("self signed certificate in certificate chain",
+                     "self-signed certificate in certificate chain")
+SELF_SIGNED_ERRORS = ("self signed certificate", "self-signed certificate")
+
+
+def own_cert_trust_note(verify_error):
+    """The sentence that follows "this did not verify", or None."""
+    text = (verify_error or "").lower()
+    if any(e in text for e in PRIVATE_CA_ERRORS):
+        return ("The chain ends at a root this box does not trust, which is what a "
+                "certificate re-signed by a private authority looks like. If this box "
+                "issues its own certificates that is it working, and every client that "
+                "was never given that root - anything unmanaged, and most things that "
+                "are not a browser - refuses the connection outright.")
+    if any(e in text for e in SELF_SIGNED_ERRORS):
+        return ("The certificate signed itself. Fine for something only reached by "
+                "things told to expect it, and refused by everything else.")
+    if "unable to get local issuer" in text:
+        return ("The issuer's own certificate was not sent and is not held here, which "
+                "is the incomplete chain that works from a machine which already has "
+                "the intermediate and fails from one that does not.")
+    return None
+
+
 def _cert_dates(cert, out):
     """notBefore/notAfter off a verified certificate, into `out`.
 
@@ -3371,6 +3401,24 @@ def _finish_link_sample(first, source, sample_seconds, already_waited=False,
 # ---------------------------------------------------------------------------
 
 STANDARD_MTU = 1500
+
+# Interfaces that carry someone else's packets inside this box's packets. A
+# reduced MTU on one of these is not a misconfiguration, it is the header
+# overhead of whatever is wrapping the traffic - and reporting it as a fault
+# meant a healthy VPN box came back with "Interface MTU is not the standard
+# 1500" as its verdict, every single run, because nothing else was wrong.
+#
+# Matched on the name because that is what the kernel gives us: there is no
+# flag in sysfs that says "this is a tunnel". utun is macOS, nordlynx and
+# proton are WireGuard under other names, and the rest are the kernel's own.
+TUNNEL_PREFIXES = ("tun", "tap", "utun", "wg", "ppp", "ipsec", "vti", "gre",
+                   "sit", "gif", "nordlynx", "proton", "wireguard", "ovpn",
+                   "zt", "tailscale", "ts")
+
+
+def is_tunnel(name):
+    """Is this interface an encapsulation rather than a wire?"""
+    return bool(name) and name.lower().startswith(TUNNEL_PREFIXES)
 # IPv4 header (20) + ICMP header (8): the payload that exactly fills an MTU.
 MTU_OVERHEAD = 28
 
@@ -4879,7 +4927,9 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   "dns_local_cache",
                   # Which host the run aimed at and why - provenance for
                   # everything below it, never a fault in itself.
-                  "target_is_a_backend", "target_auto_failed", "target_is_forwarded"}
+                  "target_is_a_backend", "target_auto_failed", "target_is_forwarded",
+                  # A tunnel being smaller than a wire is the tunnel working.
+                  "tunnel_mtu"}
 
 
 # Findings too weak to be evidence for anything else: a count of errors that
@@ -5030,6 +5080,7 @@ _LOCAL_FAULTS = (
     "link_flapping_live", "link_flapping_logged", "nic_reset_logged",
     "optics_alarm", "optics_rx_low", "optics_rx_marginal", "optics_warning",
     "duplex_mismatch", "slow_link", "negotiated_below_capacity", "bond_degraded",
+    "tunnel_mtu",
     "collisions", "link_saturated", "link_busy",
     "neigh_table_full", "neigh_table_near_limit",
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
@@ -6928,7 +6979,23 @@ def _check_link_modes(raw, findings):
             })
 
         mtu = mode.get("mtu")
-        if mtu and mtu != STANDARD_MTU:
+        if mtu and mtu != STANDARD_MTU and is_tunnel(name):
+            # Context, not a fault, and exempt from the verdict. The reader
+            # still sees the number - it is the one that decides whether the
+            # traffic inside the tunnel fits - but a tunnel being smaller than
+            # a wire is the tunnel working.
+            findings.append({
+                "severity": "ok",
+                "code": "tunnel_mtu", "scope": name,
+                "layer": 2,
+                "message": f"{name}: MTU {mtu}, on what looks like a tunnel. Smaller than "
+                           f"{STANDARD_MTU} is expected here - the difference is the header "
+                           f"overhead of whatever is wrapping the traffic. It matters when "
+                           f"something inside the tunnel assumes {STANDARD_MTU} and sends "
+                           f"packets that will not fit, which shows up as large transfers "
+                           f"stalling while small ones are fine.",
+            })
+        elif mtu and mtu != STANDARD_MTU:
             findings.append({
                 "severity": "warning",
                 "code": "mtu_nonstandard", "scope": name,
@@ -7225,7 +7292,8 @@ def _own_tls_findings(res, port, findings):
                        + (f" ({res['verified_as']})" if res.get("verified_as") else "")
                        + ", so an incomplete chain shows up here even though the service "
                          "works from a machine that already trusts the issuer - which is "
-                         "exactly the failure that reaches customers and not you.",
+                         "exactly the failure that reaches customers and not you."
+                       + (" " + (own_cert_trust_note(res.get("verify_error")) or "")).rstrip(),
         })
 
 

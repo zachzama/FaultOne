@@ -2461,6 +2461,96 @@ class TestConnectionsKilledByTheOtherEnd(unittest.TestCase):
         self.assertEqual(nd.finding_side("connections_reset_by_peer"), "upstream")
 
 
+class TestATunnelIsNotAMisconfiguredWire(unittest.TestCase):
+    """A reduced MTU on a tunnel is the header overhead of whatever is wrapping
+    the traffic. Reported as a fault, it made a healthy VPN box come back with
+    "Interface MTU is not the standard 1500" as its verdict, every run, because
+    nothing else was wrong."""
+
+    def box(self, name, mtu):
+        base = {k: 0 for k in ("rx_errors", "tx_errors", "rx_dropped", "tx_dropped",
+                               "rx_crc_errors", "rx_frame_errors", "rx_over_errors",
+                               "collisions", "rx_missed_errors", "rx_length_errors",
+                               "tx_carrier_errors")}
+        base.update(rx_packets=5_000_000, tx_packets=5_000_000, rx_bytes=0, tx_bytes=0,
+                    operstate="up", carrier_changes=0)
+        m = fresh(); m.OS_NAME = "Linux"
+        m._read_link_stats = lambda: ({"eth0": dict(base), name: dict(base)}, "sysfs")
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": 1000, "duplex": "full", "mtu": 1500,
+             "carrier": True},
+            {"name": name, "speed_mbps": None, "duplex": None, "mtu": mtu,
+             "carrier": True}]}
+        return m.diagnose("8.8.8.8", None, quick=False)
+
+    def test_a_healthy_vpn_box_reports_no_fault(self):
+        rep = self.box("tun0", 1420)
+        self.assertEqual(rep["verdict"]["severity"], "ok")
+        codes = [f["code"] for f in rep["findings"]]
+        self.assertIn("tunnel_mtu", codes)
+        self.assertNotIn("mtu_nonstandard", codes)
+
+    def test_the_number_is_still_shown(self):
+        """It is the number that decides whether traffic inside the tunnel
+        fits, so hiding it would be worse than calling it a fault."""
+        rep = self.box("tun0", 1420)
+        note = next(f for f in rep["findings"] if f["code"] == "tunnel_mtu")
+        self.assertIn("1420", note["message"])
+        self.assertEqual(note["severity"], "ok")
+
+    def test_a_real_interface_is_still_reported(self):
+        rep = self.box("eth1", 1400)
+        self.assertIn("mtu_nonstandard", [f["code"] for f in rep["findings"]])
+
+    def test_the_names_a_tunnel_goes_by(self):
+        for name in ("tun0", "tap0", "utun3", "wg0", "ppp0", "ipsec0", "vti1",
+                     "gre1", "nordlynx", "tailscale0"):
+            with self.subTest(name=name):
+                self.assertTrue(nd.is_tunnel(name))
+        for name in ("eth0", "eno1", "enp3s0", "bond0", "br0", "em1"):
+            with self.subTest(name=name):
+                self.assertFalse(nd.is_tunnel(name))
+
+    def test_it_can_never_be_the_verdict(self):
+        self.assertIn("tunnel_mtu", nd.VERDICT_EXEMPT)
+
+
+class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
+    """OpenSSL says the same sentence for situations that need different people
+    to do different things - and the distinction matters most on a box that
+    re-signs traffic on purpose."""
+
+    def test_a_private_root_is_named_as_what_it_is(self):
+        note = nd.own_cert_trust_note("self signed certificate in certificate chain")
+        self.assertIn("private authority", note)
+        self.assertIn("never given that root", note)
+
+    def test_an_absent_issuer_is_an_incomplete_chain(self):
+        note = nd.own_cert_trust_note("unable to get local issuer certificate")
+        self.assertIn("incomplete chain", note)
+
+    def test_a_self_signed_leaf_is_neither(self):
+        self.assertIn("signed itself", nd.own_cert_trust_note("self signed certificate"))
+
+    def test_the_two_self_signed_errors_are_not_confused(self):
+        """OpenSSL says "self signed certificate" for a leaf and "self signed
+        certificate in certificate chain" for a private root, and the first is
+        a substring of the second."""
+        chain = nd.own_cert_trust_note("self signed certificate in certificate chain")
+        leaf = nd.own_cert_trust_note("self signed certificate")
+        self.assertNotEqual(chain, leaf)
+        self.assertIn("private authority", chain)
+
+    def test_both_spellings_are_handled(self):
+        """Newer OpenSSL hyphenates it."""
+        self.assertEqual(nd.own_cert_trust_note("self-signed certificate in certificate chain"),
+                         nd.own_cert_trust_note("self signed certificate in certificate chain"))
+
+    def test_an_unrelated_failure_adds_nothing(self):
+        self.assertIsNone(nd.own_cert_trust_note("certificate has expired"))
+        self.assertIsNone(nd.own_cert_trust_note(None))
+
+
 class TestUdpAndFragments(unittest.TestCase):
     """/proc/net/snmp was already being opened and only the Tcp: line read out
     of it. DNS is UDP, so a box dropping datagrams presented as a resolver
@@ -7812,6 +7902,20 @@ def _(nd):
 def _(nd):
     sided_flows(nd, jittery_sock("203.0.113.9", "443", 80.0, 50.0),
                     jittery_sock("203.0.113.9", "443", 82.0, 48.0))
+
+@scenario("tunnel_mtu")
+def _(nd):
+    nd.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+        {"name": "eth0", "speed_mbps": 1000, "duplex": "full", "mtu": 1500, "carrier": True},
+        {"name": "tun0", "speed_mbps": None, "duplex": None, "mtu": 1420, "carrier": True}]}
+    base = {k: 0 for k in ("rx_errors", "tx_errors", "rx_dropped", "tx_dropped",
+                           "rx_crc_errors", "rx_frame_errors", "rx_over_errors",
+                           "collisions", "rx_missed_errors", "rx_length_errors",
+                           "tx_carrier_errors")}
+    base.update(rx_packets=5_000_000, tx_packets=5_000_000, rx_bytes=0, tx_bytes=0,
+                operstate="up", carrier_changes=0)
+    nd.OS_NAME = "Linux"
+    nd._read_link_stats = lambda: ({"eth0": dict(base), "tun0": dict(base)}, "sysfs")
 
 @scenario("udp_recv_buffer_full")
 def _(nd): kernel_drops(nd, {"udp_InDatagrams": 0, "udp_RcvbufErrors": 0, "udp_InErrors": 0},

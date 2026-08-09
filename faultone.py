@@ -5444,15 +5444,37 @@ def compare_reports(current, baseline):
             continue
         gained = (c.get("errors") or 0) - (b.get("errors") or 0)
         if gained > 0:
+            # A change measured against a baseline still has to be worth
+            # something in its own right. One new error between two visits is
+            # a relative deterioration of infinity and an absolute nothing,
+            # and it used to raise regression_since_baseline every time - so a
+            # healthy box re-checked next week reported that it had got worse.
+            #
+            # The bar is the one the live check already applies to the same
+            # counter: a rate, over enough traffic to be a rate. Below it the
+            # change is still reported, because it did happen and somebody
+            # hunting an intermittent fault wants to see it - just not as a
+            # regression.
+            moved = (c.get("packets") or 0) - (b.get("packets") or 0)
+            ppm = (gained * 1_000_000.0 / moved) if moved else None
+            material = (ppm is not None and ppm >= ERR_PPM_WARN
+                        and moved >= MIN_PACKETS_FOR_RATE)
             changes.append({"what": f"{iface} errors since baseline", "before": b.get("errors"),
-                            "after": c.get("errors"), "direction": "worse",
-                            "delta": gained})
+                            "after": c.get("errors"),
+                            "direction": "worse" if material else "neutral",
+                            "delta": gained,
+                            "per_million": round(ppm, 1) if ppm is not None else None})
 
     cq, bq = current.get("call_quality") or {}, baseline.get("call_quality") or {}
     if (same_target and cq.get("mos") is not None and bq.get("mos") is not None
             and abs(cq["mos"] - bq["mos"]) >= 0.2):
+        # Same rule as the counters above. A score that fell from 4.5 to 4.2
+        # moved in the wrong direction and is still a call nobody would
+        # complain about, so it is reported and not called a regression.
+        fell = cq["mos"] < bq["mos"]
         changes.append({"what": "call quality (MOS)", "before": bq["mos"], "after": cq["mos"],
-                        "direction": "worse" if cq["mos"] < bq["mos"] else "better"})
+                        "direction": ("worse" if fell and cq["mos"] < MOS_WARN
+                                      else "better" if not fell else "neutral")})
 
     def resolver_set(rep):
         return sorted(r["server"] for r in (_dict(_dict(_dict(rep).get("raw")).get("dns_health"))

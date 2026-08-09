@@ -579,11 +579,77 @@ class TestBaselineComparison(unittest.TestCase):
                                    "eth0 link speed")["direction"], "better")
 
     def test_errors_accumulated_since_the_baseline(self):
+        """Errors gained at a rate the live check would report. The fixture
+        moves the packet counter too: errors appearing on an interface that
+        carried nothing between two visits is not a situation a real pair of
+        runs produces, and it was the only thing this asserted."""
         cur = self.report()
         cur["raw"]["link_stats"]["interfaces"][0]["errors"] = 4200
+        cur["raw"]["link_stats"]["interfaces"][0]["packets"] = 1_000_000 + 1000
         c = self.find(nd.compare_reports(cur, self.report()), "eth0 errors since baseline")
         self.assertEqual(c["delta"], 4200)
         self.assertEqual(c["direction"], "worse")
+
+    def test_a_handful_of_new_errors_is_not_a_regression(self):
+        """A change measured against a baseline still has to be worth something
+        on its own. One new error between two visits is a relative
+        deterioration of infinity and an absolute nothing - and it used to
+        raise regression_since_baseline every time, so a healthy box rechecked
+        next week reported that it had got worse."""
+        cur = self.report()
+        cur["raw"]["link_stats"]["interfaces"][0]["errors"] = 1
+        cur["raw"]["link_stats"]["interfaces"][0]["packets"] = 1_000_000_000
+        c = self.find(nd.compare_reports(cur, self.report()), "eth0 errors since baseline")
+        self.assertEqual(c["delta"], 1)
+        self.assertEqual(c["direction"], "neutral", "one error in a billion packets")
+
+    def test_it_is_still_reported_just_not_as_a_regression(self):
+        """Somebody hunting an intermittent fault wants to see it. The rule is
+        about what counts as a deterioration, not about hiding data."""
+        cur = self.report()
+        cur["raw"]["link_stats"]["interfaces"][0]["errors"] = 1
+        cur["raw"]["link_stats"]["interfaces"][0]["packets"] = 1_000_000_000
+        c = self.find(nd.compare_reports(cur, self.report()), "eth0 errors since baseline")
+        self.assertIsNotNone(c)
+        self.assertEqual(c["per_million"], 0.0)
+
+    def test_a_high_rate_over_almost_no_traffic_is_not_a_rate(self):
+        """Five errors in a hundred packets is 50,000 per million, which clears
+        the rate bar comfortably and means nothing: a hundred packets between
+        two visits is not a sample. Both halves of the test are needed, and
+        this is the half the percentage alone lets through."""
+        cur = self.report()
+        cur["raw"]["link_stats"]["interfaces"][0]["errors"] = 5
+        cur["raw"]["link_stats"]["interfaces"][0]["packets"] = 1100
+        c = self.find(nd.compare_reports(cur, self.report()), "eth0 errors since baseline")
+        self.assertGreater(c["per_million"], nd.ERR_PPM_WARN)
+        self.assertEqual(c["direction"], "neutral")
+
+    def test_errors_with_no_traffic_to_judge_them_against_are_not_a_regression(self):
+        """The same discipline as everywhere else here: a sample that cannot
+        support the claim does not get to make it. Without packets moving there
+        is no rate, and no way to say whether the count is a lot."""
+        cur = self.report()
+        cur["raw"]["link_stats"]["interfaces"][0]["errors"] = 4200
+        c = self.find(nd.compare_reports(cur, self.report()), "eth0 errors since baseline")
+        self.assertEqual(c["direction"], "neutral")
+        self.assertIsNone(c["per_million"])
+
+    def test_a_call_score_that_fell_but_is_still_good_is_not_a_regression(self):
+        """4.5 to 4.2 moved the wrong way and is still a call nobody would
+        complain about."""
+        cur, base = self.report(), self.report()
+        base["call_quality"] = {"mos": 4.5}
+        cur["call_quality"] = {"mos": 4.2}
+        self.assertEqual(self.find(nd.compare_reports(cur, base),
+                                   "call quality (MOS)")["direction"], "neutral")
+
+    def test_a_call_score_that_fell_into_trouble_is(self):
+        cur, base = self.report(), self.report()
+        base["call_quality"] = {"mos": 4.2}
+        cur["call_quality"] = {"mos": 3.5}
+        self.assertEqual(self.find(nd.compare_reports(cur, base),
+                                   "call quality (MOS)")["direction"], "worse")
 
     def test_counter_reset_is_reported_as_a_reboot_not_negative_errors(self):
         cur = self.report()

@@ -214,6 +214,35 @@ on ICMP alone — but on a filtered network the honest move is to point
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
 
+## A change is not a fault on its own
+
+`--baseline` reports what moved since a previous visit, and anything that moved
+in the wrong direction raised `regression_since_baseline`. Applied to the error
+counters, that meant **one new error between two visits was a regression** — a
+relative deterioration of infinity and an absolute nothing. A healthy box
+rechecked next week reported that it had got worse, every time.
+
+The live check on the same counter has always been disciplined about this: it
+needs **100 errors per million** across at least **20,000 packets**. The
+comparison had no bar at all. It has the same one now, measured on what moved
+*between* the two visits rather than on lifetime totals.
+
+Both halves are needed and each rejects what the other lets through. Five errors
+in a hundred packets is 50,000 per million and means nothing, because a hundred
+packets is not a sample. One error in a billion packets is a real event and not
+a rate.
+
+The same rule applies to the call score: 4.5 down to 4.2 moved the wrong way and
+is still a call nobody would complain about, so it is reported and not called a
+deterioration. It becomes one when the new score is actually poor.
+
+**Below the bar the change is still reported**, as neutral, with the rate it
+worked out to. The rule is about what counts as a deterioration, not about
+hiding data — somebody hunting an intermittent fault wants to see that two
+errors appeared. And where the packet counter did not move at all there is no
+rate to compute, so nothing is claimed: a sample that cannot support the claim
+does not get to make it, which is the same discipline as everywhere else here.
+
 ## The same fault on every cable
 
 The flow checks have always reasoned this way about peers: loss to one
@@ -848,7 +877,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **144** | Distinct conclusions it can reach and state in plain language. 127 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **127** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 758 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 764 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 144 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1010,7 +1039,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 758 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 764 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2329,7 +2358,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-758 tests, no dependencies, no network, a few seconds — so they run
+764 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

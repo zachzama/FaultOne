@@ -2753,6 +2753,119 @@ class TestADiscardIsNotAnError(unittest.TestCase):
         self.assertIn("link_errors_live", codes)
 
 
+class TestCompactExport(unittest.TestCase):
+    """A full export is mostly captured command output, and on a real box the
+    port probes alone can be half of it. That is the right default and the
+    wrong thing to carry off a locked-down box through a console."""
+
+    def report(self, code="link_saturated"):
+        setup, kw = S[code]
+        m = fresh(); setup(m)
+        return m, m.diagnose(quick=False, **scenario_kwargs(kw))
+
+    def test_everything_the_picture_needs_survives(self):
+        """The point is a smaller report, not a poorer one: the hops, the
+        colours, the layers and the direction panel are all derived and all
+        small, so none of them is what makes an export big."""
+        m, full = self.report()
+        c = m.compact_report(full)
+        for key in ("verdict", "findings", "stages", "sides", "layers", "hops",
+                    "call_quality", "target", "version"):
+            self.assertEqual(c.get(key), full.get(key), f"compact lost {key}")
+
+    def test_the_evidence_behind_a_passing_stage_is_dropped(self):
+        m, full = self.report()
+        c = m.compact_report(full)
+        passing = {s["stage"] for s in full["stages"] if s["state"] == "pass"}
+        self.assertTrue(passing, "the fixture proves nothing if no stage passes")
+        for key in full["raw"]:
+            stage = nd.raw_stage(key)
+            if stage in passing:
+                value = full["raw"][key]
+                # Not every raw entry is a command result - "ipv4" is a bool.
+                if not isinstance(value, dict) or value.get("ok", True):
+                    self.assertNotIn(key, c["raw"],
+                                     f"{key} backs the passing '{stage}' stage")
+
+    def test_the_evidence_behind_a_failing_stage_is_kept(self):
+        m, full = self.report()
+        c = m.compact_report(full)
+        broken = {s["stage"] for s in full["stages"] if s["state"] in ("fail", "warn")}
+        self.assertTrue(broken, "the fixture proves nothing if nothing is broken")
+        kept = {nd.RAW_STAGE.get(k) for k in c["raw"]}
+        self.assertTrue(broken & kept, "no evidence kept for the stages that failed")
+
+    def test_a_check_that_could_not_run_is_always_kept(self):
+        """A gap in coverage has to stay visible. Dropped, it would look
+        exactly like a check that passed - which is the one thing this tool
+        must never say."""
+        m, full = self.report()
+        full["raw"]["dns_health"] = {"ok": False, "error": "no resolvers readable"}
+        c = m.compact_report(full)
+        self.assertIn("dns_health", c["raw"])
+
+    def test_evidence_that_belongs_to_no_stage_always_survives(self):
+        """The clock is deliberately not a stage - it breaks authentication and
+        certificate validity rather than the wire, which the strip does not
+        model. Trimming by stage alone would drop the evidence for a finding
+        that can still be the verdict, and the run's own provenance with it."""
+        m, full = self.report()
+        c = m.compact_report(full)
+        stageless = [k for k in full["raw"] if nd.raw_stage(k) is None]
+        self.assertTrue(stageless, "the fixture proves nothing without a stageless key")
+        for key in stageless:
+            self.assertIn(key, c["raw"], f"{key} belongs to no stage and was dropped")
+
+    def test_the_help_text_is_trimmed_to_the_panels_that_remain(self):
+        m, full = self.report()
+        c = m.compact_report(full)
+        self.assertTrue(set(c["panel_help"]) <= set(c["raw"]))
+
+    def test_it_says_that_it_is_compact(self):
+        """A reader opening one months later has to be able to tell why a
+        panel is missing, and a baseline comparison should not read a trimmed
+        report as a box that stopped collecting things."""
+        m, full = self.report()
+        self.assertTrue(m.compact_report(full)["compact"])
+        self.assertNotIn("compact", full)
+
+    def test_every_raw_key_a_run_produces_has_a_stage(self):
+        """A key the map has never heard of is kept, which is the safe way to
+        be wrong - but it is still wrong, and it means a new collector silently
+        stops being trimmed."""
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            unknown = sorted(k for k in (rep.get("raw") or {})
+                             if k not in nd.RAW_STAGE
+                             and not any(k.startswith(p) for p, _ in nd.RAW_STAGE_PREFIXES))
+            self.assertEqual(unknown, [], f"{code}: raw keys with no stage: {unknown}")
+
+    def test_every_stage_named_in_the_map_is_a_real_stage(self):
+        stages = {s for s, _f, _w in nd.STAGE_RULES}
+        named = {v for v in nd.RAW_STAGE.values() if v is not None}
+        self.assertEqual(sorted(named - stages), [])
+
+    def test_it_is_smaller(self):
+        import json
+        m, full = self.report()
+        c = m.compact_report(full)
+        self.assertLess(len(json.dumps(c)), len(json.dumps(full)))
+
+    def test_the_page_it_writes_still_carries_a_readable_report(self):
+        m, full = self.report()
+        page = m.render_report_html(m.compact_report(full))
+        back = m.extract_embedded_report(page)
+        self.assertIsNotNone(back)
+        self.assertTrue(back["compact"])
+        self.assertEqual(back["verdict"]["headline"], full["verdict"]["headline"])
+        self.assertEqual(len(back["hops"]), len(full["hops"]))
+
+
 class TestTheSmallFileReader(unittest.TestCase):
     """Three readers had written this out as their own closure. The int-reading
     variants beside it are deliberately not folded in - they differ in what a

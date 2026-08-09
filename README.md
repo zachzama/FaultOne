@@ -91,10 +91,23 @@ findings, the verdict and a hop-by-hop path diagram. The `.json` is smaller and
 carries no viewer, so it's the one to paste through a terminal — and it's what
 `--baseline` reads on the next visit.
 
+**Getting it back off a box you can barely reach?** Most of an export is the
+captured output of every command, kept so a conclusion can be audited later.
+`--export-compact` leaves the evidence for everything that *passed* on the box:
+
+```bash
+python3 faultone.py --export-compact report.json    # ~5 KB instead of ~120 KB
+```
+
+Same verdict, same findings, same hop diagram, same stage strip — all of that is
+derived and none of it is what makes an export big. What's kept is the evidence
+behind the stages that aren't passing, plus any check that couldn't run, because
+a gap in coverage has to stay visible or it reads as a pass.
+
 Either way there's no server, no internet, and nothing installed on either
 machine.
 
-## Seven flags worth knowing
+## Eight flags worth knowing
 
 | | |
 |---|---|
@@ -105,6 +118,7 @@ machine.
 | `--baseline old.json` | Compares against a previous visit and tells you what changed. |
 | `--check-ports common` | Checks 22, 53, 80, 443, 8080 without typing them out. |
 | `--inventory` | Lists the neighbours this device already knows. Passive — nothing is probed. |
+| `--export-compact` | An export without the evidence behind the checks that passed. Around a twentieth of the size, same picture. |
 
 [Every flag is listed here.](REFERENCE.md#every-flag)
 
@@ -280,7 +294,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 747 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 758 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

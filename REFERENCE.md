@@ -848,7 +848,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **144** | Distinct conclusions it can reach and state in plain language. 127 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **127** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 747 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 758 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 144 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -917,8 +917,47 @@ utilization, and the comparison against a `--baseline`.
 --export FILE            write a report; a .html name gives a single
                          self-contained page, any other name gives JSON.
                          Use - for stdout
+--export-compact FILE    the same, without the captured output behind the
+                         checks that passed. Same verdict, findings, hop
+                         diagram and stage strip
 --emit-viewer [FILE]     write the standalone viewer (default static/index.html)
 ```
+
+### `--export-compact`
+
+A full export is mostly captured command output — on a real box the port
+probes alone can be half of it — and all of it is kept so a conclusion can be
+audited months later. That is the right default, and the wrong thing to carry
+off a locked-down box through a console.
+
+`--export-compact` writes the same report with the evidence behind everything
+that passed left on the box:
+
+```
+--export           119,237 bytes
+--export-compact     5,027 bytes      the same run, 96% smaller
+```
+
+Nothing the picture needs is lost, because none of it is what makes an export
+big. The verdict, the findings, the stage strip, the hop-by-hop path, the
+direction panel and the call-quality figures are all **derived** — they total a
+couple of kilobytes, and they are what you look at. What goes is the raw
+material behind the checks that were fine.
+
+Two things are always kept:
+
+| | |
+|---|---|
+| evidence for a stage that is **not passing** | it is the reason the report exists |
+| a check that **could not run** | a gap in coverage has to stay visible — dropped, it would look exactly like a check that passed |
+
+The report is marked `"compact": true`, so a reader months later can tell why a
+panel is missing, and a `--baseline` comparison does not read a trimmed report
+as a box that stopped collecting things.
+
+It is a separate flag rather than a mode of `--export` on purpose: the full
+export is the auditable one, and the one you would want if the verdict is ever
+disputed.
 
 Exit status follows the monitoring-plugin convention, so it drops into a
 scheduled check without anything parsing its output:
@@ -971,7 +1010,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 747 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 758 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2290,7 +2329,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-747 tests, no dependencies, no network, a few seconds — so they run
+758 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

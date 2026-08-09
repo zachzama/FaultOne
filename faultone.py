@@ -5126,6 +5126,91 @@ STAGE_RULES = [
 ]
 
 
+# Which stage of the chain each captured command belongs to. The compact
+# export keeps the evidence behind the stages that are not passing and drops
+# the rest, and this is how it knows which is which.
+#
+# A key with no stage - the clock, and the run's own provenance - is always
+# kept. It is a short list of small things, and dropping evidence because
+# nothing here could classify it would be the wrong way round.
+RAW_STAGE = {
+    "interfaces": "link", "link_stats": "link", "link_modes": "link",
+    "bonds": "link", "kernel_log": "link", "kernel_drops": "link",
+    "lldp": "link", "optics": "link",
+    "ipv4": "address", "routes": "address", "arp": "address",
+    "neigh_table": "address",
+    "ping_gateway": "gateway",
+    "ping_internet": "internet", "path_trace": "internet",
+    "tcp_flows": "internet", "tcp_health": "internet",
+    # The fallback when ping is filtered: reaching the target the way an
+    # application would, before calling a site's uplink down.
+    "reachability_tcp": "internet",
+    # Kept when the TCP path is used instead, so both attempts are on record.
+    "path_trace_icmp": "internet",
+    "path_mtu": "mtu",
+    "dns_lookup": "dns", "dns_health": "dns",
+    "sockets": "ports", "ports": "ports",
+    # This box's own service and the certificate it serves, both read from the
+    # outside in. They belong to the ports stage for the same reason the port
+    # checks do: they answer whether what is listening here actually works.
+    "own_service": "ports", "own_tls": "ports",
+    # Not a stage of the chain, and deliberately so - see _check_clock.
+    "clock": None,
+    # Provenance for everything else, and a few bytes each.
+    "target": None, "target_kind": None,
+}
+
+# One raw entry per checked port, named for the port, so it cannot be a key in
+# the map above. On a run with --check-ports common these are the largest thing
+# in the export by a wide margin.
+RAW_STAGE_PREFIXES = (("port_", "ports"), ("tls_", "ports"))
+
+
+def raw_stage(key):
+    """Which stage a captured command belongs to, or None if it belongs to no
+    stage and must therefore always be kept."""
+    if key in RAW_STAGE:
+        return RAW_STAGE[key]
+    for prefix, stage in RAW_STAGE_PREFIXES:
+        if key.startswith(prefix):
+            return stage
+    return None
+
+
+def compact_report(report):
+    """The same report with the evidence for everything that passed removed.
+
+    A full export is mostly captured command output - on a real box the port
+    probes alone can be half of it - and all of it is kept so a conclusion can
+    be audited later. That is the right default and the wrong thing to carry
+    off a locked-down box through a console, which is the case this tool was
+    written for.
+
+    What survives is everything the report *concluded*: the verdict, the
+    findings, the stage strip, the hop-by-hop path, the direction panel, call
+    quality. All of it is derived and all of it is small, so the picture is
+    the same one - the hops, the colours, the layers - with the raw material
+    behind the parts that were fine left on the box.
+
+    Evidence is kept when its stage is not passing, and when a check could not
+    run at all: a gap in coverage is a thing the reader has to be able to see,
+    and a missing panel would look like a check that passed.
+    """
+    slim = {k: v for k, v in report.items() if k not in ("raw", "panel_help")}
+    state = {s["stage"]: s["state"] for s in report.get("stages") or []}
+    keep = {}
+    for key, value in (report.get("raw") or {}).items():
+        stage = raw_stage(key)
+        ran = not isinstance(value, dict) or value.get("ok", True)
+        if stage is None or state.get(stage) in ("fail", "warn") or not ran:
+            keep[key] = value
+    slim["raw"] = keep
+    help_text = report.get("panel_help") or {}
+    slim["panel_help"] = {k: v for k, v in help_text.items() if k in keep}
+    slim["compact"] = True
+    return slim
+
+
 def build_stages(findings, raw=None, checked_ports=False, quick=False):
     """Reduce the findings to pass/warn/fail per stage of the chain."""
     raw = raw or {}
@@ -10629,6 +10714,14 @@ def build_parser():
                           "name gives a single self-contained page that opens in a browser; any "
                           "other name gives JSON, which is smaller to paste and is what "
                           "--baseline reads. Use - for stdout")
+    ap.add_argument("--export-compact", metavar="FILE",
+                     help="like --export, without the captured command output behind "
+                          "the checks that passed. Same verdict, findings, hop diagram "
+                          "and stage strip - on a healthy box it is around a "
+                          "twentieth of the size, which is the difference between "
+                          "pasting a report off a console and not. Evidence is kept "
+                          "for stages that are not passing, and for checks that could "
+                          "not run at all")
     ap.add_argument("--target", default="auto",
                      help="host to ping/traceroute for the full diagnosis. Default 'auto': on "
                           "a box that accepts connections this picks the backend it has "
@@ -10654,7 +10747,13 @@ def main():
               f"({len(VIEWER_TEMPLATE):,} bytes). Open it and drop a report.json on it.")
         return
 
-    if args.export or args.report:
+    # One path for both, so a compact export cannot drift into behaving
+    # differently from a full one. Only what gets written differs.
+    if args.export and args.export_compact:
+        print("Use --export or --export-compact, not both.", file=sys.stderr)
+        raise SystemExit(EXIT_UNKNOWN)
+    export_path = args.export or args.export_compact
+    if export_path or args.report:
         if args.target.strip().lower() != "auto" and not valid_target(args.target):
             print(f"Invalid --target: {args.target!r}", file=sys.stderr)
             raise SystemExit(EXIT_UNKNOWN)
@@ -10696,10 +10795,14 @@ def main():
 
         # With --export -, the JSON owns stdout so it can be piped or pasted
         # cleanly; everything human-readable goes to stderr instead.
-        to_stdout = args.export == "-"
+        to_stdout = export_path == "-"
         msg = sys.stderr if to_stdout else sys.stdout
 
-        wants_html = bool(args.export) and args.export.lower().endswith((".html", ".htm"))
+        wants_html = bool(export_path) and export_path.lower().endswith((".html", ".htm"))
+        # The report that gets written. The one printed to the terminal is
+        # always the full one - the reader is already on the box, so there is
+        # nothing to save by showing them less.
+        written = compact_report(report) if args.export_compact else report
         # A diagnosis that can't be written must not be a diagnosis that is
         # lost. The run has already happened - seven seconds, or two minutes
         # under --soak, on a box someone had to reach - so a full disk or a
@@ -10707,24 +10810,24 @@ def main():
         # write failed. Exit 3, because the check ran and could not deliver,
         # which is not the same as a warning about the network.
         export_error = None
-        if args.export:
+        if export_path:
             if to_stdout:
                 if wants_html:
-                    sys.stdout.write(render_report_html(report))
+                    sys.stdout.write(render_report_html(written))
                 else:
-                    json.dump(json_safe(report), sys.stdout, indent=2)
+                    json.dump(json_safe(written), sys.stdout, indent=2)
                     sys.stdout.write("\n")
             else:
                 try:
                     # 0600: the report contains internal addressing, MAC
                     # addresses and listening ports - not for other users of a
                     # shared box.
-                    fd = os.open(args.export, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    fd = os.open(export_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     with os.fdopen(fd, "w") as f:
                         if wants_html:
-                            f.write(render_report_html(report))
+                            f.write(render_report_html(written))
                         else:
-                            json.dump(json_safe(report), f, indent=2)
+                            json.dump(json_safe(written), f, indent=2)
                 except OSError as e:
                     export_error = e
 
@@ -10735,14 +10838,17 @@ def main():
             print(render_text_report(report, color=use_color(msg)), file=msg)
 
         if export_error:
-            print(f"\nCould not write {args.export}: {export_error}. The report is above.",
+            print(f"\nCould not write {export_path}: {export_error}. The report is above.",
                   file=sys.stderr)
             raise SystemExit(EXIT_UNKNOWN)
 
-        if args.export and not to_stdout:
+        if export_path and not to_stdout:
             crit = sum(1 for x in report["findings"] if x["severity"] == "critical")
             warn = sum(1 for x in report["findings"] if x["severity"] == "warning")
-            print(f"Wrote report to {args.export} ({crit} critical, {warn} warning finding(s)).",
+            size = os.path.getsize(export_path) if os.path.exists(export_path) else 0
+            kind = "compact report" if args.export_compact else "report"
+            print(f"Wrote {kind} to {export_path} ({size:,} bytes, "
+                  f"{crit} critical, {warn} warning finding(s)).",
                   file=msg)
             if not args.report:
                 # --report already printed this; don't say it twice.

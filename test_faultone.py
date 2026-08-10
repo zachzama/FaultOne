@@ -7739,21 +7739,75 @@ class TestViewerTemplate(unittest.TestCase):
         had been written rather than the colours the page draws. Declaring
         every colour in a :root block is what makes those tests complete.
 
-        Hex only. The rgba() shadows are deliberately left out: they tint a
-        drop shadow rather than carry text or state, the light palette restates
-        the one that would read wrong on white, and requiring a token for each
-        would add noise without adding a reader who can see something."""
+        Shadows are exempt and nothing else is. The first version of this guard
+        matched hex only and justified the gap by saying the rgba() values were
+        all shadows - they were not. One of them was the wash on the zone that
+        says which direction is broken, and skipping it on that reasoning left
+        the panel this test most needed to cover outside it. What decides is
+        the property being set, not how the colour was spelled."""
         import re
         css = nd.VIEWER_TEMPLATE.split("<style", 1)[1].split("</style>", 1)[0]
         outside = re.sub(r":root\{[^}]*\}", "", css)
+        literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(")
         stray = {}
         for m in re.finditer(r"\n\s*([^{\n]+)\{([^}]*)\}", outside):
-            for colour in re.findall(r"#[0-9a-fA-F]{3,8}\b", m.group(2)):
-                stray.setdefault(colour, set()).add(m.group(1).strip())
+            for decl in m.group(2).split(";"):
+                prop, _, value = decl.partition(":")
+                if prop.strip().endswith("shadow"):
+                    continue
+                for colour in literal.findall(value):
+                    stray.setdefault(colour, set()).add(m.group(1).strip())
         self.assertEqual(
             stray, {},
             "colours written outside a palette cannot follow one: "
             + "; ".join(f"{c} in {sorted(s)}" for c, s in sorted(stray.items())))
+
+    def test_the_broken_direction_is_the_loudest_zone(self):
+        """The zones answer one question - which way is broken - and the
+        failing one has to be the one the eye lands on. Setting a
+        semi-transparent background replaces the card's own rather than washing
+        over it, so the tint composited against the page instead and the
+        failing zone came out darker than the passing ones on a dark ground:
+        the answer rendered quieter than the things that were fine."""
+        import re
+        template = nd.VIEWER_TEMPLATE
+        rule = template.split(".zone.fail{", 1)[1].split("}", 1)[0]
+        m = re.search(r"color-mix\(in srgb, var\(--crit\) (\d+)%, var\((--panel[-0-9]*)\)\)",
+                      rule)
+        self.assertTrue(m, "the failing zone is not washed over a named surface")
+        surface = m.group(2)
+        self.assertLess(rule.index(f"background:var({surface})"),
+                        rule.index("background:color-mix"),
+                        "the fallback has to come before the color-mix line")
+        pct = int(m.group(1)) / 100
+
+        def ch(h):
+            h = h.lstrip("#")
+            return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+
+        def lum(c):
+            def f(v):
+                v /= 255
+                return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+            r, g, b = (f(x) for x in c)
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+        for palette, block in (("dark", template),
+                               ("light", template.split(
+                                   "@media (prefers-color-scheme: light){", 1)[1])):
+            card = self._css_var(block, surface) or self._css_var(template, surface)
+            crit = self._css_var(block, "--crit") or self._css_var(template, "--crit")
+            dim = (self._css_var(block, "--text-dim-lift")
+                   or self._css_var(template, "--text-dim-lift"))
+            washed = [a * pct + b * (1 - pct) for a, b in zip(ch(crit), ch(card))]
+            with self.subTest(palette=palette):
+                self.assertNotAlmostEqual(
+                    lum(washed), lum(ch(card)), places=3,
+                    msg="the failing zone is indistinguishable from a passing one")
+                hexed = "#" + "".join(f"{round(x):02x}" for x in washed)
+                self.assertGreaterEqual(
+                    self._contrast(dim, hexed), 4.5,
+                    "the reason the zone gives is unreadable on its own wash")
 
     def test_the_light_palette_is_readable_too(self):
         """The page now follows the reader's system setting, which means half

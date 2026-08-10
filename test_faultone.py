@@ -7497,11 +7497,68 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         inbound = template.split('<div class="inbound-title">', 1)[1].split("</div>`", 1)[0]
         self.assertNotIn("worst_loss_pct >=", inbound,
                          "the inbound node still judges for itself")
-        self.assertIn("clientSeverity(data)", inbound)
+        self.assertIn("sideSeverity(data, 'downstream')", inbound)
         # The readings stay - they are measurements, not a verdict.
         self.assertIn("worst_loss_pct", inbound)
-        fn = template.split("function clientSeverity(data){", 1)[1].split("\n}", 1)[0]
-        self.assertIn("s.side === 'downstream'", fn)
+        fn = template.split("function sideSeverity(data, side){", 1)[1].split("\n}", 1)[0]
+        self.assertIn("s.side === side", fn)
+
+    def test_this_device_is_coloured_by_the_conclusion_about_it(self):
+        """The first node of the path was given ok outright, so a box with a
+        failing transceiver in it was drawn clean directly under a panel saying
+        the fault was the box. Fifty five of the hundred and fifty two reports
+        mark the local side, and every one of them disagreed with the picture
+        beneath it."""
+        template = nd.VIEWER_TEMPLATE
+        node = template.split("const nodes = [", 1)[1].split("]", 1)[0]
+        self.assertNotIn("sev:'ok'", node.replace(" ", ""),
+                         "this device is drawn clean whatever the report says")
+        self.assertIn("sideSeverity(data, 'local')", node)
+
+    def test_the_destination_is_drawn_once(self):
+        """A target node was appended after every hop, and in a hundred and
+        forty eight of the hundred and fifty two reports the last hop already
+        was the target - so the address appeared twice in a row, and the second
+        copy carried a hardcoded ok. On the reports where the destination had
+        just been marked, it was redrawn as fine directly beside itself, which
+        is the same contradiction one node further along."""
+        template = nd.VIEWER_TEMPLATE
+        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("indexOf('target')", chain,
+                      "the destination node is appended without asking whether "
+                      "the trace already drew it")
+        pushed = chain.split("nodes.push({label:'target'", 1)[1].split("}", 1)[0]
+        self.assertIn("sev: ''", pushed,
+                      "a destination the trace never reached is drawn clean")
+
+    def test_a_destination_the_trace_never_reached_says_so(self):
+        """Drawing it neutral is only half the sentence. Four reports stop
+        short of the target, and there the node is the one thing standing for a
+        destination nothing observed - unlabelled, it reads as a hop with
+        nothing interesting about it."""
+        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
+                                  .split("\nfunction ", 1)[0]
+        pushed = chain.split("nodes.push({label:'target'", 1)[1].split("});", 1)[0]
+        self.assertIn("not reached by the trace", pushed)
+
+    def test_no_leg_of_the_picture_decides_its_own_severity(self):
+        """Three legs, and all three had reached their own conclusion: the way
+        out from the trace's replies, the way in from client loss, and this box
+        from nothing at all. Each was a second derivation sitting under a panel
+        that had already decided, and each disagreed with it. The general form
+        is the guard - a severity written as a literal into a node is the shape
+        every one of them had."""
+        import re
+        template = nd.VIEWER_TEMPLATE
+        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
+        inbound = template.split('<div class="inbound-title">', 1)[1].split("</div>`", 1)[0]
+        for name, block in (("the path", chain), ("the way in", inbound)):
+            with self.subTest(leg=name):
+                self.assertEqual(
+                    re.findall(r"sev\w*\s*:\s*'(ok|warn|crit)'", block), [],
+                    f"{name} writes a severity in rather than asking for one")
+                self.assertNotIn("? 'crit'", block,
+                                 f"{name} is judging for itself again")
 
     def test_every_state_a_side_can_report_has_a_colour(self):
         """The mapping is only safe while it is complete. A state with no entry
@@ -7830,12 +7887,13 @@ class TestViewerTemplate(unittest.TestCase):
                             # The fallback lives here, not in the map above, so
                             # a class the map never contains can still reach
                             # the page through it.
-                            ("function clientSeverity(data){", "\n}")):
+                            ("function sideSeverity(data, side){", "\n}")):
             body = template.split(src, 1)[1].split(closer, 1)[0]
             produced |= set(re.findall(r"'([a-z]+)'", body))
-        # Words quoted in these bodies that are not class names: the severity
-        # being compared against, and the side being looked up.
-        produced -= {"critical", "downstream"}
+        # The one word quoted in these bodies that is not a class name: the
+        # severity being compared against. The side is a parameter now, so no
+        # side name appears here to be excluded.
+        produced -= {"critical"}
         self.assertEqual(
             produced, {"ok", "warn", "crit"},
             f"the chains produce {sorted(produced)}, and the fade only knows warn/crit")

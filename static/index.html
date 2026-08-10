@@ -678,17 +678,22 @@ function hopSeverity(h, probes){
   return 'ok';
 }
 
-// The way in, coloured by what the report concluded about it rather than by
-// re-reading one counter. The node keyed on client loss alone, so a direction
-// marked degraded for jitter or for queuing delay - neither of which is loss -
-// drew green here while the zone beside it read DEGRADED. The zone is the
-// conclusion about this direction and this is the picture of it; thresholds in
-// the picture are a second copy of the ones in the analysis, and two copies of
-// a threshold are two chances to disagree. The measured loss and rtt stay in
-// the node's own line, where they are readings rather than a judgement.
+// A leg of the picture, coloured by what the report concluded about that
+// direction rather than by re-reading a counter underneath it. Both ends were
+// deciding for themselves and both were wrong in the same way: the way in
+// scored itself on client loss, so a direction marked degraded for jitter or
+// queuing delay - neither of which is loss - drew green beside a zone reading
+// DEGRADED; and this device was given ok outright, so a box with a failing
+// transceiver in it was drawn clean under a panel saying the fault was the box.
+//
+// The zone is the conclusion about a direction and these are the picture of
+// it. Thresholds in the picture are a second copy of the ones in the analysis,
+// and two copies of a threshold are two chances to disagree. The measured loss
+// and rtt stay on the node's own line, where they are readings rather than a
+// judgement.
 const ZONE_SEV = {pass: 'ok', warn: 'warn', fail: 'crit', skip: 'ok'};
-function clientSeverity(data){
-  const z = (data.sides || []).find(s => s.side === 'downstream');
+function sideSeverity(data, side){
+  const z = (data.sides || []).find(s => s.side === side);
   return ZONE_SEV[z && z.state] || 'ok';
 }
 
@@ -729,7 +734,8 @@ function renderHopChain(data){
   // summary is escaped at render; nets/hops come from the report file
   const summary = summaryParts.join(' · ');
 
-  const nodes = [{label:'source', sub:'this device', sev:'ok'}];
+  const nodes = [{label:'source', sub:'this device',
+                  sev: sideSeverity(data, 'local')}];
   hops.forEach(h => {
     const avg = h.avg_ms != null ? h.avg_ms : avgMs(h.times_ms);
     // zone: inside the site vs out on the provider's network
@@ -749,7 +755,18 @@ function renderHopChain(data){
       cgnat: !!h.cgnat,
     });
   });
-  nodes.push({label:'target', sub: data.target || '', sev:'ok'});
+  // The destination, drawn once. When the trace reached it the last hop IS the
+  // target, and appending a second node put the same address on the page twice
+  // - the second copy carrying a hardcoded ok, so a target the report had just
+  // marked was redrawn as fine immediately beside itself. It is added only
+  // where the trace stopped short, and there it is drawn neutral rather than
+  // clean: nothing here observed that destination, and not reached is not the
+  // same as fine.
+  const lastHop = hops[hops.length - 1];
+  if(!(lastHop && (lastHop.roles || []).indexOf('target') !== -1)){
+    nodes.push({label:'target', sub: data.target || '', sev: '',
+                meta: 'not reached by the trace'});
+  }
 
   // The other direction, as far as it can honestly be drawn: one hop. A
   // traceroute goes one way, and nothing here can observe the route a client's
@@ -762,7 +779,7 @@ function renderHopChain(data){
     <div class="inbound">
       <div class="inbound-title">clients in — measured on their own connections, not probed</div>
       <div class="hop-chain">
-        <div class="hop-node ${clientSeverity(data)}">
+        <div class="hop-node ${sideSeverity(data, 'downstream')}">
           <div class="hop-label">clients${cin.via ? ' · via ' + escapeHtml(cin.via) : ''}</div>
           <div class="hop-sub">${cin.connections} connection${cin.connections === 1 ? '' : 's'}</div>
           <div class="hop-meta">${[cin.rtt_ms != null ? cin.rtt_ms + 'ms rtt' : '',

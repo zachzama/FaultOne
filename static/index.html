@@ -329,6 +329,25 @@
     margin-top:8px; line-height:1.5;
   }
 
+  /* Five groups, each with a rail down its side. Headings alone mark where a
+     group begins and say nothing about where it ends, which left the path
+     heading reading as though it floated between the direction zones above it
+     and the findings below. The rail shows extent, and does it without a
+     fourth frame - the zones and the findings are already cards, and a
+     container around cards is a box inside a box inside a box.
+
+     The answer has no rail: it is the one group that is a single object, and
+     the verdict is already the loudest thing on the page.
+
+     Hidden until a report arrives, or an unloaded viewer shows five empty
+     rails and a stack of headings with nothing under them. */
+  .grp{display:none; border-left:2px solid var(--border); padding-left:18px;
+       margin-bottom:26px;}
+  body.report-loaded .grp{display:block;}
+  #grpAnswer{border-left-color:transparent; padding-left:0;}
+  /* The one group with something nested inside it, so it says so. */
+  #grpWhere{border-left-color:var(--accent-dim);}
+  .section-title.sub{margin-top:20px;}
   .section-title{
     font-family:var(--mono); font-size:11px; color:var(--text-dim);
     text-transform:uppercase; letter-spacing:0.08em; margin:0 0 12px;
@@ -512,12 +531,24 @@
   </div>
 
   <div class="main">
-    <div class="section-title" id="pathTitle" style="display:none;">Path</div>
-    <div id="hopChainWrap"></div>
-    <div id="findingsWrap"></div>
-    <div id="output">
-      <div class="empty-state" id="emptyState">Load a report exported with <code>--export</code> — choose the file on the left, or drop it anywhere on this page.</div>
-    </div>
+    <div class="empty-state" id="emptyState">Load a report exported with <code>--export</code> — choose the file on the left, or drop it anywhere on this page.</div>
+    <section class="grp" id="grpAnswer"><div id="answerWrap"></div></section>
+    <section class="grp" id="grpWhere">
+      <div id="whereWrap"></div>
+      <!-- Inside the direction group on purpose: the path is the detail of
+           one of those three zones, not a sixth thing on the page. -->
+      <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
+      <div id="hopChainWrap"></div>
+    </section>
+    <section class="grp" id="grpFound">
+      <div id="foundWrap"></div>
+      <div id="findingsWrap"></div>
+    </section>
+    <section class="grp" id="grpRan"><div id="ranWrap"></div></section>
+    <section class="grp" id="grpEvidence">
+      <div class="section-title">Evidence &middot; the output every check produced</div>
+      <div id="output"></div>
+    </section>
   </div>
 </div>
 
@@ -538,7 +569,7 @@ function escapeHtml(s){
 }
 
 function clearEmptyState(){
-  const empty = output.querySelector('.empty-state');
+  const empty = document.querySelector('.empty-state');
   if(empty) empty.remove();
 }
 
@@ -600,7 +631,6 @@ function renderResult(body, result){
   body.innerHTML = html;
 }
 
-const STAGE_LAMP = {pass: 'ok', warn: 'warn', fail: 'crit', skip: 'skip'};
 const VERDICT_LAMP = {ok: 'ok', warning: 'warn', critical: 'crit'};
 
 function verdictRow(v){
@@ -616,18 +646,6 @@ function verdictRow(v){
   return `<div class="led-row verdict-row ${lamp}"${why}><div class="led ${lamp}"></div>` +
          `<span class="led-name">verdict</span>` +
          `<span class="led-state">${escapeHtml(v.severity === 'ok' ? 'clear' : v.severity)}</span></div>`;
-}
-
-function ledRow(st){
-  const lamp = STAGE_LAMP[st.state] || 'skip';
-  // The layer is only present when a finding put the stage in that state, so
-  // a passing stage carries no layer rather than a guessed one.
-  const layer = st.layer ? `<span class="led-layer">L${escapeHtml(String(st.layer))}</span>` : '';
-  const why = (st.because && st.because.length)
-    ? ` title="${escapeHtml(st.because.join(', '))}"` : '';
-  return `<div class="led-row ${lamp}"${why}><div class="led ${lamp}"></div>` +
-         `<span class="led-name">${escapeHtml(st.stage)}</span>${layer}` +
-         `<span class="led-state">${escapeHtml(st.state)}</span></div>`;
 }
 
 function hopSeverity(h, probes){
@@ -848,9 +866,15 @@ function renderDiagnosis(data, opts){
     </div>` : '';
 
   const stages = data.stages || [];
-  const stageHtml = stages.length ? '<div class="stages">' + stages.map(st =>
-    `<span class="stage ${st.state}">${escapeHtml(st.stage)} <b>${
-      {pass:'PASS', warn:'WARN', fail:'FAIL', skip:'—'}[st.state] || ''}</b></span>`).join('') + '</div>' : '';
+  const stageHtml = stages.length ? '<div class="stages">' + stages.map(st => {
+    // The layer is only present when a finding put the stage in that state, so
+    // a passing stage carries no layer rather than a guessed one.
+    const layer = st.layer ? `<span class="layer">L${escapeHtml(String(st.layer))}</span>` : '';
+    const why = (st.because && st.because.length)
+      ? ` title="${escapeHtml(st.because.join(', '))}"` : '';
+    return `<span class="stage ${st.state}"${why}>${escapeHtml(st.stage)} <b>${
+      {pass:'PASS', warn:'WARN', fail:'FAIL', skip:'—'}[st.state] || ''}</b>${layer}</span>`;
+  }).join('') + '</div>' : '';
 
   const changes = data.comparison || [];
   const changesHtml = changes.length ? `<div class="changes">
@@ -861,7 +885,19 @@ function renderDiagnosis(data, opts){
       </div>`).join('')}
     </div>` : '';
 
-  findingsWrap.innerHTML = verdictHtml + sidesHtml + stageHtml + changesHtml + '<div class="findings">' + findings.map(f => `
+  // Five groups in the order the questions arrive: what is wrong, which way,
+  // what else was found, what was checked, and what the checks said. The path
+  // picture used to sit above the verdict, so the reader met a hop-by-hop
+  // diagram before being told what the answer was.
+  document.getElementById('answerWrap').innerHTML = verdictHtml;
+  document.getElementById('whereWrap').innerHTML = sides.length
+    ? '<div class="section-title">Which direction the fault is on</div>' + sidesHtml : '';
+  document.getElementById('ranWrap').innerHTML = stageHtml
+    ? '<div class="section-title">What was checked</div>' + stageHtml : '';
+  document.getElementById('foundWrap').innerHTML = findings.length
+    ? '<div class="section-title">What was found</div>' : '';
+  document.body.classList.add('report-loaded');
+  findingsWrap.innerHTML = changesHtml + '<div class="findings">' + findings.map(f => `
     <div class="finding ${f.severity}">
       <div class="sev"></div>
       <div>
@@ -879,7 +915,9 @@ function renderDiagnosis(data, opts){
   // stage data. This used to substring-match the finding text for four
   // keywords, which left a critical CRC fault showing all-green and lit the
   // gateway lamp for a finding that said the gateway was reachable.
-  ledsEl.innerHTML = (data.stages || []).map(ledRow).join('') + verdictRow(data.verdict);
+  // The strip lives in the main column now. Drawn in both, it was the same
+  // seven boxes twice on one screen, and only the main copy survives print.
+  ledsEl.innerHTML = verdictRow(data.verdict);
 
   const raw = data.raw || {};
   const order = ['lldp', 'optics', 'dns_health', 'inventory', 'ports', 'sockets', 'link_stats', 'link_modes', 'tcp_health', 'arp', 'path_mtu', 'ping_gateway', 'ping_internet', 'path_trace', 'dns_lookup', 'routes', 'interfaces'];

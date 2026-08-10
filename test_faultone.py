@@ -4698,8 +4698,12 @@ class TestZones(unittest.TestCase):
         # The page renders client-side, so with no JS engine here the honest
         # assertion is that the panel is wired into the output the renderer
         # builds - not merely that its template exists somewhere in the file,
-        # which stayed true when it was left out of the concatenation.
-        self.assertIn("verdictHtml + sidesHtml + stageHtml", html)
+        # which stayed true when it was left out of the concatenation. The
+        # groups are written into their own containers now, so what has to be
+        # asserted is that the zones reach one and that it exists to reach.
+        self.assertIn("whereWrap').innerHTML", html)
+        self.assertIn("+ sidesHtml", html)
+        self.assertIn('id="whereWrap"', html)
         # The page renders in the browser, so with no JS engine here the panel
         # being shown on every box can only be asserted as the shape of the
         # condition that decides it. Structural, and deliberately so: it is the
@@ -7839,6 +7843,49 @@ class TestViewerTemplate(unittest.TestCase):
         for emphasised in produced - {"ok"}:
             self.assertIn(f".hop-node.{emphasised}", fade)
 
+    def test_the_answer_comes_before_the_path_that_explains_it(self):
+        """The hop chain sat above the verdict, so the reader met a hop-by-hop
+        diagram before being told what the answer was - on a tool whose whole
+        promise is one fault to act on."""
+        main = nd.VIEWER_TEMPLATE.split('<div class="main">', 1)[1].split("</div>\n</div>", 1)[0]
+        order = [g for g in ("grpAnswer", "grpWhere", "grpFound", "grpRan", "grpEvidence")
+                 if f'id="{g}"' in main]
+        self.assertEqual(
+            order, ["grpAnswer", "grpWhere", "grpFound", "grpRan", "grpEvidence"],
+            "the report no longer reads answer, where, found, checked, evidence")
+        self.assertLess(main.index('id="grpAnswer"'), main.index('id="hopChainWrap"'))
+
+    def test_the_path_sits_inside_the_directions_it_details(self):
+        """The path is the detail of one of the three zones, not a sixth thing
+        on the page. As a sibling its heading floated between the zones above
+        and the findings below, belonging to neither."""
+        main = nd.VIEWER_TEMPLATE.split('<div class="main">', 1)[1]
+        where = main.split('id="grpWhere"', 1)[1].split("</section>", 1)[0]
+        self.assertIn('id="pathTitle"', where)
+        self.assertIn('id="hopChainWrap"', where)
+
+    def test_a_group_shows_nothing_until_there_is_something_in_it(self):
+        """An unloaded viewer would otherwise draw five rails and a stack of
+        headings with nothing underneath them, which reads as a report that
+        found nothing rather than one that has not been opened."""
+        template = nd.VIEWER_TEMPLATE
+        rule = template.split(".grp{", 1)[1].split("}", 1)[0]
+        self.assertIn("display:none", rule)
+        self.assertIn("body.report-loaded .grp{display:block;}", template)
+        self.assertIn("classList.add('report-loaded')", template)
+        # And the prompt to load one must not be hidden along with them.
+        main = template.split('<div class="main">', 1)[1]
+        self.assertLess(main.index('id="emptyState"'), main.index('id="grpAnswer"'))
+        self.assertNotIn('id="emptyState"', main.split('id="grpAnswer"', 1)[1])
+
+    def test_the_thing_that_clears_the_prompt_still_reaches_it(self):
+        """The prompt moved out of #output so the groups could be hidden as a
+        set. Left querying inside #output, the code that removes it would have
+        found nothing and the prompt would have stayed on screen underneath a
+        loaded report."""
+        fn = nd.VIEWER_TEMPLATE.split("function clearEmptyState(){", 1)[1].split("}", 1)[0]
+        self.assertIn("document.querySelector('.empty-state')", fn)
+
     def test_no_colour_is_written_outside_a_palette(self):
         """A hardcoded hex is invisible to a palette. Five of them survived the
         light and print grounds at their dark-theme values, which is how the
@@ -10543,14 +10590,42 @@ class TestEveryFindingFires(unittest.TestCase):
                            "if nothing sits outside the chain any more, this row's "
                            "reason for existing should be re-read rather than assumed")
 
-    def test_the_sidebar_reads_stages_not_the_wording_of_findings(self):
+    def test_the_stage_strip_reads_stages_not_the_wording_of_findings(self):
         """It used to substring-match the finding text for four keywords, so a
         CRC storm showed all-green (no message says "interface") while
-        "The gateway is reachable but 8.8.8.8 is not" lit the gateway lamp."""
+        "The gateway is reachable but 8.8.8.8 is not" lit the gateway lamp.
+
+        The strip was drawn twice - as lamps in the sidebar and as chips in the
+        main column - and is now drawn once, in the column that survives print.
+        What matters is unchanged: the state comes from the report's own stage
+        data and never from reading the findings back."""
         template = nd.VIEWER_TEMPLATE
         self.assertNotIn("severityForFindings", template)
         self.assertNotIn("message.toLowerCase().includes", template)
-        self.assertIn("(data.stages || []).map(ledRow)", template)
+        strip = template.split("const stageHtml = stages.length ?", 1)
+        self.assertEqual(len(strip), 2, "the stage strip is gone")
+        body = strip[1].split("' : '';", 1)[0]
+        self.assertIn("st.state", body)
+        self.assertNotIn("findings", body)
+        # Drawn once. Two copies on one screen is what this replaced.
+        self.assertEqual(template.count("const stageHtml ="), 1)
+        self.assertNotIn("map(ledRow)", template)
+
+    def test_the_strip_did_not_lose_what_only_the_lamps_carried(self):
+        """The sidebar lamps showed a layer badge and named the findings that
+        put a stage in its state, and the chips showed neither. Dropping the
+        lamps without moving those across would have been a tidier page that
+        told the reader less."""
+        template = nd.VIEWER_TEMPLATE
+        body = template.split("const stageHtml = stages.length ?", 1)[1] \
+                       .split("' : '';", 1)[0]
+        # Computed from the stage, and actually placed in what is returned.
+        # Asserting only that the name appears somewhere in the body passes
+        # with the condition gutted or the value never interpolated.
+        self.assertIn("st.layer ?", body)
+        self.assertIn("${layer}", body)
+        self.assertIn("st.because &&", body)
+        self.assertIn("${why}", body)
 
     def test_a_version_change_between_visits_is_noticed(self):
         report, _ = self.run_scenario("baseline_changes")

@@ -8686,9 +8686,27 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # port that's actually open usually walks straight through, and the
         # difference between "the path is broken" and "the probes are dropped"
         # is worth the extra few seconds.
-        if (not trace_reached(hops, target) and inet_loss is not None and inet_loss < 100
-                and not quick):
-            tcp_res = cmd_traceroute_tcp(target)
+        # Reachable by anything already established, not by ping alone.
+        # _check_internet sets inet_loss to None in exactly one case - TCP
+        # reached a target that would not answer a ping - so keying the retry
+        # on ping switched the TCP trace off in the one situation that had
+        # already proved TCP gets through, and left it on only where ping was
+        # working anyway. A target that answered nothing at all is still left
+        # alone: there is no evidence to act on, and the extra trace would be
+        # spent establishing that there is none.
+        reach = raw.get("reachability_tcp") or {}
+        answered = (inet_loss is not None and inet_loss < 100) or bool(reach.get("ok"))
+        # `not quick` was tested here and is always true - this is the else of
+        # `if quick` a few lines above.
+        if not trace_reached(hops, target) and answered:
+            # The port something already reached, rather than an assumption.
+            # Under --target auto the target is the backend this box leans on
+            # most, and 443 is usually shut on a database - the trace would
+            # fail for a reason that has nothing to do with the path. A port
+            # that refused the connection serves as well as one that accepted:
+            # an RST is a completed round trip, which is all a hop needs to
+            # answer.
+            tcp_res = cmd_traceroute_tcp(target, port=int(reach.get("port") or 443))
             if tcp_res and trace_reached(tcp_res["hops"], target):
                 raw["path_trace_icmp"] = raw["path_trace"]
                 raw["path_trace"] = tcp_res

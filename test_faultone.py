@@ -1110,6 +1110,70 @@ class TestPathAnnotation(unittest.TestCase):
         before_consequence = msg.split("breaks inbound", 1)[0]
         self.assertIn("If it is NAT", before_consequence)
 
+    def test_a_second_trace_is_tried_on_the_evidence_that_supports_it(self):
+        """The retry was gated on ping loss being under 100%. _check_internet
+        sets inet_loss to None in exactly one case - TCP reached a target that
+        would not answer a ping - so proving another protocol gets through was
+        what switched the alternate trace off. It ran only where ping already
+        worked, which is where it is least needed."""
+        calls = []
+        for label, inet_loss, reach, expected in (
+                ("ping works, trace stalled", 0.0, None, True),
+                ("ping dead, TCP reached it", None, {"ok": True, "port": "443"}, True),
+                ("ping dead, TCP reached a backend port", None,
+                 {"ok": True, "port": "53"}, True),
+                ("nothing reached it at all", 100.0, {"ok": False, "port": None}, False),
+                ("nothing reached it, no tcp probe run", 100.0, None, False)):
+            m = fresh()
+            seen = []
+            m.cmd_traceroute_tcp = lambda t, port=443: seen.append(port) or None
+            raw = {"reachability_tcp": reach} if reach else {}
+            stalled = [{"hop": 1, "host": "10.0.0.1", "display": "10.0.0.1",
+                        "times_ms": [1.0], "timed_out": False, "flags": None}]
+            m._check_path(raw, [], "8.8.8.8", "10.0.0.1", inet_loss, False, 10, 1500,
+                          trace={"raw": {"ok": True, "cmd": "traceroute", "stdout": ""},
+                                 "hops": stalled, "source": "traceroute", "mtr": None})
+            with self.subTest(case=label):
+                self.assertEqual(bool(seen), expected,
+                                 "the alternate trace ran" if seen else "it never ran")
+            calls.append((label, seen))
+        # And the port it traces to is the one something already reached.
+        self.assertEqual(dict(calls)["ping dead, TCP reached a backend port"], [53],
+                         "the trace went to 443 with a known-good port on hand")
+
+    def test_the_trace_goes_to_a_port_that_answered_not_to_443(self):
+        """Under --target auto the target is the backend this box leans on
+        most, and 443 is usually shut on a database - so a TCP trace to it
+        failed for a reason that had nothing to do with the path, while the
+        port a connect had just succeeded on sat unused in the report."""
+        m = fresh()
+        seen = []
+        m.cmd_traceroute_tcp = lambda t, port=443: seen.append(port) or None
+        stalled = [{"hop": 1, "host": "10.0.0.1", "display": "10.0.0.1",
+                    "times_ms": [1.0], "timed_out": False, "flags": None}]
+        m._check_path({"reachability_tcp": {"ok": True, "port": "80"}}, [],
+                      "8.8.8.8", "10.0.0.1", None, False, 10, 1500,
+                      trace={"raw": {"ok": True, "cmd": "traceroute", "stdout": ""},
+                             "hops": stalled, "source": "traceroute", "mtr": None})
+        self.assertEqual(seen, [80])
+
+    def test_a_refused_port_is_good_enough_to_trace_to(self):
+        """An RST is a completed round trip - the packet got there and the
+        reply got back - so a port that refused the connection identifies a hop
+        just as well as one that accepted it. Skipping those would throw away
+        the commonest proof of reachability on a hardened host."""
+        m = fresh()
+        seen = []
+        m.cmd_traceroute_tcp = lambda t, port=443: seen.append(port) or None
+        stalled = [{"hop": 1, "host": "10.0.0.1", "display": "10.0.0.1",
+                    "times_ms": [1.0], "timed_out": False, "flags": None}]
+        m._check_path({"reachability_tcp": {"ok": True, "port": "53",
+                                            "how": "refused the connection"}}, [],
+                      "8.8.8.8", "10.0.0.1", None, False, 10, 1500,
+                      trace={"raw": {"ok": True, "cmd": "traceroute", "stdout": ""},
+                             "hops": stalled, "source": "traceroute", "mtr": None})
+        self.assertEqual(seen, [53])
+
     def test_the_worst_jump_says_what_share_of_the_path_it_is(self):
         """"+65ms" doesn't say whether fixing that hop would matter. "+65ms,
         71% of the total" does - which is the only thing worth borrowing from

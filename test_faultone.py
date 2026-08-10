@@ -7546,7 +7546,6 @@ class TestViewerTemplate(unittest.TestCase):
         seen."""
         template = nd.VIEWER_TEMPLATE
         ok_rule = template.split(".hop-node.ok{", 1)[1].split("}", 1)[0]
-        self.assertIn("opacity:0.55", ok_rule)
         self.assertNotIn("color-mix", ok_rule)
         for rule_name in ("warn", "crit"):
             rule = template.split(f".hop-node.{rule_name}{{", 1)[1].split("}", 1)[0]
@@ -7589,6 +7588,40 @@ class TestViewerTemplate(unittest.TestCase):
                 self.assertGreaterEqual(
                     self._contrast(m.group(1), white), 4.5,
                     f"{name} is unreadable on paper")
+
+    def test_a_path_with_no_faulty_hop_is_not_dimmed(self):
+        """Receding the clean hops only means something when a hop is being
+        emphasised. Applied unconditionally it faded every node on the great
+        majority of paths - most reports have no individually lossy hop - so
+        the picture the change was meant to sharpen came out uniformly dimmer
+        than before. The fade has to be conditional on the chain containing
+        something to contrast against."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertNotIn("opacity", template.split(".hop-node.ok{", 1)[1].split("}", 1)[0],
+                         "the clean hops fade whether or not anything is emphasised")
+        rule = template.split(".hop-chain:has(", 1)
+        self.assertEqual(len(rule), 2, "the conditional fade is gone")
+        condition, body = rule[1].split(")", 1)
+        for needed in (".hop-node.warn", ".hop-node.crit"):
+            self.assertIn(needed, condition)
+        self.assertIn("opacity:0.55", body.split("}", 1)[0])
+        # Scoped to the chain, not the page: the inbound panel scores its one
+        # node on its own thresholds and has to decide separately. What the
+        # condition selects has to be the clean hop inside that chain.
+        self.assertIn(".hop-node.ok", body.split("{", 1)[0])
+
+    def test_the_hop_severities_the_stylesheet_draws_are_the_ones_it_is_given(self):
+        """The fade keys off warn and crit. If the chain ever renders another
+        class name the rule goes quiet rather than wrong, which is the failure
+        that took the longest to notice the first time."""
+        template = nd.VIEWER_TEMPLATE
+        drawn = set()
+        for chunk in template.split("hop-node ")[1:]:
+            for name in ("ok", "warn", "crit"):
+                if f"'{name}'" in chunk[:220]:
+                    drawn.add(name)
+        self.assertEqual(drawn, {"ok", "warn", "crit"},
+                         f"the chain draws {drawn}, and the fade only knows ok/warn/crit")
 
     def test_the_light_palette_is_readable_too(self):
         """The page now follows the reader's system setting, which means half

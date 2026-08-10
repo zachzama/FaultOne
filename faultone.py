@@ -10252,7 +10252,18 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      layout, the emphasis moved onto the hop that is being reported. The plain
      background is declared first so a browser too old for color-mix gets the
      previous appearance rather than a broken one. */
-  .hop-node.ok{border-left-color:var(--ok); background:transparent; opacity:0.55;}
+  .hop-node.ok{border-left-color:var(--ok);}
+  /* The clean hops recede only when there is something to recede against.
+     Applied unconditionally it faded the whole chain on the great majority of
+     reports - most paths have no individually faulty hop, so every node went
+     to 55% and nothing was emphasised, which is dimmer than what it replaced
+     and says the opposite of what the fade is for. Scoped to the chain rather
+     than the page so the inbound panel, which scores its one node on its own
+     thresholds, decides separately. A browser without :has() drops the rule
+     and gets the flat chain, which is the safe direction to fail in. */
+  .hop-chain:has(.hop-node.warn, .hop-node.crit) .hop-node.ok{
+    background:transparent; opacity:0.55;
+  }
   .hop-node.warn{
     padding:16px 12px;
     background:var(--panel);

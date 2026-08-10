@@ -6512,9 +6512,24 @@ class TestPassiveInventory(unittest.TestCase):
         self.assertEqual(nd._dns_read_name(data, 14), "gw1.local")
 
     def test_a_pointer_loop_terminates(self):
+        """A compression pointer that points at itself is the classic hostile
+        DNS reply, and the property being tested is that the reader *returns*.
+
+        Called straight, that is exactly what this could not check: if the
+        bound were lost the call would never come back and the suite would
+        hang rather than fail - a red build tells you something, a build that
+        never finishes tells you to go and look. Run on a thread with a
+        deadline so an unbounded loop is a failure.
+        """
         import struct
+        import threading
         data = struct.pack(">HHHHHH", 1, 0x8180, 0, 1, 0, 0) + b"\xc0\x0c" * 8
-        nd._dns_read_name(data, 12)     # must return rather than hang
+        done = []
+        worker = threading.Thread(target=lambda: done.append(nd._dns_read_name(data, 12)),
+                                  daemon=True)
+        worker.start()
+        worker.join(5.0)
+        self.assertTrue(done, "_dns_read_name did not return - the pointer loop is unbounded")
 
     def test_the_lookup_deadline_is_short(self):
         # An inventory is not worth stalling a diagnosis for.

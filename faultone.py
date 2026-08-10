@@ -3860,6 +3860,10 @@ def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version,
 # gateway is evidence about the local link, so that finding is tagged L2. This
 # keeps the findings list readable bottom-up, which is the order you'd fix
 # things in - a broken layer makes every layer above it look broken too.
+# How the three severities order. Written out inline in four places, which
+# is four chances for one of them to disagree about what is worse than what.
+SEVERITY_RANK = {"ok": 0, "warning": 1, "critical": 2}
+
 LAYERS = {
     1: {"name": "Physical", "hint": "cabling, radio, link light, port up/down"},
     2: {"name": "Data link", "hint": "switch/AP, ARP, MAC, local segment"},
@@ -5920,7 +5924,7 @@ def compare_reports(current, baseline):
     # exist yet - diagnose adds this row afterwards. Only compare when both
     # sides actually have one (i.e. two saved reports).
     if cv.get("headline") and bv.get("headline") and cv["headline"] != bv["headline"]:
-        rank = {"ok": 0, "warning": 1, "critical": 2}
+        rank = SEVERITY_RANK
         direction = ("worse" if rank.get(cv.get("severity"), 0) > rank.get(bv.get("severity"), 0)
                      else "better" if rank.get(cv.get("severity"), 0) < rank.get(bv.get("severity"), 0)
                      else "neutral")
@@ -9709,8 +9713,6 @@ def _check_internet(raw, findings, target, probes):
     return inet_loss
 
 
-SEVERITY_RANK = {"ok": 0, "warning": 1, "critical": 2}
-
 # Findings whose subject is the destination itself, and which assert that
 # traffic to it is not arriving. They mark the target hop by role rather than
 # by number, since which hop is the target varies with the path.
@@ -9968,7 +9970,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
 
     if baseline and (baseline.get("verdict") or {}).get("headline") \
             and verdict.get("headline") != baseline["verdict"]["headline"]:
-        rank = {"ok": 0, "warning": 1, "critical": 2}
+        rank = SEVERITY_RANK
         comparison.append({
             "what": "verdict",
             "before": baseline["verdict"]["headline"],
@@ -10152,7 +10154,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* A skipped stage is dimmed rather than coloured: "not measured" is not a
      result, and showing it green would be a claim the run never made. */
   .led-row.skip{opacity:.55;}
-  .led-layer{font-size:10px; color:var(--text-dim); border:1px solid var(--border); border-radius:3px; padding:0 4px;}
   .led-state{font-size:10px; letter-spacing:.06em; text-transform:uppercase; opacity:.8;}
   .led-row.warn .led-state{color:var(--warn);}
   .led-row.crit .led-state{color:var(--crit);}
@@ -11317,7 +11318,7 @@ def worst_by_scope(findings):
     rule is a second chance to disagree with the first. Anything with a scope
     has already been judged; this only asks what the answer was.
     """
-    rank = {"ok": 0, "warning": 1, "critical": 2}
+    rank = SEVERITY_RANK
     worst = {}
     for f in findings or []:
         scope = f.get("scope")

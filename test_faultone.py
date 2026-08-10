@@ -9623,6 +9623,29 @@ class TestEveryFindingFires(unittest.TestCase):
                     continue
                 self.assertTrue(moved, f"{code} moves no stage and isn't listed as exempt")
 
+    def test_the_exemption_cannot_excuse_a_critical_finding(self):
+        """A warning that moves no stage is defensible - a wrong clock breaks
+        authentication rather than the wire, and the strip does not model that.
+        A *critical* one is not: it leaves a report whose verdict says CRITICAL
+        beside a strip on which nothing failed, which is the same misleading
+        silence as "link PASS" on an adapter that cannot fail a link check.
+
+        The list is a flat allowlist, so nothing stopped a future hardware
+        fault - a failed RAID member, a dead PSU read over IPMI - being added
+        to it and shipping that report. This is what stops it."""
+        for code in sorted(self.NOT_A_STAGE):
+            if code not in S:
+                continue
+            with self.subTest(code=code):
+                _report, fired = self.run_scenario(code)
+                if not fired:
+                    continue
+                self.assertNotEqual(
+                    fired[0]["severity"], "critical",
+                    f"{code} is critical and moves no stage - the strip would read "
+                    f"all-clear beside a critical verdict. Give it a stage, or "
+                    f"make it a warning, or do not add it.")
+
     def test_a_stage_carries_the_layer_of_what_put_it_there(self):
         """The sidebar shows a layer beside each stage. It has to come from the
         findings that drove the state, so a passing stage carries none rather

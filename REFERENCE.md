@@ -318,6 +318,41 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## What the stage strip will not be asked to carry
+
+The strip is the chain this tool reasons about: link, address, gateway,
+internet, DNS, MTU, ports. A finding that moves none of it is allowed — a wrong
+clock breaks authentication and certificate validity rather than the wire, and
+the strip does not model that — but only as a **warning**.
+
+A *critical* finding that moves no stage produces this:
+
+```
+verdict: CRITICAL
+strip:   link SKIP  address PASS  gateway PASS  internet PASS  dns PASS  mtu SKIP  ports SKIP
+```
+
+A critical verdict beside a strip on which nothing failed — the same misleading
+silence as `link PASS` on an adapter that cannot fail a link check.
+
+The exemption list was flat, so nothing stopped a future hardware fault being
+added to it and shipping that report. A guard now refuses to excuse a critical
+finding: give it a stage, make it a warning, or do not add it.
+
+**This is why RAID and IPMI are not here.** A failed array member or a dead
+power supply read over IPMI is a real, critical fault and belongs to no part of
+the network chain. Adding either would mean choosing between a strip that
+contradicts the verdict and a strip that stops meaning "the chain" — and the
+strip is the thing that answers *where*, which is the question this tool is
+built around.
+
+Nothing about that is a claim they do not matter. It is a claim that a network
+diagnostic saying "your array is degraded" has stopped being a network
+diagnostic, and that the honest place to notice a degraded array is a tool that
+watches arrays. The one hardware fault that *is* here — CPU thermal throttling —
+earns its place because it costs the cycles that move packets, which is a chain
+this tool can follow.
+
 ## Nothing is truncated in silence
 
 Two lists were cut to a fixed length and rendered as though that were all there
@@ -1178,7 +1213,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 836 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 837 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1340,7 +1375,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 836 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 837 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2666,7 +2701,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-836 tests, no dependencies, no network, a few seconds — so they run
+837 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

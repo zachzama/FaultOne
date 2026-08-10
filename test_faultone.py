@@ -7484,6 +7484,39 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         self.assertEqual(marks, set(self.NAMES_A_HOP),
                          "a finding marks a hop without this test knowing where it should land")
 
+    def test_the_way_in_is_coloured_by_the_conclusion_about_it(self):
+        """The inbound node scored itself on client loss alone, so a direction
+        the report had marked degraded for jitter or queuing delay - neither of
+        which is loss - drew green beside a zone reading DEGRADED. A threshold
+        in the picture is a second copy of one in the analysis."""
+        template = nd.VIEWER_TEMPLATE
+        inbound = template.split('<div class="inbound-title">', 1)[1].split("</div>`", 1)[0]
+        self.assertNotIn("worst_loss_pct >=", inbound,
+                         "the inbound node still judges for itself")
+        self.assertIn("clientSeverity(data)", inbound)
+        # The readings stay - they are measurements, not a verdict.
+        self.assertIn("worst_loss_pct", inbound)
+        fn = template.split("function clientSeverity(data){", 1)[1].split("\n}", 1)[0]
+        self.assertIn("s.side === 'downstream'", fn)
+
+    def test_every_state_a_side_can_report_has_a_colour(self):
+        """The mapping is only safe while it is complete. A state with no entry
+        falls through to 'ok', so a new one would render the way in as clean -
+        silently, and in the direction the reader is being pointed at."""
+        states = set()
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            states |= {z["state"] for z in (rep.get("sides") or [])}
+        mapping = nd.VIEWER_TEMPLATE.split("const ZONE_SEV = {", 1)[1].split("}", 1)[0]
+        for state in sorted(states):
+            self.assertIn(f"{state}:", mapping,
+                          f"a side can report {state!r} and the picture has no colour for it")
+
     def test_the_worse_conclusion_owns_the_target_hop(self):
         """No scenario fires both of these at once, so the corpus cannot reach
         the rule and it is asserted here instead. Left to the order they happen
@@ -7777,17 +7810,34 @@ class TestViewerTemplate(unittest.TestCase):
         self.assertIn(".hop-node.ok", body.split("{", 1)[0])
 
     def test_the_hop_severities_the_stylesheet_draws_are_the_ones_it_is_given(self):
-        """The fade keys off warn and crit. If the chain ever renders another
-        class name the rule goes quiet rather than wrong, which is the failure
-        that took the longest to notice the first time."""
+        """The fade keys off warn and crit. If either chain ever produces
+        another class name the rule goes quiet rather than wrong, which is the
+        failure that took the longest to notice the first time.
+
+        Both chains now name their class through a function rather than inline,
+        so this reads the values those return. The earlier version scanned for
+        quoted literals after `hop-node `, which only ever found the inbound
+        node's ternary - it was testing one of the two and passing for both."""
+        import re
         template = nd.VIEWER_TEMPLATE
-        drawn = set()
-        for chunk in template.split("hop-node ")[1:]:
-            for name in ("ok", "warn", "crit"):
-                if f"'{name}'" in chunk[:220]:
-                    drawn.add(name)
-        self.assertEqual(drawn, {"ok", "warn", "crit"},
-                         f"the chain draws {drawn}, and the fade only knows ok/warn/crit")
+        produced = set()
+        for src, closer in (("function hopSeverity(h, probes){", "\n}"),
+                            ("const ZONE_SEV = {", "}"),
+                            # The fallback lives here, not in the map above, so
+                            # a class the map never contains can still reach
+                            # the page through it.
+                            ("function clientSeverity(data){", "\n}")):
+            body = template.split(src, 1)[1].split(closer, 1)[0]
+            produced |= set(re.findall(r"'([a-z]+)'", body))
+        # Words quoted in these bodies that are not class names: the severity
+        # being compared against, and the side being looked up.
+        produced -= {"critical", "downstream"}
+        self.assertEqual(
+            produced, {"ok", "warn", "crit"},
+            f"the chains produce {sorted(produced)}, and the fade only knows warn/crit")
+        fade = template.split(".hop-chain:has(", 1)[1].split(")", 1)[0]
+        for emphasised in produced - {"ok"}:
+            self.assertIn(f".hop-node.{emphasised}", fade)
 
     def test_no_colour_is_written_outside_a_palette(self):
         """A hardcoded hex is invisible to a palette. Five of them survived the

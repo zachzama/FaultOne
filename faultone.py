@@ -10192,6 +10192,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     background:var(--panel-2); border-bottom:1px solid var(--border);
     font-family:var(--mono); font-size:12px; cursor:pointer; user-select:none;
   }
+  /* A control that can be reached by keyboard and does not say where the
+     keyboard is has only moved the problem. Drawn inside the edge, because the
+     panel clips its own overflow and an outline outside it would be cut off. */
+  .panel-head:focus-visible{outline:2px solid var(--accent); outline-offset:-2px;}
   .panel-head .prompt{color:var(--accent);}
   .panel-head .cmdtxt{color:var(--text-dim); flex:1;}
   .panel-head .chev{color:var(--text-dim); transition:transform .15s;}
@@ -10420,6 +10424,16 @@ function clearEmptyState(){
   if(empty) empty.remove();
 }
 
+// A div with an onclick is a control to a mouse and scenery to everything
+// else: no focus, no key handling, and nothing announced. The evidence panels
+// were the only interactive thing on the page, so a reader without a mouse
+// could not open a single one of them. Enter and Space are what a button
+// answers to, and space is stopped from scrolling the page under it.
+function togglePanel(id, head){
+  const open = !document.getElementById(id).classList.toggle('collapsed');
+  head.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 function addPanel(label, cmdText, help){
   clearEmptyState();
   const id = 'panel-' + (panelSeq++);
@@ -10432,7 +10446,9 @@ function addPanel(label, cmdText, help){
       <span>${escapeHtml(help.desc)}</span>
     </div>` : '';
   div.innerHTML = `
-    <div class="panel-head" onclick="document.getElementById('${id}').classList.toggle('collapsed')">
+    <div class="panel-head" role="button" tabindex="0" aria-expanded="true"
+         onclick="togglePanel('${id}', this)"
+         onkeydown="if(event.key === 'Enter' || event.key === ' '){ event.preventDefault(); togglePanel('${id}', this); }">
       <span class="prompt">$</span>
       <span class="cmdtxt">${escapeHtml(cmdText || label)}</span>
       <span class="chev">▾</span>

@@ -7635,6 +7635,36 @@ class TestViewerTemplate(unittest.TestCase):
         # The message text is prose and must not be caught by it.
         self.assertNotIn(".finding .msg", selectors)
 
+    def test_the_evidence_panels_can_be_opened_without_a_mouse(self):
+        """The panels were a div with an onclick, which is a control to a mouse
+        and scenery to everything else - no focus, no key handling, nothing
+        announced. They are the only interactive thing on the page, so a reader
+        without a mouse could not open a single one of the twenty-odd panels
+        holding the evidence behind the verdict."""
+        template = nd.VIEWER_TEMPLATE
+        head = template.split('<div class="panel-head"', 1)[1].split(">", 1)[0]
+        self.assertIn('role="button"', head)
+        self.assertIn('tabindex="0"', head)
+        self.assertIn("onkeydown", head)
+        for key in ("'Enter'", "' '"):
+            self.assertIn(key, head)
+        # Space scrolls the page unless the handler says otherwise, so the
+        # panel would open and the reader would be somewhere else.
+        self.assertIn("event.preventDefault()", head)
+        # Reaching it by keyboard is half the job; seeing where you are is the
+        # other half.
+        self.assertIn(".panel-head:focus-visible{", template)
+
+    def test_an_opened_panel_says_that_it_is_open(self):
+        """aria-expanded set once at render and never updated is worse than
+        leaving it off: it states the opposite of the truth as soon as anyone
+        collapses a panel."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertIn('aria-expanded="true"', template)
+        toggle = template.split("function togglePanel", 1)[1].split("}", 1)[0]
+        self.assertIn("setAttribute('aria-expanded'", toggle)
+        self.assertIn("classList.toggle('collapsed')", toggle)
+
     def test_the_platform_is_named_the_way_a_reader_would_say_it(self):
         """platform.system() answers with the kernel's name, so a Mac calls
         itself "Darwin" - accurate, and meaningless to most people reading a

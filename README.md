@@ -64,8 +64,12 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 nothing behind:
 
 ```bash
-ssh -J jump user@box "python3 - --report --quick" < faultone.py
+ssh -C -J jump user@box "python3 - --report --quick" < faultone.py
 ```
+
+`-C` because OpenSSH doesn't compress by default, and the file is 597 KB of
+repetitive text: it goes over the wire at 178 KB with compression on, for the
+cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
 the file. The standard library will drop them for the trip — no build step, no
@@ -73,10 +77,13 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -J jump user@box "python3 - --report" < /tmp/faultone.py    # ~28% fewer bytes
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 127 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
+Stripped and compressed together it's 127 KB instead of 597 — 79% less, which
+is nine minutes down to under two on a 9600-baud console, and nothing you'd
+notice on anything faster.
 
 **Want the visual version?** Two ways, both offline:
 
@@ -308,7 +315,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 912 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 914 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

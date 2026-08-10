@@ -6776,6 +6776,47 @@ class TestDocsMatchReality(unittest.TestCase):
                 with open(path) as fh:
                     yield name, fh.read()
 
+    def test_the_transport_sizes_the_readme_quotes_are_real(self):
+        """The readme tells someone on a bad link what it costs to push the
+        file across, in four numbers. They are the kind that go stale silently:
+        the file grows every release and nothing about a wrong size fails, it
+        just quietly stops being advice and starts being decoration."""
+        import ast as _ast
+        import gzip
+        if not hasattr(_ast, "unparse"):
+            self.skipTest("ast.unparse needs Python 3.9 to check the stripped size")
+        raw = open(nd.__file__, "rb").read()
+        stripped = _ast.unparse(_ast.parse(raw.decode())).encode()
+        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md")).read()
+        claims = {
+            "on disk": (len(raw), 597),
+            "compressed": (len(gzip.compress(raw, 9)), 178),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 127),
+        }
+        for label, (measured, quoted) in claims.items():
+            with self.subTest(size=label):
+                self.assertIn(str(quoted), readme, f"the readme no longer quotes {quoted} KB")
+                # Generous: zlib output shifts a little between versions, and
+                # the point is that the number is still roughly true.
+                self.assertLess(
+                    abs(measured / 1024 - quoted) / quoted, 0.08,
+                    f"the readme says {quoted} KB {label}, it is now "
+                    f"{measured / 1024:.0f} KB")
+        cut = 100 * (1 - len(gzip.compress(stripped, 9)) / len(raw))
+        self.assertIn("79%", readme)
+        self.assertLess(abs(cut - 79), 4, f"the quoted 79% saving is now {cut:.0f}%")
+
+    def test_the_readme_tells_ssh_to_compress(self):
+        """OpenSSH does not compress by default, so an example without -C sends
+        three times what it needs to - and the reader being written for here is
+        the one on a serial console where that is nine minutes rather than
+        two."""
+        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md")).read()
+        for line in readme.splitlines():
+            if line.startswith("ssh ") and "python3 -" in line:
+                with self.subTest(line=line[:48]):
+                    self.assertIn(" -C ", line, "an ssh pipe example without compression")
+
     def test_claimed_test_counts_are_true(self):
         import re
         import unittest as ut

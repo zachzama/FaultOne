@@ -8093,6 +8093,126 @@ class TestViewerTemplate(unittest.TestCase):
         fn = nd.VIEWER_TEMPLATE.split("function clearEmptyState(){", 1)[1].split("}", 1)[0]
         self.assertIn("document.querySelector('.empty-state')", fn)
 
+    # ---- the paste path off a box you cannot copy a file from -------------
+
+    PASTE_REPORT = {"verdict": {"severity": "warning",
+                                "headline": "Latency jumps at hop 2, null is not a hop"},
+                    "findings": [{"code": "latency_wall", "severity": "warning",
+                                  "layer": 3, "message": "x" * 240}],
+                    "hops": [{"hop": 1, "host": "10.0.0.1", "roles": ["gateway"]}],
+                    "worst_jump": None, "raw": {}, "stages": []}
+
+    @staticmethod
+    def _wrap(text, cols):
+        return "\n".join(text[i:i + cols] for i in range(0, len(text), cols))
+
+    def _run_paste_js(self, inputs):
+        """Run the viewer's own readPastedReport under node.
+
+        Asserting the shape of the source would pass with the two repairs in
+        the wrong order, or a regex that matched nothing. This runs the code
+        that ships against text mangled the way a console mangles it.
+        """
+        import json as _json
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE.split("function readPastedReport(text){", 1)
+        self.assertEqual(len(src), 2, "readPastedReport is gone")
+        fn = "function readPastedReport(text){" + src[1].split("\n}\n", 1)[0] + "\n}\n"
+        prog = (fn + "const out = JSON.parse(process.argv[2]).map(function(t){\n"
+                     "  try { return {ok: readPastedReport(t)}; }\n"
+                     "  catch(e){ return {err: String(e.message)}; }\n"
+                     "});\nprocess.stdout.write(JSON.stringify(out));\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(prog)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path, _json.dumps(inputs)],
+                                 capture_output=True, text=True, timeout=30)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            os.unlink(path)
+
+    def test_a_report_survives_being_copied_out_of_a_terminal(self):
+        """A console mangles a pasted report in two ways. Select-all takes the
+        shell prompt above and below it. And a terminal that hard-wraps on copy
+        inserts real newlines at the wrap column - in a compact report most of
+        those land inside a quoted string, where a literal newline is a parse
+        error, and some split a bare token like null down the middle."""
+        import json as _json
+        one = _json.dumps(self.PASTE_REPORT, separators=(",", ":"))
+        pretty = _json.dumps(self.PASTE_REPORT, indent=2)
+        cases = [("clean", one), ("pretty", pretty)]
+        for cols in (24, 40, 80, 132):
+            cases.append((f"single-line wrapped at {cols}", self._wrap(one, cols)))
+            cases.append((f"indented wrapped at {cols}", self._wrap(pretty, cols)))
+        cases.append(("select-all with the prompt either side",
+                      "user@box:~$ python3 faultone.py --export-compact -\n"
+                      + self._wrap(one, 80) + "\nuser@box:~$ "))
+        results = self._run_paste_js([text for _, text in cases])
+        for (label, _), got in zip(cases, results):
+            with self.subTest(case=label):
+                self.assertNotIn("err", got, got.get("err"))
+                self.assertEqual(got["ok"], self.PASTE_REPORT,
+                                 "the report came back changed")
+
+    def test_text_that_is_not_a_report_says_so_instead_of_half_loading(self):
+        """A blob truncated by a scrollback limit is the likeliest bad paste,
+        and it has an opening brace - so looking for one and hoping is not
+        enough to tell it from a whole report."""
+        import json as _json
+        whole = _json.dumps(self.PASTE_REPORT, separators=(",", ":"))
+        cases = ["", "user@box:~$ ", "no braces here at all",
+                 whole[:len(whole) // 2],          # cut off by scrollback
+                 "}{"]                              # closing before opening
+        results = self._run_paste_js(cases)
+        for got in results:
+            self.assertIn("err", got, "junk was accepted as a report")
+            self.assertTrue(got["err"], "the failure came back without a reason")
+        # Text with no report in it says so, rather than reporting a syntax
+        # error from somewhere inside a document that was never there. Without
+        # this the bounds check is equivalent to leaving it out - JSON.parse
+        # rejects the same inputs, just less helpfully.
+        for text, got in zip(cases, results):
+            if "{" not in text or "}" not in text.split("{", 1)[-1]:
+                with self.subTest(text=text[:24]):
+                    self.assertIn("no report found", got["err"])
+
+    def test_the_paste_controls_are_gone_from_a_finished_report(self):
+        """A self-contained export is a finished report, not a tool waiting for
+        input - the same reason the file picker is hidden there."""
+        template = nd.VIEWER_TEMPLATE
+        hidden = template.split("if(opts.embedded){", 1)[1].split("]", 1)[0]
+        for control in ("pasteLabel", "pasteBox", "pasteGo", "pasteErr"):
+            self.assertIn(control, hidden,
+                          f"{control} is still offered on a finished report")
+
+    def test_a_bad_paste_is_reported_where_the_text_still_is(self):
+        """An alert has to be dismissed before you can look at what you pasted,
+        which is the wrong shape for something you are about to correct and
+        try again."""
+        template = nd.VIEWER_TEMPLATE
+        # To the end of the listener, not to the first "});" - that one closes
+        # the renderDiagnosis call two lines in, which left the catch block
+        # outside what this was reading and the test blind to what it checks.
+        handler = template.split("getElementById('pasteGo')", 1)[1].split("\n});", 1)[0]
+        self.assertIn("catch", handler, "the handler slice stops before the failure path")
+        self.assertNotIn("alert(", handler)
+        self.assertIn("err.textContent =", handler)
+
+    def test_the_viewer_says_how_to_get_a_report_off_a_locked_down_box(self):
+        """The path only helps someone who knows it is there, and the person
+        who needs it is on a box they cannot copy a file from."""
+        template = nd.VIEWER_TEMPLATE
+        hint = template.split('id="viewerHint"', 1)[1].split("</div>", 1)[0]
+        self.assertIn("--export-compact -", hint)
+        self.assertIn("paste", hint.lower())
+
     def test_no_colour_is_written_outside_a_palette(self):
         """A hardcoded hex is invisible to a palette. Five of them survived the
         light and print grounds at their dark-theme values, which is how the

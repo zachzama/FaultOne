@@ -10365,6 +10365,22 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     color:var(--text-dim); font-family:var(--sans); font-size:12px;
     padding:8px 9px; border-radius:6px;
   }
+  .paste-box{
+    width:100%; box-sizing:border-box; margin-bottom:8px;
+    background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:8px; font-family:var(--mono); font-size:11px;
+    resize:vertical;
+  }
+  .paste-box:focus-visible, .paste-go:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
+  .paste-go{
+    width:100%; padding:6px 10px; border-radius:6px; cursor:pointer;
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    font-family:var(--mono); font-size:12px;
+  }
+  .paste-go:hover{border-color:var(--accent);}
+  .paste-err{color:var(--crit); font-size:11px; margin-top:6px; line-height:1.4;}
   .report-meta{
     font-family:var(--mono); font-size:11px; color:var(--text-dim);
     margin-top:8px; line-height:1.5;
@@ -10560,8 +10576,24 @@ VIEWER_TEMPLATE = r"""<!doctype html>
       <label class="field-label" for="reportFile" id="reportFileLabel">Load exported report</label>
       <input type="file" id="reportFile" class="file-input" accept="application/json,.json">
       <div class="report-meta" id="reportMeta"></div>
+      <!-- The path off a box you cannot copy a file from: the report is
+           printed, selected in your own terminal, and pasted here. SSH
+           sends characters and the local terminal draws them, so the
+           selection never involves the box at all - which is why it works
+           in exactly the places scp does not. -->
+      <label class="field-label" for="pasteBox" id="pasteLabel">Or paste one</label>
+      <textarea id="pasteBox" class="paste-box" rows="3" spellcheck="false"
+                placeholder="paste the output of --export-compact - here"></textarea>
+      <button type="button" id="pasteGo" class="paste-go">Read pasted report</button>
+      <div class="paste-err" id="pasteErr"></div>
       <div class="viewer-hint" id="viewerHint">
-        Choose a <code>report.json</code> above, or drop one anywhere on this page.
+        Choose a <code>report.json</code> above, drop one anywhere on this page,
+        or paste one in.
+        <br><br>
+        Cannot copy a file off the box? Print it and paste it:<br>
+        <code>python3 faultone.py --export-compact -</code><br>
+        select the output in your terminal and paste it above. Wrapped lines
+        and a stray prompt either side are fine.
         <br><br>
         Produce one with:<br><code>python3 faultone.py --export report.json</code>
         <br><br>
@@ -11047,7 +11079,8 @@ function renderDiagnosis(data, opts){
   // input. The standalone viewer keeps its picker - loading another report is
   // the whole point of it - so this turns on only for the embedded copy.
   if(opts.embedded){
-    ['reportFileLabel', 'reportFile', 'viewerHint'].forEach(id => {
+    ['reportFileLabel', 'reportFile', 'viewerHint',
+     'pasteLabel', 'pasteBox', 'pasteGo', 'pasteErr'].forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = 'none';
     });
@@ -11091,6 +11124,39 @@ function loadReportFile(file){
   };
   reader.readAsText(file);
 }
+
+// A report copied off a console arrives mangled in two ways, and both are
+// repairable. Select-all takes the shell prompt above and below it, so the
+// blob is cut from the first brace to the last. And a terminal that hard-wraps
+// on copy - tmux copy mode, most browser consoles - inserts real newlines at
+// the wrap column: in a compact report most of those land inside a quoted
+// string, where a literal newline is a parse error, and some split a bare
+// token like null down the middle.
+//
+// Every one of them can go. Valid JSON escapes the newlines inside its
+// strings, so a literal one can only be the terminal's; and outside a string a
+// newline is whitespace between tokens that are already delimited. Removing
+// all of them repairs both faults and cannot damage a blob that arrived clean.
+function readPastedReport(text){
+  const body = (text || '');
+  const open = body.indexOf('{'), close = body.lastIndexOf('}');
+  if(open === -1 || close <= open) throw new Error('no report found in that text');
+  return JSON.parse(body.slice(open, close + 1).replace(/[\r\n]/g, ''));
+}
+
+document.getElementById('pasteGo').addEventListener('click', () => {
+  const err = document.getElementById('pasteErr');
+  err.textContent = '';
+  try{
+    renderDiagnosis(readPastedReport(document.getElementById('pasteBox').value),
+                    {imported: true});
+  }catch(e){
+    // Shown in the panel rather than an alert: the text is still in the box,
+    // and a dialog you have to dismiss before you can look at it is the wrong
+    // shape for something you are about to correct and retry.
+    err.textContent = 'Could not read that as a report - ' + e.message;
+  }
+});
 
 document.getElementById('reportFile').addEventListener('change', (e) => {
   loadReportFile(e.target.files[0]);

@@ -7453,9 +7453,14 @@ class TestViewerTemplate(unittest.TestCase):
             colour = self._css_var(template, severity)
             # Read the strength out of the stylesheet, not from a copy of it
             # here - hardcoding 8% made this test blind to the one number most
-            # likely to be tweaked.
+            # likely to be tweaked. Read it out of the verdict's own rule too:
+            # the hop nodes now tint against --panel the same way, and a
+            # template-wide search would silently start measuring whichever
+            # rule happened to be written first.
+            rule_name = "critical" if severity == "--crit" else "warning"
+            rule = template.split(f".verdict.{rule_name}{{", 1)[1].split("}", 1)[0]
             m = re.search(rf"color-mix\(in srgb, var\({severity}\) (\d+)%, var\(--panel\)\)",
-                          template)
+                          rule)
             self.assertTrue(m, f"no verdict tint found for {severity}")
             pct = int(m.group(1)) / 100
 
@@ -7489,6 +7494,101 @@ class TestViewerTemplate(unittest.TestCase):
             self.assertLess(rule.index("background:var(--panel)"),
                             rule.index("background:color-mix"),
                             "the fallback has to come before the color-mix line")
+
+    def test_every_colour_the_stylesheet_asks_for_is_one_it_defines(self):
+        """A var() naming a property that was never declared is not an error a
+        browser reports: the declaration is dropped and the property falls back
+        to its initial value, so the element renders in the wrong colour and
+        looks deliberate. The relation pills - the cause, backs it up, caused
+        by it - asked for --line, which the palette calls --border, and had
+        been drawing their border in currentColor ever since."""
+        import re
+        css = nd.VIEWER_TEMPLATE.split("<style", 1)[1].split("</style>", 1)[0]
+        declared = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+        used = set(re.findall(r"var\((--[a-z0-9-]+)", css))
+        self.assertEqual(used - declared, set(),
+                         "the stylesheet uses a custom property it never declares")
+
+    def test_a_reported_hop_keeps_its_own_text_readable(self):
+        """The faulting hop is now a wash of its severity rather than a card
+        with a coloured edge, which moves every contrast ratio inside it. The
+        plain dim grey sits at about 4:1 on the flat panel already, so a tint
+        takes it under the line - the same trap the verdict block hit, one
+        element along. Computed from the template so changing the percentage
+        cannot quietly break it."""
+        import re
+        template = nd.VIEWER_TEMPLATE
+        panel = self._css_var(template, "--panel")
+        lifted = self._css_var(template, "--text-dim-lift")
+        self.assertTrue(panel and lifted, "the colour variables moved or were renamed")
+        for severity, rule_name in (("--warn", "warn"), ("--crit", "crit")):
+            colour = self._css_var(template, severity)
+            rule = template.split(f".hop-node.{rule_name}{{", 1)[1].split("}", 1)[0]
+            m = re.search(rf"color-mix\(in srgb, var\({severity}\) (\d+)%, var\(--panel\)\)",
+                          rule)
+            self.assertTrue(m, f"no hop tint found for {severity}")
+            pct = int(m.group(1)) / 100
+
+            def ch(h):
+                h = h.lstrip("#")
+                return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+            tint = "#" + "".join(f"{round(a * pct + b * (1 - pct)):02x}"
+                                 for a, b in zip(ch(colour), ch(panel)))
+            with self.subTest(severity=severity, pct=m.group(1)):
+                self.assertGreaterEqual(
+                    self._contrast(lifted, tint), 4.5,
+                    f"hop text is unreadable on the {severity} tint at {m.group(1)}%")
+
+    def test_the_clean_hops_recede_and_the_reported_one_does_not(self):
+        """The emphasis is the whole point of the change: if a later edit gives
+        every node a tint, or drops the fade from the clean ones, the path goes
+        back to being a row of equal cards that has to be read rather than
+        seen."""
+        template = nd.VIEWER_TEMPLATE
+        ok_rule = template.split(".hop-node.ok{", 1)[1].split("}", 1)[0]
+        self.assertIn("opacity:0.55", ok_rule)
+        self.assertNotIn("color-mix", ok_rule)
+        for rule_name in ("warn", "crit"):
+            rule = template.split(f".hop-node.{rule_name}{{", 1)[1].split("}", 1)[0]
+            self.assertIn("color-mix", rule)
+            self.assertNotIn("opacity", rule)
+            # The plain colour first, so a browser without color-mix gets the
+            # previous appearance rather than a transparent card.
+            self.assertLess(rule.index("background:var(--panel)"),
+                            rule.index("background:color-mix"),
+                            "the fallback has to come before the color-mix line")
+
+    def test_the_report_can_be_printed_without_coming_out_black(self):
+        """A report that reaches someone through a ticket or an email is a PDF
+        by the time they see it. The viewer is a dark page, so printed as it
+        stood it came out as black ink or as a blank sheet depending on the
+        browser's background-graphics setting, and the panels the reader most
+        needed were folded shut behind a chevron they could not click."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertIn("@media print{", template)
+        rules = template.split("@media print{", 1)[1]
+        # The palette is swapped in place rather than restated, or the printed
+        # page becomes a second stylesheet that drifts from the screen one.
+        self.assertIn("--bg:#ffffff", rules)
+        for hidden in (".topbar", ".sidebar"):
+            self.assertIn(hidden, rules)
+        self.assertIn("display:block !important", rules)
+        self.assertIn("break-inside:avoid", rules)
+
+    def test_the_printed_palette_is_readable_on_paper(self):
+        """Inverting the ground without moving the severity colours would leave
+        amber on white, which is the one combination that survives a dark
+        theme and fails a light one."""
+        import re
+        rules = nd.VIEWER_TEMPLATE.split("@media print{", 1)[1].split("}", 1)[0]
+        white = re.search(r"--bg:(#[0-9a-fA-F]{6})", rules).group(1)
+        for name in ("--text", "--text-dim", "--ok", "--warn", "--crit", "--accent"):
+            m = re.search(rf"{name}:(#[0-9a-fA-F]{{6}})", rules)
+            self.assertTrue(m, f"{name} is not restated for print")
+            with self.subTest(colour=name):
+                self.assertGreaterEqual(
+                    self._contrast(m.group(1), white), 4.5,
+                    f"{name} is unreadable on paper")
 
     def test_the_platform_is_named_the_way_a_reader_would_say_it(self):
         """platform.system() answers with the kernel's name, so a Mac calls

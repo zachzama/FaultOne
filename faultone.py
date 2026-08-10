@@ -10076,7 +10076,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     font-family:var(--mono); font-size:10px; text-transform:uppercase;
     letter-spacing:0.08em; color:var(--text-dim-lift); margin-bottom:5px;
   }
-  .verdict .vhead{font-size:17px; font-weight:600; line-height:1.35; margin-bottom:8px;}
+  .verdict .vhead{font-size:20px; font-weight:600; line-height:1.3; margin-bottom:12px;}
   .verdict .vmeta{
     font-family:var(--mono); font-size:11.5px; color:var(--text-dim-lift);
     display:flex; flex-wrap:wrap; gap:14px; margin-bottom:8px;
@@ -10161,7 +10161,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .finding .rel{
     font-family:var(--mono); font-size:10px; text-transform:uppercase;
     letter-spacing:0.06em; padding:1px 6px; border-radius:9px;
-    border:1px solid var(--line); color:var(--text-dim); white-space:nowrap;
+    border:1px solid var(--border); color:var(--text-dim); white-space:nowrap;
   }
   .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
   .finding .rel-unrelated{border-style:dashed;}
@@ -10239,13 +10239,38 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .hop-node{
     flex:0 1 auto; min-width:110px; max-width:230px;
     background:var(--panel); border:1px solid var(--border);
-    border-left:3px solid #333d47; border-radius:6px; padding:9px 11px;
+    border-left:3px solid #333d47; border-radius:6px; padding:12px 11px;
   }
-  .hop-node.ok{border-left-color:var(--ok);}
-  .hop-node.warn{border-left-color:var(--warn);}
-  .hop-node.crit{border-left-color:var(--crit);}
+  /* A path is read for one thing: which hop the fault lands on. Every node was
+     drawn at the same weight with a different coloured edge, so the answer had
+     to be looked for rather than seen. The clean hops recede into context and
+     the faulting one carries a wash of its own severity - same cards, same
+     layout, the emphasis moved onto the hop that is being reported. The plain
+     background is declared first so a browser too old for color-mix gets the
+     previous appearance rather than a broken one. */
+  .hop-node.ok{border-left-color:var(--ok); background:transparent; opacity:0.55;}
+  .hop-node.warn{
+    padding:16px 12px;
+    background:var(--panel);
+    background:color-mix(in srgb, var(--warn) 9%, var(--panel));
+    border-color:color-mix(in srgb, var(--warn) 40%, var(--border));
+    border-left-color:var(--warn);
+  }
+  .hop-node.crit{
+    padding:16px 12px;
+    background:var(--panel);
+    background:color-mix(in srgb, var(--crit) 11%, var(--panel));
+    border-color:color-mix(in srgb, var(--crit) 50%, var(--border));
+    border-left-color:var(--crit);
+    box-shadow:0 8px 22px -12px rgba(229,83,75,0.75);
+  }
+  /* The dim greys sit at about 4:1 on the flat panel and a tint takes them
+     under it, so the text on a reported hop uses the lifted grey instead. */
+  .hop-node.warn .hop-meta, .hop-node.crit .hop-meta{color:var(--text-dim-lift);}
+  .hop-node.warn .hop-label{color:color-mix(in srgb, var(--warn) 75%, var(--text));}
+  .hop-node.crit .hop-label{color:color-mix(in srgb, var(--crit) 75%, var(--text));}
   .hop-label{font-family:var(--mono); font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em;}
-  .hop-sub{font-family:var(--mono); font-size:12.5px; margin-top:3px; word-break:break-word;}
+  .hop-sub{font-family:var(--mono); font-size:13px; margin-top:4px; word-break:break-word;}
   .hop-arrow{flex:0 0 auto; display:flex; align-items:center; padding:0 8px; color:var(--text-dim); font-family:var(--mono);}
   .hop-meta{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:4px;}
   .hop-meta .jump{color:var(--warn);}
@@ -10265,6 +10290,39 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     margin-left:6px; padding-left:14px;
   }
   .hop-arrow.handoff span{font-size:9px; letter-spacing:0.04em;}
+
+  /* A report often has to reach someone who will not open a file - it goes
+     into a ticket, an email or a change record as a PDF. Printed as it stands,
+     a dark page comes out as black ink or as nothing at all, depending on the
+     browser's background-graphics setting. So print gets a light ground with
+     the same palette inverted in place: the severity colours are darkened only
+     as far as they need to hold 4.5:1 on white, and every rule below is a
+     variable swap rather than a second stylesheet that could drift.
+     The controls that produce a report are dropped, since a printed one has
+     already been produced, and the evidence panels are forced open - a chevron
+     the reader cannot click would otherwise hide the output on paper. */
+  @media print{
+    :root{
+      --bg:#ffffff; --panel:#ffffff; --panel-2:#f5f6f8; --border:#c7cdd4;
+      --text:#11161c; --text-dim:#59636f; --text-dim-lift:#454f5a;
+      --accent:#0f6f66; --accent-dim:#9fd4ce;
+      --ok:#1a7f37; --warn:#8a5b00; --crit:#b3261e;
+    }
+    .topbar, .sidebar, #reportControls, .file-input{display:none !important;}
+    .layout{display:block; min-height:0;}
+    .main{padding:0;}
+    .panel.collapsed .panel-body, .panel.collapsed .panel-desc{display:block !important;}
+    .panel-head .chev{display:none;}
+    pre{max-height:none; overflow:visible;}
+    /* A hop or a finding split across a page break is the one thing on the
+       page that has to be read whole. */
+    .verdict, .finding, .hop-node, .panel{box-shadow:none; break-inside:avoid;}
+    /* On paper there is no glow to carry a lamp, so the dot needs its edge. */
+    .led, .finding .sev{box-shadow:none; border:1px solid var(--border);}
+    /* The recede-and-emphasise pass reads as ink density on screen; on paper a
+       55% grey hop just looks badly printed. */
+    .hop-node.ok{opacity:1;}
+  }
 </style>
 </head>
 <body>

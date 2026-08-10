@@ -239,6 +239,10 @@
   }
   .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
   .finding .rel-unrelated{border-style:dashed;}
+  /* A fix that means somebody in the room rather than somebody at a keyboard.
+     Given its own colour because it is a different kind of answer, not a
+     different severity. */
+  .finding .rel-hardware{border-color:#8a6d1f; color:#d3a83a;}
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
@@ -679,7 +683,8 @@ function renderDiagnosis(data, opts){
       <div class="sev"></div>
       <div>
         <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
-          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}</div>
+          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
+          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>

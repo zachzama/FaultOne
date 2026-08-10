@@ -5094,6 +5094,34 @@ LATENT = {
 WEAK_EVIDENCE = {"link_errors_historical", "mtu_nonstandard", "trace_stalls"}
 
 
+# Findings whose fix is somebody putting their hands on something: reseating a
+# connector, cleaning an optic, swapping a cable, replacing an adapter, clearing
+# an air intake. Marked because it is a different kind of answer from the rest
+# of this report - not a different severity, a different *action*. Everything
+# else here is read, configured, or escalated to whoever owns the next segment;
+# these need a person in the room.
+#
+# Deliberately narrower than "hardware caused it". A duplex mismatch, a link
+# negotiated below its port's rating and a collision count are all *either* a
+# damaged cable or a setting forced at one end, and the tool cannot tell which
+# from here - so they are left unmarked rather than sending somebody to a rack
+# on a coin toss. The rule is not "is this hardware" but "does this tool know
+# the fix is physical".
+HARDWARE_FINDINGS = {
+    # The optic, its fibre, and the connectors at both ends.
+    "optics_alarm", "optics_rx_low", "optics_rx_marginal", "optics_warning",
+    # Frames arriving damaged. Ethernet's own CRC caught them, which puts the
+    # corruption on the cable, the connector or the module.
+    "link_errors_live", "link_errors_historical",
+    # A link that keeps going away and coming back.
+    "link_flapping_live", "link_flapping", "link_flapping_logged",
+    # The adapter resetting itself, and a bonded member that is down.
+    "nic_reset_logged", "bond_degraded",
+    # Cooling. Airflow, dust, a failed fan - all of them a person in the room.
+    "cpu_throttled_live", "cpu_throttled_historical",
+}
+
+
 # Findings that describe traffic being lost, delayed or refused, rather than a
 # thing being misconfigured. The distinction decides whether a fault further up
 # the stack is this cause's consequence or somebody else's problem, and layer
@@ -9757,6 +9785,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         relation = finding_relation(f.get("code"), verdict)
         if relation:
             f["relation"] = relation
+        if f.get("code") in HARDWARE_FINDINGS:
+            f["kind"] = "hardware"
     _retarget_verdict(verdict, raw)
     _qualify_upstream_verdict(verdict, raw, uplink_mbps)
     if neighbours and verdict.get("based_on") and verdict["based_on"][0] in PORT_RELEVANT_CODES:
@@ -10081,6 +10111,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   }
   .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
   .finding .rel-unrelated{border-style:dashed;}
+  /* A fix that means somebody in the room rather than somebody at a keyboard.
+     Given its own colour because it is a different kind of answer, not a
+     different severity. */
+  .finding .rel-hardware{border-color:#8a6d1f; color:#d3a83a;}
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
@@ -10521,7 +10555,8 @@ function renderDiagnosis(data, opts){
       <div class="sev"></div>
       <div>
         <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
-          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}</div>
+          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
+          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>
@@ -11165,6 +11200,10 @@ def render_text_report(report, color=False, width=None):
         n = len(v.get("explains") or [])
         if n:
             basis.append(f"{n} explained by it")
+        hands = sum(1 for f in report.get("findings", [])
+                    if f.get("kind") == "hardware" and f.get("severity") != "ok")
+        if hands:
+            basis.append(f"{hands} needing hands on it")
         out.append(f"  owner: {v['owner']}   confidence: {v['confidence']}"
                    + (f" ({', '.join(basis)})" if basis else ""))
         for line in textwrap.wrap(f"next: {v['next_step']}", width=min(width, 72) - 2):
@@ -11247,8 +11286,13 @@ def render_text_report(report, color=False, width=None):
         out.append(head + body[0])
         for extra in body[1:]:
             out.append(" " * 26 + extra)
+        marks = []
         if relation:
-            out.append(" " * 26 + tint(f"^ {FINDING_RELATIONS[relation]}",
+            marks.append(FINDING_RELATIONS[relation])
+        if f.get("kind") == "hardware":
+            marks.append("needs hands on it")
+        if marks:
+            out.append(" " * 26 + tint("^ " + " · ".join(marks),
                                        "critical" if relation == "cause" else "ok"))
 
     low = report.get("lowest_broken_layer")

@@ -318,6 +318,41 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## A fix that needs hands is marked as one
+
+Findings are separated by a fifth axis, alongside layer, direction, scope and
+relation to the verdict: **does fixing this mean somebody in the room?**
+
+```
+owner: the fibre link into this device   confidence: medium (15 of 16 checks ran, 1 needing hands on it)
+
+[CRIT] L1 Physical   eth0: optical receive power is -32.0 dBm, below the...
+                     ^ the cause · needs hands on it
+```
+
+Not a severity — an **action**. Everything else in this report is read,
+configured, or escalated to whoever owns the next segment. These thirteen need
+a connector reseated, an optic cleaned, a cable swapped, an adapter replaced or
+an air intake cleared:
+
+| | |
+|---|---|
+| the optics | `optics_alarm`, `optics_rx_low`, `optics_rx_marginal`, `optics_warning` |
+| frames arriving damaged | `link_errors_live`, `link_errors_historical` |
+| a link that keeps going away | `link_flapping_live`, `link_flapping`, `link_flapping_logged` |
+| the adapter, and redundancy | `nic_reset_logged`, `bond_degraded` |
+| cooling | `cpu_throttled_live`, `cpu_throttled_historical` |
+
+**What it deliberately does not claim.** A duplex mismatch, a link negotiated
+below its port's rating, a collision count, a ring overrun and an invalid frame
+length are each *either* something physical or a setting forced at one end — and
+this tool cannot tell which from where it stands. They are left unmarked rather
+than sending somebody to a rack on a coin toss.
+
+So the rule is not "is this hardware". It is **does this tool know the fix is
+physical**, which is a smaller and more honest set. Twenty-one findings here are
+hardware-derived; thirteen of them are ones where the answer is unambiguous.
+
 ## What the stage strip will not be asked to carry
 
 The strip is the chain this tool reasons about: link, address, gateway,
@@ -1213,7 +1248,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 837 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 845 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1375,7 +1410,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 837 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 845 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2701,7 +2736,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-837 tests, no dependencies, no network, a few seconds — so they run
+845 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

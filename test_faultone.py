@@ -2636,6 +2636,77 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestAFixThatNeedsHandsIsMarkedAsOne(unittest.TestCase):
+    """A different kind of answer from the rest of the report - not a different
+    severity, a different action. Everything else here is read, configured, or
+    escalated to whoever owns the next segment; these need a person in the
+    room."""
+
+    def test_a_dim_optic_is_marked(self):
+        setup, kw = S["optics_rx_low"]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        f = next(x for x in rep["findings"] if x["code"] == "optics_rx_low")
+        self.assertEqual(f["kind"], "hardware")
+
+    def test_a_full_link_is_not(self):
+        """Nothing to touch: the line is being used, not broken."""
+        setup, kw = S["link_saturated"]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        f = next(x for x in rep["findings"] if x["code"] == "link_saturated")
+        self.assertNotIn("kind", f)
+
+    def test_what_it_deliberately_does_not_claim(self):
+        """A duplex mismatch, a link negotiated below its port's rating and a
+        collision count are each either a damaged cable or a setting forced at
+        one end. The tool cannot tell which from here, so it does not send
+        somebody to a rack on a coin toss."""
+        for code in ("duplex_mismatch", "slow_link", "negotiated_below_capacity",
+                     "collisions", "nic_ring_overruns", "frame_length_errors"):
+            with self.subTest(code=code):
+                self.assertNotIn(code, nd.HARDWARE_FINDINGS)
+
+    def test_the_set_names_only_findings_that_exist(self):
+        import re
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        self.assertEqual(sorted(nd.HARDWARE_FINDINGS - codes), [])
+
+    def test_it_is_a_kind_and_not_a_severity(self):
+        """Marking something as needing hands says nothing about how bad it is.
+        An optic with margin left is a warning and still needs a person."""
+        self.assertIn("optics_rx_marginal", nd.HARDWARE_FINDINGS)
+        self.assertIn("optics_rx_marginal", nd.LATENT)
+
+    def test_the_verdict_line_counts_them(self):
+        setup, kw = S["optics_rx_low"]
+        m = fresh(); setup(m)
+        text = m.render_text_report(m.diagnose(quick=False, **scenario_kwargs(kw)))
+        self.assertIn("needing hands on it", text)
+
+    def test_context_findings_are_never_counted(self):
+        """The count is of work to do. An ok-severity note is not work."""
+        m = fresh()
+        rep = {"findings": [{"code": "optics_rx_low", "severity": "ok",
+                             "kind": "hardware", "message": "x", "layer": 1}],
+               "verdict": {"headline": "h", "owner": "o", "next_step": "n",
+                           "confidence": "high", "severity": "ok",
+                           "coverage": {"ran": 1, "attempted": 1},
+                           "corroborated_by": [], "unrelated": [], "based_on": []},
+               "stages": [], "target": "8.8.8.8"}
+        self.assertNotIn("needing hands on it", nd.render_text_report(rep))
+
+    def test_it_reaches_the_page(self):
+        setup, kw = S["optics_rx_low"]
+        m = fresh(); setup(m)
+        page = m.render_report_html(m.diagnose(quick=False, **scenario_kwargs(kw)))
+        back = m.extract_embedded_report(page)
+        self.assertEqual(
+            next(f for f in back["findings"] if f["code"] == "optics_rx_low")["kind"],
+            "hardware")
+        self.assertIn("rel-hardware", page)
+
+
 class TestNothingIsTruncatedInSilence(unittest.TestCase):
     """Two lists in the report were cut to a fixed length and rendered as if
     that were all there was. One of them exists specifically so a second fault

@@ -2,10 +2,12 @@
 
 Five harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
-nothing about what the tool does. They exist because two questions come up
-before every release and neither is answerable by the test suite.
+nothing about what the tool does. They exist because the questions that come up
+before a release are not the ones a test suite answers: it checks that each
+thing still does what it was written to do, not whether a change leaked into
+something nobody thought to assert about.
 
-Both are stdlib-only and offline, like everything else here.
+All five are stdlib-only and offline, like everything else here.
 
 ## `deep_e2e.py` — does the whole pipeline hold, for every finding?
 

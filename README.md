@@ -25,14 +25,13 @@ It fits two shapes of box and tells them apart on its own:
 ========================================================================
 LIKELY ROOT CAUSE: The loss is on what talks to this box, not on what it
 talks to
-  owner: the path between this box and the people using it
-  confidence: medium (15 of 17 checks ran)
-  next: Everything this box depends on is clean, so the service itself is
-  healthy. The loss is between here and your users - the edge, the load
-  balancer in front, or the internet path to them.
+  owner: the path between this box and the people using it   confidence: medium (15 of 18 checks ran)
+  next: Everything this box depends on is clean, so the service itself
+  is healthy. The loss is between here and your users - the edge, the
+  load balancer in front, or the internet path to them.
 ========================================================================
 
-  clients in (10.20.0.7) FAULT  ->  this box ok  ->  depends on (10.60.9.30) ok
+  clients in FAULT  ->  this box ok  ->  depends on ok
 
   link PASS   address PASS   gateway PASS   internet FAIL   dns PASS   mtu PASS   ports PASS
 ```
@@ -87,8 +86,10 @@ python3 faultone.py --export report.json   # smaller - drop it on static/index.h
 ```
 
 The `.html` carries the report inside it: double-click and you're looking at the
-findings, the verdict and a hop-by-hop path diagram. The `.json` is smaller and
-carries no viewer, so it's the one to paste through a terminal — and it's what
+verdict, which direction the fault is on, the hop-by-hop path and the evidence
+behind all of it. It follows your system's light or dark setting, prints to
+paper properly, and opens from the keyboard. The `.json` is smaller and carries
+no viewer, so it's the one to paste through a terminal — and it's what
 `--baseline` reads on the next visit.
 
 **Getting it back off a box you can barely reach?** Most of an export is the
@@ -98,6 +99,11 @@ captured output of every command, kept so a conclusion can be audited later.
 ```bash
 python3 faultone.py --export-compact report.json    # ~5 KB instead of ~120 KB
 ```
+
+Same verdict, same findings, same hop diagram, same stage strip — all of that is
+derived and none of it is what makes an export big. What's kept is the evidence
+behind the stages that aren't passing, plus any check that couldn't run, because
+a gap in coverage has to stay visible or it reads as a pass.
 
 **Can't copy a file off it at all?** No `scp`, no outbound connection, nothing
 to install — but you can always read the screen. Print the report instead:
@@ -111,11 +117,6 @@ sends characters and your own terminal draws them, so the selection never
 involves the box — which is exactly why this works where a file transfer
 doesn't. It comes out on one line so a single click takes all of it, and the
 viewer copes with the wrapping and with a stray shell prompt either side.
-
-Same verdict, same findings, same hop diagram, same stage strip — all of that is
-derived and none of it is what makes an export big. What's kept is the evidence
-behind the stages that aren't passing, plus any check that couldn't run, because
-a gap in coverage has to stay visible or it reads as a pass.
 
 Either way there's no server, no internet, and nothing installed on either
 machine.

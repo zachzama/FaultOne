@@ -1688,10 +1688,14 @@ timeout) between "this device" and the target.
 Each hop carries a bit of insight beyond "hop 3 answered in 24ms", all derived
 from the trace already taken — no extra packets:
 
-- **lan / wan** — whether the hop is inside this site (RFC1918, CGNAT,
-  link-local) or out on the provider's network. The first public hop is marked
-  **site edge**, and that boundary is the demarcation between the site's
-  network and their ISP — usually the first thing you want to establish.
+- **lan / wan** — whether the hop is inside this site (RFC1918, link-local) or
+  out on the provider's network. The first hop that is public *or in carrier
+  NAT* is marked **site edge**, and that boundary is the demarcation between
+  the site's network and their ISP — usually the first thing you want to
+  establish. Carrier NAT counts as theirs: 100.64.0.0/10 is not routable on
+  the internet, so it reads like a private range, but it is the provider's
+  addressing and not the site's. Taking the first *public* hop alone put the
+  edge past their NAT layer and drew it as though it were inside the site.
 - **+Nms** — latency this hop *added* over the previous one. An accumulating
   total tells you little; the jump tells you where the delay is introduced.
   The largest jump is called out, along with which side of the edge it's on.
@@ -1711,9 +1715,15 @@ from the trace already taken — no extra packets:
 
 Three structural faults are detected from the same data:
 
-- **Double NAT** — two different private subnets before the site edge means at
-  least two routers in series. It usually still works, but it breaks inbound
-  connections and port forwarding, and makes intermittent faults hard to place.
+- **Two private networks in series** — two different private subnets before
+  the site edge mean traffic crosses at least two routers on the way out.
+  Commonly that is double NAT, and it is reported as a likelihood rather than
+  a reading: a traceroute cannot tell a translating router from one that only
+  routes, and a site with several routed VLANs is ordinary in itself. If it
+  is NAT it breaks inbound connections and port forwarding; either way there
+  is a second device in the path to rule out. Only hops before the edge are
+  counted — plenty of carriers number their own core out of RFC1918, and
+  scanning the whole trace reported their addressing as the site's.
 - **Routing loop** — the same address answering at two hop numbers. Traffic is
   circling and will die when the TTL runs out; that's an upstream routing
   misconfiguration, not a fault on the device.
@@ -2664,20 +2674,38 @@ sudo python3 faultone.py --export report.json --target 1.1.1.1   # trace/ping a 
 sudo python3 faultone.py --export report.json --target 8.8.8.8 --check-ports 53,443
 ```
 
-This runs the same collection + heuristics as the live UI, but opens
-no port at all. Copy `report.json` to your laptop (`scp`, USB, email,
-whatever), then open `static/index.html` **directly in a browser** —
-no server needed for this part — and use **Load exported report** in
-the sidebar. You get the same findings, LED panel, and visual hop-by-hop
-path diagram (source → gateway → each traceroute hop, colored by
-timeout/latency → target) as the live view, built entirely client-side
-from the JSON file.
+This runs the same collection and heuristics as the terminal report but opens
+no port at all. Copy `report.json` to your laptop (`scp`, USB, email, whatever),
+then open `static/index.html` **directly in a browser** — no server is needed
+for this part. There are three ways in: **Load exported report**, dropping the
+file anywhere on the page, or pasting the JSON into the box in the sidebar.
+Everything is built client-side from the report; the page makes no network
+request of any kind.
+
+The page reads in the order the questions arrive — the verdict first, then which
+direction the fault is on and the path out beneath it, then the findings, then
+what was checked, then the captured output behind it. Each group is marked by a
+rail down its side.
+
+Hop colour comes from what the report concluded, not from a second reading of
+the timings: a hop a finding named, a destination something has established is
+unreachable, and the state of the way in and of this box are all taken from the
+verdict and the direction panel. Hops the trace never heard from are drawn as
+one node, because a run of timeouts to the end of a trace establishes that it
+stopped, not how far the path runs past there.
+
+It follows your system's light or dark setting, prints to paper on a light
+ground with the panels opened out, and the evidence panels can be opened from
+the keyboard.
 
 `static/index.html` only ever has to exist on *your* machine, never on the
 box you're diagnosing.
 
 When file transfer off the box is blocked or awkward, use `-` to send the
-JSON to stdout and just select-and-paste it into a file locally:
+JSON to stdout, then select it in your terminal and paste it straight into the
+viewer — no file needed at either end. SSH sends characters and your own
+terminal draws them, so the selection never involves the box, which is why this
+works where `scp` does not:
 
 ```bash
 sudo python3 faultone.py --export -                  # JSON on stdout

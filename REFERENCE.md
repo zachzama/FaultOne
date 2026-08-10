@@ -318,6 +318,42 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## Colour, for the terminal reader
+
+`--report` is the primary way this is read — the viewer is optional, and on a
+locked-down box often unavailable. The colour vocabulary is deliberately small
+and means one thing throughout: **red is critical, amber is warning, green is
+fine.** It is switched off unless stdout is a real terminal, and honours
+`NO_COLOR`, because reports get pasted into tickets and piped into files where
+escape codes are noise.
+
+Two tables were entirely monochrome — the interface error counters and the link
+modes, which are the tables carrying the actual numbers. On a box with eight
+interfaces that table is the fastest way to find the bad one, and it gave no cue
+at all:
+
+```
+iface            packets   errors   drops   err/M   live
+eth0          10,000,000        0       0     0.0   steady over 2s
+eth1          10,000,000    9,000       0   900.0   steady over 2s     <- amber
+eth2          10,000,000        0       0     0.0   steady over 2s
+```
+
+The row takes **the severity of what was found about that interface**, read off
+the findings by their `scope`. It is not a second opinion formed in the
+renderer: the tables would otherwise need their own copy of every threshold —
+what counts as an error rate, a drop rate, a slow link — and a second copy of a
+rule is a second chance to disagree with the first.
+
+An `ok`-severity note is not a reason to mark a row. Context like `tunnel_mtu`
+or `virtual_nic` carries a scope and leaves its row plain, because nothing about
+it is wrong.
+
+**"Needs hands on it" gets no colour of its own**, deliberately. Three colours
+that each mean a severity is a vocabulary a reader learns once; a fourth meaning
+something else entirely would dilute it. The words carry that distinction, and
+the colour keeps meaning severity everywhere it appears.
+
 ## A fix that needs hands is marked as one
 
 Findings are separated by a fifth axis, alongside layer, direction, scope and
@@ -1248,7 +1284,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 845 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 849 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1410,7 +1446,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 845 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 849 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2736,7 +2772,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-845 tests, no dependencies, no network, a few seconds — so they run
+849 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

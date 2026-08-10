@@ -2636,6 +2636,77 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestTheTablesSayWhichRowToLookAt(unittest.TestCase):
+    """The two tables carrying the actual numbers - error counters and link
+    modes - were entirely monochrome. On a box with eight interfaces the table
+    is the fastest way to find the bad one, and it gave no cue at all."""
+
+    ESC = re.compile(r"\x1b\[[0-9;]*m")
+
+    def box(self, bad_iface_errors):
+        def vals(err):
+            d = {k: 0 for k in ("tx_errors", "rx_dropped", "tx_dropped",
+                                "rx_frame_errors", "rx_over_errors", "collisions",
+                                "rx_missed_errors", "rx_length_errors",
+                                "tx_carrier_errors")}
+            d.update(rx_packets=5_000_000, tx_packets=5_000_000, rx_bytes=0,
+                     tx_bytes=0, operstate="up", carrier_changes=0,
+                     rx_errors=err, rx_crc_errors=err)
+            return d
+        m = fresh(); m.OS_NAME = "Linux"
+        m._read_link_stats = lambda: ({"eth0": vals(0), "eth1": vals(bad_iface_errors),
+                                       "eth2": vals(0)}, "sysfs")
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": n, "speed_mbps": 1000, "duplex": "full", "mtu": 1500,
+             "carrier": True, "operstate": "up"} for n in ("eth0", "eth1", "eth2")]}
+        return m, m.diagnose("8.8.8.8", None, quick=False)
+
+    def rows(self, m, rep, section):
+        text = m.render_text_report(rep, color=True)
+        block = text.split(section, 1)[1].split("\n\n", 1)[0]
+        out = {}
+        for line in block.splitlines():
+            plain = self.ESC.sub("", line).strip()
+            if plain.startswith("eth"):
+                out[plain.split()[0]] = "\x1b[" in line
+        return out
+
+    def test_only_the_interface_with_a_finding_is_coloured(self):
+        m, rep = self.box(9000)
+        for section in ("INTERFACE ERROR COUNTERS", "LINK MODE"):
+            with self.subTest(section=section):
+                rows = self.rows(m, rep, section)
+                self.assertTrue(rows["eth1"], "the faulty interface is not marked")
+                self.assertFalse(rows["eth0"], "a clean interface was marked")
+                self.assertFalse(rows["eth2"], "a clean interface was marked")
+
+    def test_a_clean_box_colours_nothing(self):
+        m, rep = self.box(0)
+        rows = self.rows(m, rep, "INTERFACE ERROR COUNTERS")
+        self.assertFalse(any(rows.values()))
+
+    def test_the_colour_is_the_severity_of_what_was_found(self):
+        """Not a second opinion formed in the renderer. The tables would
+        otherwise need their own copy of every threshold, and a second copy of
+        a rule is a second chance to disagree with the first."""
+        worst = nd.worst_by_scope([
+            {"code": "a", "severity": "warning", "scope": "eth1"},
+            {"code": "b", "severity": "critical", "scope": "eth1"},
+            {"code": "c", "severity": "ok", "scope": "eth2"},
+            {"code": "d", "severity": "critical"},
+        ])
+        self.assertEqual(worst["eth1"], "critical", "the worst of the two must win")
+        self.assertNotIn("eth2", worst,
+                         "an ok-severity note is not a reason to mark a row")
+        self.assertNotIn(None, worst, "a finding with no scope belongs to no row")
+
+    def test_nothing_is_coloured_when_the_output_is_not_a_terminal(self):
+        """Reports get pasted into tickets and piped into files, where escape
+        codes are noise."""
+        m, rep = self.box(9000)
+        self.assertNotIn("\x1b[", m.render_text_report(rep, color=False))
+
+
 class TestAFixThatNeedsHandsIsMarkedAsOne(unittest.TestCase):
     """A different kind of answer from the rest of the report - not a different
     severity, a different action. Everything else here is read, configured, or

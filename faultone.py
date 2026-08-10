@@ -10809,6 +10809,27 @@ def use_color(stream):
     )
 
 
+def worst_by_scope(findings):
+    """The worst severity anything said about each interface.
+
+    Read off the findings rather than worked out again from the counters. The
+    tables below would otherwise need their own copy of every threshold - what
+    counts as an error rate, a drop rate, a slow link - and a second copy of a
+    rule is a second chance to disagree with the first. Anything with a scope
+    has already been judged; this only asks what the answer was.
+    """
+    rank = {"ok": 0, "warning": 1, "critical": 2}
+    worst = {}
+    for f in findings or []:
+        scope = f.get("scope")
+        if not scope:
+            continue
+        sev = f.get("severity", "ok")
+        if rank.get(sev, 0) > rank.get(worst.get(scope, "ok"), 0):
+            worst[scope] = sev
+    return worst
+
+
 def _render_inbound(report, out, tint, width):
     """The other direction, as far as it can honestly be drawn: one hop.
 
@@ -10965,6 +10986,11 @@ def _render_link_tables(report, out, tint, width):
         iface_speed = {m.get("name"): m.get("speed_mbps")
                        for m in ((report.get("raw", {}).get("link_modes") or {})
                                  .get("interfaces") or [])}
+        # Which row to look at first, on a box with eight of them. The colour
+        # says the same thing here as everywhere else in the report - it is the
+        # severity of what was found about that interface, not a second opinion
+        # formed in the renderer.
+        scope_sev = worst_by_scope(report.get("findings"))
         out.append("INTERFACE ERROR COUNTERS")
         out.append(f"  {'iface':<10}{'packets':>14}{'errors':>9}{'drops':>8}{'err/M':>8}   live")
         for i in ifaces:
@@ -10993,8 +11019,9 @@ def _render_link_tables(report, out, tint, width):
                                                      i.get("tx_mbps") or 0)
                 if peak and peak >= max(mean, 0.01) * PEAK_WORTH_SHOWING:
                     rate += f", peak {peak:g}"
-            out.append(f"  {i['name']:<10}{i['packets']:>14,}{i['errors']:>9,}"
-                       f"{i['drops']:>8,}{i['err_ppm']:>8}   {live}{rate}")
+            row = (f"  {i['name']:<10}{i['packets']:>14,}{i['errors']:>9,}"
+                   f"{i['drops']:>8,}{i['err_ppm']:>8}   {live}{rate}")
+            out.append(tint(row, scope_sev[i["name"]]) if i["name"] in scope_sev else row)
 
     optics = ((report.get("raw", {}) or {}).get("optics") or {}).get("interfaces") or {}
     if optics:
@@ -11023,10 +11050,12 @@ def _render_link_tables(report, out, tint, width):
         out.append("")
         out.append("LINK MODE")
         out.append(f"  {'iface':<10}{'speed':>10}{'duplex':>9}{'mtu':>7}")
+        scope_sev = worst_by_scope(report.get("findings"))
         for m in modes:
             speed = f"{m['speed_mbps']}M" if m.get("speed_mbps") else "-"
-            out.append(f"  {m['name']:<10}{speed:>10}{(m.get('duplex') or '-'):>9}"
-                       f"{(m.get('mtu') or '-'):>7}")
+            row = (f"  {m['name']:<10}{speed:>10}{(m.get('duplex') or '-'):>9}"
+                   f"{(m.get('mtu') or '-'):>7}")
+            out.append(tint(row, scope_sev[m["name"]]) if m["name"] in scope_sev else row)
 
 def _render_services(report, out, tint, width):
     """Path MTU, resolvers, retransmits and port checks."""

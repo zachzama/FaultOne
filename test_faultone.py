@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+import types
 import unittest
 
 import faultone as nd
@@ -712,7 +713,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
     def test_a_counter_that_went_backwards_is_unknown_not_negative(self):
         """A 32-bit counter wraps, and an interface can be reset mid-sample.
         "-98 errors in 2s" is not a rate."""
-        nd.time.sleep = lambda s: None
+        patch_clock(self, sleep=lambda s: None)
         base = dict(tx_packets=0, rx_bytes=0, tx_bytes=0, tx_errors=0, rx_dropped=0,
                     tx_dropped=0, rx_crc_errors=0, rx_frame_errors=0, rx_over_errors=0,
                     collisions=0, operstate="up")
@@ -2636,6 +2637,72 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestWhichPartOfTheAnswerTookTheTime(unittest.TestCase):
+    """"The service answered in 900ms" is true and useless. Getting a
+    connection, finishing a handshake and waiting for the application are three
+    different things with three different owners - and this connection goes to
+    a listener on the same box, so the first two should be almost nothing."""
+
+    def serve(self, delay=0.0, tls=False):
+        import socket, threading, time
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        self.addCleanup(srv.close)
+        port = srv.getsockname()[1]
+
+        def run():
+            try:
+                c, _ = srv.accept()
+                c.recv(1024)
+                time.sleep(delay)
+                c.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+                c.close()
+            except OSError:
+                pass
+        threading.Thread(target=run, daemon=True).start()
+        return port, nd.cmd_own_http(port, address="127.0.0.1", tls=tls, timeout=3)
+
+    def test_the_answer_is_split_into_its_phases(self):
+        """Relative, not absolute. An earlier version asserted the connect took
+        under 100ms and the wait over 200ms, which passed alone and failed in
+        the full suite: both are wall-clock measurements against a live socket
+        and a loaded machine moves them. What the split has to get right is
+        which phase the time went to, and that holds under any load."""
+        _port, res = self.serve(delay=0.25)
+        phases = res["phases"]
+        self.assertGreater(phases["wait_ms"], phases["connect_ms"],
+                           "the delay was on the service's side, not the connect")
+        self.assertIsNone(phases["tls_ms"], "no handshake on a plain connection")
+
+    def test_the_phases_account_for_the_total(self):
+        _port, res = self.serve(delay=0.10)
+        phases = res["phases"]
+        parts = phases["connect_ms"] + phases["wait_ms"]
+        self.assertLessEqual(parts, res["ms"] + 1,
+                             "the parts cannot exceed the whole they came from")
+
+    def test_it_names_the_phase_that_dominated(self):
+        port, res = self.serve(delay=0.25)
+        findings = []
+        nd._own_service_findings(res, port, findings)
+        note = next(f for f in findings if f["code"] == "own_service_timing")
+        self.assertIn("waiting for the service", note["message"])
+        self.assertEqual(note["severity"], "ok")
+
+    def test_it_is_context_and_never_a_verdict(self):
+        """What counts as slow depends entirely on what the service does, and a
+        number picked here would be wrong for most of them."""
+        self.assertIn("own_service_timing", nd.VERDICT_EXEMPT)
+
+    def test_a_check_that_never_connected_reports_no_phases(self):
+        """Nothing was timed, so nothing is claimed."""
+        res = nd.cmd_own_http(1, address="127.0.0.1", tls=False, timeout=1)
+        self.assertNotIn("phases", res)
+        findings = []
+        nd._own_service_findings(res, 1, findings)
+        self.assertEqual([f for f in findings if f["code"] == "own_service_timing"], [])
+
+
 class TestTheTablesSayWhichRowToLookAt(unittest.TestCase):
     """The two tables carrying the actual numbers - error counters and link
     modes - were entirely monochrome. On a box with eight interfaces the table
@@ -2776,6 +2843,65 @@ class TestAFixThatNeedsHandsIsMarkedAsOne(unittest.TestCase):
             next(f for f in back["findings"] if f["code"] == "optics_rx_low")["kind"],
             "hardware")
         self.assertIn("rel-hardware", page)
+
+
+class TestTheSuiteDoesNotBreakItsOwnClock(unittest.TestCase):
+    """`nd.time` is not a copy of anything - it is the `time` module, shared by
+    every module in the process. So `nd.time.sleep = ...` disables sleeping
+    everywhere until something puts it back, and two places here did that and
+    never did. Anything running afterwards that depended on real time was
+    silently not testing what it said."""
+
+    def test_sleeping_still_works_by_the_time_this_runs(self):
+        self.assertIs(time.sleep, REAL_SLEEP)
+        self.assertIs(time.monotonic, REAL_MONOTONIC)
+
+    def test_a_scenario_module_gets_its_own_clock_not_a_hole_in_the_shared_one(self):
+        """fresh() is called for every scenario, and the scenarios must not
+        really sleep. It rebinds the name on its own module copy rather than
+        reaching into the one every other module is using."""
+        m = fresh()
+        self.assertIsNot(m.time, time)
+        m.time.sleep(5)                                   # must return at once
+        self.assertIs(time.sleep, REAL_SLEEP)
+
+    def test_anything_that_patches_the_shared_clock_puts_it_back(self):
+        """Found by measuring 0.1ms of a 250ms delay. Checked as the property
+        that matters rather than by counting lines: a class may patch
+        `nd.time`, but then it has to restore it, and the two that do are fine.
+        A count with an allowance would have grown quietly every time somebody
+        added one."""
+        import ast
+        tree = ast.parse(open(__file__).read())
+
+        def patches_shared_clock(node):
+            """An assignment to `nd.time.sleep` or `nd.time.monotonic`.
+
+            Matched on the shape of the target, not on substrings: `mod.time`
+            and `m.time` are module copies fresh() has already given a clock of
+            their own, and a looser check flagged both of those as leaks."""
+            for a in ast.walk(node):
+                if not isinstance(a, ast.Assign):
+                    continue
+                for t in a.targets:
+                    if (isinstance(t, ast.Attribute) and t.attr in ("sleep", "monotonic")
+                            and isinstance(t.value, ast.Attribute) and t.value.attr == "time"
+                            and isinstance(t.value.value, ast.Name)
+                            and t.value.value.id == "nd"):
+                        return True
+            return False
+
+        offenders = []
+        for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            if not patches_shared_clock(cls):
+                continue
+            methods = {m.name for m in cls.body if isinstance(m, ast.FunctionDef)}
+            uses_helper = "patch_clock" in ast.dump(cls)
+            if "tearDown" not in methods and not uses_helper:
+                offenders.append(cls.name)
+        self.assertEqual(offenders, [],
+                         "these patch the shared clock and never restore it - use "
+                         "patch_clock, or save and put it back in tearDown")
 
 
 class TestNothingIsTruncatedInSilence(unittest.TestCase):
@@ -4877,10 +5003,15 @@ class TestOwnServiceAnswers(unittest.TestCase):
         return port
 
     def ask(self, handler, timeout=2):
+        """The service's answer, and the *faults* found in it.
+
+        Faults, not findings: every answer also carries the phase split as
+        context, and every test here is about whether something is wrong.
+        """
         res = nd.cmd_own_http(self.serve(handler), timeout=timeout)
         found = []
         nd._own_service_findings(res, res["port"], found)
-        return res, [f["code"] for f in found]
+        return res, [f["code"] for f in found if f["severity"] != "ok"]
 
     @staticmethod
     def _reply(body):
@@ -7069,7 +7200,7 @@ class TestBareBox(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("nd_bare", MODULE_PATH)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        mod.time.sleep = lambda s: None
+        patch_clock(self, sleep=lambda s: None)
         mod.which = lambda c: tools_exist
         mod.run = lambda cmd, timeout=15, limit=None: {
             "ok": False, "cmd": " ".join(cmd),
@@ -7601,10 +7732,40 @@ class DiagnoseHarness(unittest.TestCase):
 MODULE_PATH = nd.__file__
 
 
+REAL_SLEEP = time.sleep
+REAL_MONOTONIC = time.monotonic
+
+
+def patch_clock(case, sleep=None, monotonic=None):
+    """Patch the clock for one test, and put it back afterwards.
+
+    `nd.time` is not a copy of anything - it is the `time` module, shared by
+    every module in the process. So `nd.time.sleep = ...` disables sleeping
+    *everywhere* until something restores it, and seven places here did that
+    and never did. Anything running afterwards that depended on real time was
+    silently not testing what it said: the phase-timing test found it by
+    measuring 0.1ms of a 250ms delay.
+    """
+    case.addCleanup(setattr, time, "sleep", REAL_SLEEP)
+    case.addCleanup(setattr, time, "monotonic", REAL_MONOTONIC)
+    if sleep is not None:
+        time.sleep = sleep
+    if monotonic is not None:
+        time.monotonic = monotonic
+
+
 def fresh():
     spec = importlib.util.spec_from_file_location("nd_scenario", MODULE_PATH)
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-    mod.time.sleep = lambda s: None
+    # Its own time module, not the shared one with a hole knocked in it. The
+    # scenarios must not really sleep - a hundred and fifty of them pausing for
+    # a sampling window would take an hour - but `mod.time.sleep = ...` reaches
+    # every module in the process, because `mod.time` *is* `time`. Rebinding
+    # the name on this module copy keeps the change where it belongs.
+    quiet_time = types.ModuleType("time")
+    quiet_time.__dict__.update(time.__dict__)
+    quiet_time.sleep = lambda s: None
+    mod.time = quiet_time
     mod.which = lambda c: False
     # ---- healthy baseline for every collector -------------------------
     mod.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr",
@@ -8036,6 +8197,12 @@ def own_service(nd, port="8080", **fields):
             "tls": False, "ms": 4.0, "status": 200}
     base.update(fields)
     nd.cmd_own_http = lambda p, timeout=5, address="127.0.0.1", tls=False: dict(base, port=p)
+
+@scenario("own_service_timing")
+def _(nd):
+    # A service that answers, slowly, with the delay all on its own side.
+    own_service(nd, ms=306.6,
+                phases={"connect_ms": 1.3, "tls_ms": None, "wait_ms": 305.2})
 
 @scenario("own_service_silent")
 def _(nd): own_service(nd, ok=False, silent=True, status=None)

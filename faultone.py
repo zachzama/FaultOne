@@ -1113,9 +1113,15 @@ def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
     result = {"ok": False, "cmd": f"HEAD / {address}:{port}", "port": port,
               "host": address, "tls": tls}
     raw = None
+    # Timed in phases, not as one number. "The service answered in 900ms" is
+    # true and useless: the connect, the handshake and the application thinking
+    # about it are three different things with three different owners, and on a
+    # connection to this box's own listener the first two should be almost
+    # nothing - which makes the split unusually easy to read.
     try:
         started = time.monotonic()
         raw = socket.create_connection((address, port), timeout=timeout)
+        connected = time.monotonic()
     except (OSError, ValueError) as e:
         result["unreachable_locally"] = str(e)
         return result
@@ -1126,17 +1132,25 @@ def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             sock = ctx.wrap_socket(raw)
+        secured = time.monotonic()
         with sock:
             sock.settimeout(timeout)
             sock.sendall(f"HEAD / HTTP/1.1\r\nHost: {address}\r\n"
                          f"User-Agent: FaultOne/{__version__}\r\n"
                          f"Connection: close\r\n\r\n".encode())
+            asked = time.monotonic()
             data = b""
             while b"\r\n" not in data and len(data) < 4096:
                 chunk = sock.recv(512)
                 if not chunk:
                     break
                 data += chunk
+            answered = time.monotonic()
+        result["phases"] = {
+            "connect_ms": round((connected - started) * 1000, 1),
+            "tls_ms": round((secured - connected) * 1000, 1) if tls else None,
+            "wait_ms": round((answered - asked) * 1000, 1),
+        }
     except socket.timeout:
         result["silent"] = True
         result["ms"] = round((time.monotonic() - started) * 1000, 1)
@@ -5052,6 +5066,8 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # Which of three things is limiting throughput. Always true
                   # of a box that is sending anything, so never a fault.
                   "throughput_limited_by",
+                  # Which part of its own service's answer took the time.
+                  "own_service_timing",
                   # What kind of adapter this is. Context that reframes every
                   # physical-layer reading below it, never a fault itself.
                   "virtual_nic"}
@@ -7447,10 +7463,48 @@ def _check_own_service(raw, findings, quick=False):
         }
 
 
+def _own_service_timing(res, port, findings):
+    """Which part of the answer took the time.
+
+    "The service answered in 900ms" is true and useless. Getting a connection,
+    finishing a handshake and waiting for the application to think are three
+    different things with three different owners - and this connection is to a
+    listener on this same box, so the first two should be almost nothing. That
+    makes the split unusually easy to read: whatever is left is the service
+    itself, and no part of it is the network.
+
+    Context rather than a fault. What counts as slow depends entirely on what
+    the service does, and a number picked here would be wrong for most of them.
+    """
+    phases = res.get("phases") or {}
+    wait, connect = phases.get("wait_ms"), phases.get("connect_ms")
+    if wait is None or connect is None:
+        return
+    tls = phases.get("tls_ms")
+    parts = [("waiting for the service to answer", wait),
+             ("getting a connection", connect)]
+    if tls is not None:
+        parts.append(("finishing the TLS handshake", tls))
+    lead = max(parts, key=lambda pair: pair[1])
+    findings.append({
+        "severity": "ok",
+        "layer": 7,
+        "code": "own_service_timing",
+        "message": f"Port {port} answered in {res.get('ms', 0):.0f}ms, of which "
+                   f"{connect:.0f}ms was getting a connection"
+                   + (f", {tls:.0f}ms was the TLS handshake" if tls is not None else "")
+                   + f", and {wait:.0f}ms was waiting for the service itself. Mostly "
+                   f"{lead[0]}. The connection is to a listener on this box, so the "
+                   f"first parts should be close to nothing - whatever is left is the "
+                   f"service thinking, and none of it is the network.",
+    })
+
+
 def _own_service_findings(res, port, findings):
     """One listener's answer, or its refusal to give one."""
     if res.get("unreachable_locally"):
         return                      # bound elsewhere; nothing was asked
+    _own_service_timing(res, port, findings)
     if res.get("silent"):
         findings.append({
             "severity": "critical",

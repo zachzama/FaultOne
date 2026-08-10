@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 151
+difference is which one it puts at the top, and that is the whole product: 152
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -317,6 +317,24 @@ there.
 Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
+
+## Which part of its own answer took the time
+
+"The service answered in 900ms" is true and useless. Getting a connection,
+finishing a handshake and waiting for the application to think are three
+different things with three different owners — and this connection goes to a
+listener on the *same box*, so the first two should be almost nothing. That
+makes the split unusually easy to read: whatever is left is the service
+thinking, and none of it is the network.
+
+```
+Port 8080 answered in 307ms, of which 1ms was getting a connection,
+and 305ms was waiting for the service itself.
+```
+
+Context rather than a fault. What counts as slow depends entirely on what the
+service does, and a number picked here would be wrong for most of them — the
+same reasoning as the throughput split above.
 
 ## Colour, for the terminal reader
 
@@ -1282,11 +1300,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Findings** | **152** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 849 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 857 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 151 findings are the useful figure** if you want to know what the tool can
+**The 152 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1446,7 +1464,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 849 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 857 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2772,7 +2790,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-849 tests, no dependencies, no network, a few seconds — so they run
+857 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2848,7 +2866,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 151 findings with readable rules instead of
+> way out - and who owns it. Ranks 152 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

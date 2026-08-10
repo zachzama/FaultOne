@@ -2636,6 +2636,65 @@ class TestWhySomethingWeServeDidNotVerify(unittest.TestCase):
         self.assertIsNone(nd.own_cert_trust_note(None))
 
 
+class TestNothingIsTruncatedInSilence(unittest.TestCase):
+    """Two lists in the report were cut to a fixed length and rendered as if
+    that were all there was. One of them exists specifically so a second fault
+    is not hidden."""
+
+    def test_the_verdict_says_how_many_it_did_not_show(self):
+        """Capping is right - the point is to stop hiding a second fault, not
+        to hand the findings list back a second time - and two shown out of
+        four reads as two."""
+        f = lambda c, sev, layer: {"code": c, "severity": sev, "layer": layer,
+                                   "message": c}
+        v = nd.build_verdict([f("link_errors_live", "critical", 1),
+                              f("tls_expired", "critical", 7),
+                              f("dns_hijack", "critical", 7),
+                              f("duplicate_ip", "critical", 2),
+                              f("clock_skewed", "warning", 7)])
+        self.assertEqual(len(v["unrelated"]), 2)
+        self.assertEqual(v["unrelated_total"], 4)
+        text = nd.render_text_report({"verdict": v, "findings": [], "stages": [],
+                                      "target": "8.8.8.8"})
+        self.assertIn("and 2 more unrelated finding(s) below", text)
+
+    def test_it_says_nothing_when_there_is_nothing_more(self):
+        f = lambda c, sev, layer: {"code": c, "severity": sev, "layer": layer,
+                                   "message": c}
+        v = nd.build_verdict([f("link_errors_live", "critical", 1),
+                              f("tls_expired", "critical", 7)])
+        self.assertEqual(v["unrelated_total"], len(v["unrelated"]))
+        text = nd.render_text_report({"verdict": v, "findings": [], "stages": [],
+                                      "target": "8.8.8.8"})
+        self.assertNotIn("more unrelated", text)
+
+    def test_every_verdict_branch_carries_the_count(self):
+        """Three code paths return a verdict and a missing key on any of them
+        would read as "nothing was hidden"."""
+        for findings in ([], [{"code": "nope", "severity": "warning", "layer": 9,
+                               "message": "no rule for this"}]):
+            with self.subTest(findings=findings):
+                self.assertIn("unrelated_total", nd.build_verdict(findings))
+
+    def test_a_truncated_answer_list_says_it_was_truncated(self):
+        """Two resolvers that disagree rendered as identical rows - on the one
+        panel a reader uses to check whether they agree, while dns_disagree
+        was firing about it three lines above."""
+        self.assertEqual(nd._answer_summary(["a", "b", "c", "d"]), "a, b, c (+1 more)")
+        self.assertEqual(nd._answer_summary(["a", "b"]), "a, b")
+        self.assertEqual(nd._answer_summary([]), "-")
+        self.assertEqual(nd._answer_summary(None), "-")
+
+    def test_the_row_no_longer_claims_to_be_complete(self):
+        """It still does not make two disagreeing rows look different - that is
+        what dns_disagree is for. It stops the row asserting it showed
+        everything, which is what let the two look identical."""
+        short = nd._answer_summary(["192.0.2.1", "192.0.2.2", "192.0.2.3"])
+        long_ = nd._answer_summary(["192.0.2.1", "192.0.2.2", "192.0.2.3", "203.0.113.9"])
+        self.assertNotEqual(short, long_)
+        self.assertIn("more", long_)
+
+
 class TestTheTableDoesNotLetAnAverageHideAPeak(unittest.TestCase):
     """The oldest complaint about every tool that consolidates by mean: the
     peak flattens as the window grows until a line that filled every minute

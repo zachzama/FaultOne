@@ -628,6 +628,8 @@ function renderDiagnosis(data, opts){
         + escapeHtml((v.explains || []).join(', ')) + `</div>` : ''}
       ${(v.unrelated || []).map(u =>
         `<div class="vnext"><b>Also, unrelated:</b> ${escapeHtml(u.message)}</div>`).join('')}
+      ${((v.unrelated_total || 0) - (v.unrelated || []).length) > 0
+        ? `<div class="vnext">and ${(v.unrelated_total - v.unrelated.length)} more unrelated finding(s) below</div>` : ''}
       <div class="vnext"><b>Next:</b> ${escapeHtml(v.next_step)}</div>
     </div>` : '';
 

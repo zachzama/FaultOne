@@ -715,6 +715,20 @@ def list_resolvers(with_reason=False):
 DNS_SLOW_MS = 500
 
 
+def _answer_summary(answers, keep=3):
+    """The first few answers, and how many were not shown.
+
+    Truncating in silence let two resolvers that disagree render as identical
+    rows - on the one panel a reader uses to check whether they agree, and
+    while dns_disagree was firing about it three lines above.
+    """
+    answers = list(answers or [])
+    if not answers:
+        return "-"
+    shown = ", ".join(answers[:keep])
+    return shown + (f" (+{len(answers) - keep} more)" if len(answers) > keep else "")
+
+
 def cmd_dns_health(probe_name="google.com", check_hijack=True):
     """Query each configured resolver individually and compare them."""
     resolvers, unreadable = list_resolvers(with_reason=True)
@@ -744,7 +758,7 @@ def cmd_dns_health(probe_name="google.com", check_hijack=True):
     for r in results:
         status = r["rcode"] if r["ok"] else (r.get("rcode") or "no reply")
         rows.append(f"{r['server']:<24}{status:<10}{str(r['elapsed_ms'] or '-'):>7}  "
-                    f"{', '.join(r['answers'][:3]) or '-'}"
+                    f"{_answer_summary(r['answers'])}"
                     + ("   [NXDOMAIN hijacked]" if r.get("hijacks_nxdomain") else ""))
     return {"ok": True, "cmd": f"dns query {probe_name} -> each configured resolver",
             "stdout": "\n".join(rows), "stderr": "", "code": 0,
@@ -5999,6 +6013,7 @@ def build_verdict(findings, quick=False, raw=None):
             "coverage": {"ran": clear_ran, "attempted": clear_attempted},
             "corroborated_by": [],
             "unrelated": [],
+            "unrelated_total": 0,
             "based_on": [f.get("code") for f in findings],
             "severity": "ok",
         }
@@ -6091,6 +6106,9 @@ def build_verdict(findings, quick=False, raw=None):
             # the findings list back a second time.
             "unrelated": [{"code": f.get("code"), "message": f["message"]}
                           for f in unrelated[:2]],
+            # A field that exists so a second fault is not hidden must not
+            # quietly hide the third: two shown out of four reads as two.
+            "unrelated_total": len(unrelated),
             # The other half of the same question, and the one that was never
             # answered: not what this cause fails to account for, but what it
             # does. Uncapped - a cause that explains six findings has earned
@@ -6116,6 +6134,7 @@ def build_verdict(findings, quick=False, raw=None):
         "coverage": dict(zip(("ran", "attempted"), collection_coverage(raw))),
         "corroborated_by": [],
         "unrelated": [],
+        "unrelated_total": 0,
         "based_on": [f.get("code") for f in findings if f["severity"] != "ok"],
         "severity": worst.get("severity", "warning") if worst else "warning",
         "detail": worst.get("message", "") if worst else "",
@@ -10451,6 +10470,8 @@ function renderDiagnosis(data, opts){
         + escapeHtml((v.explains || []).join(', ')) + `</div>` : ''}
       ${(v.unrelated || []).map(u =>
         `<div class="vnext"><b>Also, unrelated:</b> ${escapeHtml(u.message)}</div>`).join('')}
+      ${((v.unrelated_total || 0) - (v.unrelated || []).length) > 0
+        ? `<div class="vnext">and ${(v.unrelated_total - v.unrelated.length)} more unrelated finding(s) below</div>` : ''}
       <div class="vnext"><b>Next:</b> ${escapeHtml(v.next_step)}</div>
     </div>` : '';
 
@@ -11158,10 +11179,14 @@ def render_text_report(report, color=False, width=None):
                 out.append(f"  {line}")
         # A fault the cause above cannot explain. Fixing the cause leaves this
         # exactly where it is, and the layer rule would otherwise bury it.
-        for other in v.get("unrelated") or []:
+        shown = v.get("unrelated") or []
+        for other in shown:
             for i, line in enumerate(textwrap.wrap(
                     f"also, unrelated: {other['message']}", width=min(width, 72) - 2)):
                 out.append(f"  {line}")
+        more = (v.get("unrelated_total") or len(shown)) - len(shown)
+        if more:
+            out.append(f"  and {more} more unrelated finding(s) below")
         out.append(bar)
         out.append("")
 

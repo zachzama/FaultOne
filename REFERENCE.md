@@ -318,6 +318,36 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## Nothing is truncated in silence
+
+Two lists were cut to a fixed length and rendered as though that were all there
+was.
+
+**The verdict's unrelated faults.** That field exists for one reason: so naming
+a root cause does not hide a second, separate problem. It showed two and stopped
+— so a box with four unrelated faults reported two, and the field undercut its
+own purpose. The cap is still right (the point is not to hand the findings list
+back a second time), so the count comes with it:
+
+```
+also, unrelated: the certificate on the target expired
+also, unrelated: a resolver is answering with the wrong address
+and 2 more unrelated finding(s) below
+```
+
+**Resolver answers.** The DNS panel showed the first three and no more, so two
+resolvers that *disagreed* could render as identical rows — on the one panel a
+reader uses to check whether they agree, while `dns_disagree` was firing about
+it three lines above.
+
+It now reads `192.0.2.1, 192.0.2.2, 192.0.2.3 (+1 more)`. That does not make two
+disagreeing rows look different — naming the disagreement is what `dns_disagree`
+is for — but it stops the row asserting it showed everything, which is what let
+the two look alike.
+
+Both are the same defect as the average hiding the peak below: the analysis knew
+something the display did not say.
+
 ## The table does not let an average hide a peak
 
 The oldest complaint about every tool that consolidates by mean: the peak
@@ -1148,7 +1178,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **151** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 831 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 836 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 151 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1310,7 +1340,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 831 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 836 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2636,7 +2666,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-831 tests, no dependencies, no network, a few seconds — so they run
+836 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

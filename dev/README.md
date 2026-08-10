@@ -1,6 +1,6 @@
 # dev/
 
-Four harnesses that are **not part of the tool**. Nothing here ships to a box,
+Five harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
 nothing about what the tool does. They exist because two questions come up
 before every release and neither is answerable by the test suite.
@@ -97,3 +97,35 @@ successful release look like a failed one.
 
 It never pushes without `--push`. That decision is the user's and this file
 should not be able to make it by accident.
+
+## `audit.py` — do the rules between findings hold, one fault or six?
+
+```bash
+python3 dev/audit.py            # every scenario, then 500 random combinations
+python3 dev/audit.py 5000       # more combinations
+python3 dev/audit.py --seed 7   # a different draw, reproducibly
+```
+
+`deep_e2e.py` walks each finding through the pipeline and checks four
+hand-written compound cases. This asks a different question: do the
+*relationships between* findings hold — exactly one cause, a consequence never
+also unrelated, nothing explained by a fault facing the other way, no
+consequence sitting below its own cause, the hardware marking matching its set
+— and do they still hold when several faults are present at once?
+
+That last part is the point. **Every scenario in the suite is single-fault by
+construction**: a fixture is written to make one thing go wrong. So the rules
+that only exist *between* findings are the least exercised logic in the tool,
+and since the report now draws those relationships on screen, they are also the
+most visible.
+
+Combinations are drawn from the real findings each scenario emits, so every
+input is one the tool actually produces. They are stripped of the `relation` and
+`kind` their own report gave them first — the corpus has to be inert, or every
+draw inherits six findings that were each the cause of their own single-fault
+report.
+
+Its checks were verified by breaking each rule in turn and confirming it
+noticed: a consequence facing the wrong way, a finding in both the explained and
+unrelated lists, a cause explaining something below it, and the hardware marking
+drifting from its set.

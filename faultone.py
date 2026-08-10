@@ -4313,9 +4313,18 @@ def annotate_hops(hops, gateway=None, target=None):
             networks.append({"network": net, "from_hop": h["hop"], "from": last_net})
             last_net = net
 
-    # Two different private /24s before the edge means two routers in series.
+    # Two private networks in series before the edge means the traffic
+    # crossed at least two routers on the way out.
+    #
+    # Only before the edge. Scanning the whole trace counted the provider's
+    # own core, which is on RFC1918 at plenty of carriers - a path of
+    # 192.168.1.1, carrier NAT, 10.250.0.1 was reported as two private
+    # networks *inside this site*, naming an address several hops past the
+    # point where the site ends.
+    edge_at = next((i for i, h in enumerate(hops)
+                    if h.get("private") is False or h.get("cgnat")), len(hops))
     private_subnets = []
-    for h in hops:
+    for h in hops[:edge_at]:
         if h.get("private") and not h.get("cgnat"):
             sn = subnet24(h.get("host"))
             if sn and sn not in private_subnets:
@@ -4335,8 +4344,16 @@ def annotate_hops(hops, gateway=None, target=None):
 
     cgnat_hop = next((h["hop"] for h in hops if h.get("cgnat")), None)
 
-    # First public hop: the point where traffic leaves the site's network.
-    demarc = next((h["hop"] for h in hops if h.get("private") is False), None)
+    # Where traffic stops being the site's network. The first public hop, or
+    # the carrier-NAT segment if there is one: 100.64.0.0/10 is RFC1918-like
+    # in that it is not routable on the internet, but it is the provider's
+    # range and not the site's. Taking the first public hop alone put the
+    # site edge past the carrier's NAT layer, so the picture showed that
+    # layer as inside the site while the cgnat finding called it the
+    # provider's and the latency wall placed a jump there on their side. The
+    # three now agree.
+    demarc = next((h["hop"] for h in hops
+                   if h.get("private") is False or h.get("cgnat")), None)
     # Biggest single latency jump, which is where the delay is introduced.
     jumps = [h for h in hops if h.get("delta_ms")]
     worst = max(jumps, key=lambda h: h["delta_ms"]) if jumps else None
@@ -8816,11 +8833,23 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             "severity": "warning",
             "code": "double_nat",
             "layer": 3,
+            # What a trace establishes is two private networks in series, and
+            # therefore two routers. Whether either of them translates is not
+            # visible from here - routed subnets and NAT look identical in a
+            # traceroute, and a site with several routed VLANs is ordinary.
+            # This said "double NAT" outright and then listed the consequences
+            # of NAT as though they followed, which for a routed path they do
+            # not. The observation is stated, the likely cause is named as a
+            # likelihood, and the consequences are attached to the cause
+            # rather than to the observation.
             "message": f"Two private networks before traffic leaves this site "
-                       f"({', '.join(s + '.x' for s in subnets)}) - so there are at least two "
-                       f"routers in series (double NAT). It usually still works, but it breaks "
-                       f"inbound connections and port forwarding, and makes intermittent faults "
-                       f"much harder to place.",
+                       f"({', '.join(s + '.x' for s in subnets)}) - so traffic crosses at "
+                       f"least two routers on the way out. Commonly that is double NAT, "
+                       f"though a trace cannot tell a translating router from one that "
+                       f"only routes, and several internal subnets are ordinary in "
+                       f"themselves. If it is NAT, it breaks inbound connections and port "
+                       f"forwarding, and either way it makes an intermittent fault harder "
+                       f"to place - there is a second device in the path to rule out.",
         })
 
     if path_insight.get("cgnat_hop"):

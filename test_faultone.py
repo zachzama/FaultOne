@@ -1059,6 +1059,57 @@ class TestPathAnnotation(unittest.TestCase):
         info = nd.annotate_hops(hops)
         self.assertEqual(info["demarc_hop"], 3)
 
+    def test_the_site_ends_at_carrier_nat_not_past_it(self):
+        """100.64.0.0/10 is not routable on the internet, so it read as another
+        private hop and the edge landed past it - the picture put the carrier's
+        own NAT layer inside the site, while the cgnat finding called it the
+        provider's range and the latency wall placed a jump there on their side
+        of the same boundary. Three parts of one report disagreeing."""
+        hops = self.hops([(1, "192.168.1.1", None, [1.0]),
+                          (2, "100.64.0.1", None, [8.0]),
+                          (3, "198.51.100.13", None, [12.0])])
+        info = nd.annotate_hops(hops)
+        self.assertEqual(info["demarc_hop"], 2)
+        self.assertEqual(info["cgnat_hop"], 2)
+
+    def test_the_providers_own_private_core_is_not_this_sites_second_router(self):
+        """Plenty of carriers number their core out of RFC1918, so scanning the
+        whole trace for private subnets counted their addressing as the site's.
+        A path of 192.168.1.1, carrier NAT, 10.250.0.1 was reported as two
+        private networks *inside this site*, naming an address several hops
+        past the point where the site ends."""
+        hops = self.hops([(1, "192.168.1.1", None, [1.0]),
+                          (2, "100.64.0.1", None, [8.0]),
+                          (3, "10.250.0.1", None, [11.0]),
+                          (4, "198.51.100.13", None, [12.0])])
+        info = nd.annotate_hops(hops)
+        self.assertEqual(info["double_nat"], [],
+                         "the provider's core is being counted as a site subnet")
+
+    def test_two_private_networks_before_the_edge_still_counts(self):
+        """The narrowing must not swallow the case the check exists for."""
+        hops = self.hops([(1, "192.168.1.1", None, [1.0]),
+                          (2, "10.0.0.1", None, [2.0]),
+                          (3, "198.51.100.13", None, [12.0])])
+        info = nd.annotate_hops(hops)
+        self.assertEqual(info["double_nat"], ["192.168.1", "10.0.0"])
+
+    def test_a_trace_does_not_establish_that_a_router_translates(self):
+        """Routed subnets and NAT are identical in a traceroute, and a site
+        with several routed VLANs is ordinary. The finding asserted double NAT
+        outright and then listed the consequences of NAT as though they
+        followed - which for a routed path they do not. What the trace
+        establishes is two routers; NAT is the likely cause, not the reading."""
+        setup, kw = S["double_nat"]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        msg = [f["message"] for f in rep["findings"] if f["code"] == "double_nat"][0]
+        self.assertIn("at least two routers", msg)
+        self.assertIn("cannot tell", msg)
+        # The consequence has to hang off the cause, not off the observation.
+        before_consequence = msg.split("breaks inbound", 1)[0]
+        self.assertIn("If it is NAT", before_consequence)
+
     def test_the_worst_jump_says_what_share_of_the_path_it_is(self):
         """"+65ms" doesn't say whether fixing that hop would matter. "+65ms,
         71% of the total" does - which is the only thing worth borrowing from

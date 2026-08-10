@@ -7687,7 +7687,8 @@ class TestViewerTemplate(unittest.TestCase):
         import re
         rules = nd.VIEWER_TEMPLATE.split("@media print{", 1)[1].split("}", 1)[0]
         white = re.search(r"--bg:(#[0-9a-fA-F]{6})", rules).group(1)
-        for name in ("--text", "--text-dim", "--ok", "--warn", "--crit", "--accent"):
+        for name in ("--text", "--text-dim", "--ok", "--warn", "--crit", "--accent",
+                     "--cause", "--hardware"):
             m = re.search(rf"{name}:(#[0-9a-fA-F]{{6}})", rules)
             self.assertTrue(m, f"{name} is not restated for print")
             with self.subTest(colour=name):
@@ -7729,6 +7730,31 @@ class TestViewerTemplate(unittest.TestCase):
         self.assertEqual(drawn, {"ok", "warn", "crit"},
                          f"the chain draws {drawn}, and the fade only knows ok/warn/crit")
 
+    def test_no_colour_is_written_outside_a_palette(self):
+        """A hardcoded hex is invisible to a palette. Five of them survived the
+        light and print grounds at their dark-theme values, which is how the
+        pill reading "the cause" - the chip that says which finding is the
+        answer - came to sit at 3.2:1 on white, and the hardware pill at 2.2:1.
+        Neither palette test caught it, because both checked the variables that
+        had been written rather than the colours the page draws. Declaring
+        every colour in a :root block is what makes those tests complete.
+
+        Hex only. The rgba() shadows are deliberately left out: they tint a
+        drop shadow rather than carry text or state, the light palette restates
+        the one that would read wrong on white, and requiring a token for each
+        would add noise without adding a reader who can see something."""
+        import re
+        css = nd.VIEWER_TEMPLATE.split("<style", 1)[1].split("</style>", 1)[0]
+        outside = re.sub(r":root\{[^}]*\}", "", css)
+        stray = {}
+        for m in re.finditer(r"\n\s*([^{\n]+)\{([^}]*)\}", outside):
+            for colour in re.findall(r"#[0-9a-fA-F]{3,8}\b", m.group(2)):
+                stray.setdefault(colour, set()).add(m.group(1).strip())
+        self.assertEqual(
+            stray, {},
+            "colours written outside a palette cannot follow one: "
+            + "; ".join(f"{c} in {sorted(s)}" for c, s in sorted(stray.items())))
+
     def test_the_light_palette_is_readable_too(self):
         """The page now follows the reader's system setting, which means half
         the audience never sees the palette the colours were chosen against.
@@ -7741,7 +7767,8 @@ class TestViewerTemplate(unittest.TestCase):
         rules = block[1].split("}", 1)[0]
         ground = re.search(r"--bg:(#[0-9a-fA-F]{6})", rules).group(1)
         for name in ("--text", "--text-dim", "--text-dim-lift",
-                     "--ok", "--warn", "--crit", "--accent"):
+                     "--ok", "--warn", "--crit", "--accent",
+                     "--cause", "--hardware"):
             m = re.search(rf"{name}:(#[0-9a-fA-F]{{6}})", rules)
             self.assertTrue(m, f"{name} is not restated for the light palette")
             with self.subTest(colour=name):

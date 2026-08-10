@@ -9970,7 +9970,19 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     --ok: #3fb950;
     --warn: #d9a02b;
     --crit: #e5534b;
-    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+    /* The last colours the stylesheet was carrying inline. A hardcoded hex
+     is invisible to a palette: these five stayed at their dark-theme values
+     under the light one, which put the pill reading "the cause" at 3.2:1 on
+     white and the hardware pill at 2.2:1 - the two chips that say what a
+     finding is. Declared here so every palette has to answer for them. */
+  --cause: #e0705a;
+  --cause-edge: #c2553c;
+  --hardware: #d3a83a;
+  --hardware-edge: #8a6d1f;
+  --node-edge: #333d47;
+  --topbar-a: #0d1218;
+  --topbar-b: #0a0e13;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
     --sans: -apple-system, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
   }
   *{box-sizing:border-box}
@@ -9981,7 +9993,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .topbar{
     display:flex; align-items:center; gap:14px;
     padding:14px 20px; border-bottom:1px solid var(--border);
-    background:linear-gradient(180deg, #0d1218, #0a0e13);
+    background:linear-gradient(180deg, var(--topbar-a), var(--topbar-b));
     position:sticky; top:0; z-index:5;
   }
   .brand{display:flex; align-items:center; gap:10px;}
@@ -10044,11 +10056,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .led-row.crit .led-state{color:var(--crit);}
   /* Set apart from the chain above it: this is the conclusion, not a stage. */
   .verdict-row{border-top:1px solid var(--border); margin-top:6px; padding-top:8px;}
-  .led{width:8px; height:8px; border-radius:50%; background:#333d47; flex-shrink:0;}
+  .led{width:8px; height:8px; border-radius:50%; background:var(--node-edge); flex-shrink:0;}
   .led.ok{background:var(--ok); box-shadow:0 0 6px var(--ok);}
   .led.warn{background:var(--warn); box-shadow:0 0 6px var(--warn);}
   .led.crit{background:var(--crit); box-shadow:0 0 6px var(--crit);}
-  .led.skip{background:#333d47; box-shadow:none;}
+  .led.skip{background:var(--node-edge); box-shadow:none;}
 
   .main{padding:24px; max-width:1080px; overflow-x:hidden;}
   .empty-state{
@@ -10180,12 +10192,12 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     letter-spacing:0.06em; padding:1px 6px; border-radius:9px;
     border:1px solid var(--border); color:var(--text-dim); white-space:nowrap;
   }
-  .finding .rel-cause{border-color:#c2553c; color:#e0705a; font-weight:600;}
+  .finding .rel-cause{border-color:var(--cause-edge); color:var(--cause); font-weight:600;}
   .finding .rel-unrelated{border-style:dashed;}
   /* A fix that means somebody in the room rather than somebody at a keyboard.
      Given its own colour because it is a different kind of answer, not a
      different severity. */
-  .finding .rel-hardware{border-color:#8a6d1f; color:#d3a83a;}
+  .finding .rel-hardware{border-color:var(--hardware-edge); color:var(--hardware);}
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
@@ -10260,7 +10272,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .hop-node{
     flex:0 1 auto; min-width:110px; max-width:230px;
     background:var(--panel); border:1px solid var(--border);
-    border-left:3px solid #333d47; border-radius:6px; padding:12px 11px;
+    border-left:3px solid var(--node-edge); border-radius:6px; padding:12px 11px;
   }
   /* A path is read for one thing: which hop the fault lands on. Every node was
      drawn at the same weight with a different coloured edge, so the answer had
@@ -10349,11 +10361,14 @@ VIEWER_TEMPLATE = r"""<!doctype html>
       --text:#0f1720; --text-dim:#5a6572; --text-dim-lift:#48525d;
       --accent:#0f6f66; --accent-dim:#9fd4ce;
       --ok:#1a7f37; --warn:#8a5b00; --crit:#b3261e;
+      --cause:#a3372a; --cause-edge:#a3372a;
+      --hardware:#7a5c10; --hardware-edge:#7a5c10;
+      --node-edge:#c7cdd4;
+      --topbar-a:#ffffff; --topbar-b:#f6f8fa;
     }
     .brand .dot, .led, .finding .sev{box-shadow:none;}
     .verdict{box-shadow:0 1px 3px rgba(16,24,40,.08);}
     .hop-node.crit{box-shadow:0 6px 16px -10px rgba(179,38,30,.55);}
-    .topbar{background:linear-gradient(180deg,#ffffff,#f6f8fa);}
   }
 
   /* A report often has to reach someone who will not open a file - it goes
@@ -10372,6 +10387,9 @@ VIEWER_TEMPLATE = r"""<!doctype html>
       --text:#11161c; --text-dim:#59636f; --text-dim-lift:#454f5a;
       --accent:#0f6f66; --accent-dim:#9fd4ce;
       --ok:#1a7f37; --warn:#8a5b00; --crit:#b3261e;
+      --cause:#a3372a; --cause-edge:#a3372a;
+      --hardware:#7a5c10; --hardware-edge:#7a5c10;
+      --node-edge:#c7cdd4;
     }
     .topbar, .sidebar, #reportControls, .file-input{display:none !important;}
     .layout{display:block; min-height:0;}

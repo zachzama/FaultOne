@@ -8556,17 +8556,53 @@ class DiagnoseHarness(unittest.TestCase):
     concludes, what the stage strip says - so it can be restructured without
     changing what it reports. Every collector is stubbed, so no command runs,
     no packet is sent, and nothing sleeps.
+
+    "Every" is read off the module rather than listed here. It used to be a
+    hand-written tuple of seventeen names, and the tool grew to thirty-eight
+    collectors around it: twenty-two of them ran for real inside a harness
+    whose docstring said none of them did. Several read the host - socket
+    states, server limits, orphan counts - and one asserts that the only
+    finding is all_clear, so anything the machine happened to be doing could
+    add a finding and fail it. That is the shape of a test that passes on your
+    machine and not on the next one.
     """
 
-    COLLECTORS = ("cmd_interfaces", "cmd_routes", "cmd_arp", "cmd_ping", "cmd_dns",
-                  "cmd_dns_health", "cmd_traceroute", "cmd_traceroute_tcp", "cmd_mtr",
-                  "cmd_path_mtu", "cmd_check_port", "cmd_link_modes", "cmd_lldp",
-                  "cmd_optics", "_read_link_stats", "_read_tcp_counters", "which")
+    #: Everything that fetches from outside the process. Derived, because the
+    #: list is the thing that went stale.
+    @staticmethod
+    def collectors():
+        return sorted(n for n in dir(nd)
+                      if (n.startswith("cmd_") or n.startswith("_read_"))
+                      and callable(getattr(nd, n)))
+
+    @staticmethod
+    def _unavailable(name):
+        """What a collector returns when it cannot run - the tool's own shape
+        for that, so nothing downstream has to special-case the harness."""
+        return lambda *a, **k: {"ok": False, "cmd": name, "applicable": False,
+                                "error": "not stubbed by this harness"}
 
     def setUp(self):
-        self._saved = {name: getattr(nd, name) for name in self.COLLECTORS}
+        names = self.collectors() + ["which"]
+        self._saved = {name: getattr(nd, name) for name in names}
         self._saved["sleep"] = nd.time.sleep
         nd.time.sleep = lambda s: None
+        # Nothing reaches the machine unless a test below says what it returns.
+        # A reader that finds nothing returns nothing; a command that cannot run
+        # says so. Both are states the tool already handles, and neither is the
+        # state of whatever this happens to be running on.
+        for name in self.collectors():
+            # cmd_link_stats reaches nothing on its own - it is arithmetic
+            # over _read_link_stats, which the tests below drive directly.
+            # Stubbing it as unavailable would take that control away.
+            if name == "cmd_link_stats":
+                continue
+            if name.startswith("cmd_"):
+                setattr(nd, name, self._unavailable(name))
+            elif name == "_read_text":
+                setattr(nd, name, lambda *a, **k: None)
+            else:
+                setattr(nd, name, lambda *a, **k: {})
         # Defaults: a healthy device with nothing optional installed.
         nd.which = lambda cmd: False
         nd.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr", "stdout":
@@ -8636,6 +8672,21 @@ class DiagnoseHarness(unittest.TestCase):
 
     # ---- the scenarios ---------------------------------------------------
 
+    def test_the_harness_replaces_every_collector_the_module_has(self):
+        """The thing this class claims about itself, asserted rather than
+        stated. It used to name seventeen collectors in a tuple while the tool
+        grew to thirty-eight, so twenty-two ran for real - including a live TLS
+        handshake to 8.8.8.8 - inside a harness whose docstring says no packet
+        is sent. The list is derived now, and this fails if anything is left
+        pointing at the real implementation."""
+        live = [name for name in self.collectors()
+                if getattr(nd, name) is self._saved.get(name)]
+        self.assertEqual(
+            [n for n in live if n != "cmd_link_stats"], [],
+            "these still reach the machine from inside the harness")
+        self.assertGreater(len(self.collectors()), 30,
+                           "the collector list stopped finding them")
+
     def test_healthy_device(self):
         r = self.run_diagnose()
         self.assertEqual(self.codes(r), {"all_clear"})
@@ -8703,6 +8754,13 @@ class DiagnoseHarness(unittest.TestCase):
             {"ok": True, "cmd": f"tcp connect {h}:{p}", "stdout": "open", "stderr": "", "code": 0}
             if p == "443" else
             {"ok": False, "cmd": f"tcp connect {h}:{p}", "error": "timeout", "reason": "timeout"})
+        # An open port means the TLS check runs against it. Left to the
+        # machine, that was a real handshake to 8.8.8.8 from a test suite whose
+        # harness says no packet is sent.
+        nd.cmd_tls_check = lambda h, p, timeout=5: {
+            "ok": True, "cmd": f"tls {h}:{p}", "verified": True,
+            "subject": "dns.google", "issuer": "Test CA",
+            "days_left": 90, "tls_ms": 20.0, "tcp_ms": 10.0}
         r = self.run_diagnose(check_ports=["443", "9999"])
         self.assertIn("port_timeout", self.codes(r))
         self.assertEqual(self.stages(r)["ports"], "warn")

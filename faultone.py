@@ -8794,6 +8794,12 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
 
     if path_insight.get("loop_at"):
         lp = path_insight["loop_at"]
+        # Both ends of the circle, since the loop is the pair and marking one
+        # of them would read as a single bad hop rather than traffic going
+        # back where it came from.
+        for hop in hops:
+            if hop.get("hop") in lp["hops"]:
+                hop["blame"] = {"code": "loop", "severity": "critical"}
         findings.append({
             "severity": "critical",
             "code": "loop",
@@ -8850,6 +8856,17 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             side = "inside the local network - so the delay starts before traffic leaves the site"
         else:
             side = "out on the provider's side of the network, past this site's edge"
+        # Mark the hop on the way past. The chain scored its nodes on loss and
+        # timeouts alone, which are the only things it could see for itself -
+        # so on a latency wall the one hop this finding names was the one thing
+        # on the path drawn as unremarkable, and the verdict pointed at a hop
+        # the picture showed as clean. The conclusion travels with the hop
+        # rather than being worked out a second time from the timings, because
+        # a second derivation is a second set of thresholds to drift.
+        for hop in hops:
+            if hop.get("hop") == wj["hop"]:
+                hop["blame"] = {"code": "latency_wall", "severity": "warning"}
+                break
         findings.append({
             "severity": "warning",
             "code": "latency_wall",
@@ -10523,7 +10540,13 @@ function ledRow(st){
          `<span class="led-state">${escapeHtml(st.state)}</span></div>`;
 }
 
-function hopSeverity(h){
+function hopSeverity(h, probes){
+  // A hop the report has already blamed outranks anything worked out here. The
+  // rest of this function is what the chain can see for itself - loss and
+  // timeouts - and a latency wall is neither, so the hop the verdict named was
+  // being drawn as clean. The severity travels with the blame so a code that
+  // is critical does not arrive here and get demoted to a warning.
+  if(h.blame) return h.blame.severity === 'critical' ? 'crit' : 'warn';
   if(h.timed_out) return 'crit';
   // With mtr we have a real loss percentage; use it. Counting timings is a
   // traceroute-only heuristic (three probes per hop) and mtr reports one
@@ -10533,7 +10556,17 @@ function hopSeverity(h){
     if(h.loss_pct >= 5) return 'warn';
     return 'ok';
   }
-  if(h.times_ms && h.times_ms.length && h.times_ms.length < 3) return 'warn';
+  // Fewer timings than the path is getting elsewhere means probes went
+  // missing at this hop. Comparing against a hardcoded three assumed every
+  // source sends three and reported them all: where a source gives one
+  // representative timing per hop, every hop had fewer than three and the
+  // whole path came out marked - a parsing shape drawn as a fault, and enough
+  // yellow to bury the hop the verdict was actually naming. Measured against
+  // what the rest of the path returned, and only where that is a real sample,
+  // so a path that reports one timing throughout says nothing either way.
+  if(probes >= 3 && h.times_ms && h.times_ms.length && h.times_ms.length < probes){
+    return 'warn';
+  }
   return 'ok';
 }
 
@@ -10553,6 +10586,9 @@ function renderHopChain(data){
   pathTitle.style.display = 'block';
 
   // Path summary stats
+  // The most timings any hop on this path reported - the sample size the
+  // per-hop counts are judged against.
+  const probes = hops.reduce((n,h) => Math.max(n, (h.times_ms || []).length), 0);
   const timeouts = hops.filter(h => h.timed_out).length;
   const validTimes = hops.flatMap(h => h.times_ms || []);
   const avgLatency = validTimes.length ? (validTimes.reduce((a,b)=>a+b,0) / validTimes.length).toFixed(1) : null;
@@ -10585,7 +10621,7 @@ function renderHopChain(data){
       label: `hop ${h.hop}${zone ? ` · ${zone}` : ''}${roles ? ` · ${roles}` : ''}`,
       sub: h.timed_out ? 'timeout' : `${h.display}${avg != null ? ' · ' + Number(avg).toFixed(1) + 'ms' : ''}`,
       meta: meta.join(' · '),
-      sev: hopSeverity(h),
+      sev: hopSeverity(h, probes),
       demarcBefore: data.demarc_hop != null && h.hop === data.demarc_hop,
       entersNetwork: h.enters_network || null,
       cgnat: !!h.cgnat,

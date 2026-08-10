@@ -7402,6 +7402,112 @@ class TestSelfContainedReport(unittest.TestCase):
             self.assertIsNone(nd.extract_embedded_report(junk))
 
 
+class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
+    """The path picture scored its nodes on loss and timeouts, which are the
+    only things it could work out for itself. A latency wall is neither, so on
+    the one report whose verdict is about a single hop, that hop was drawn as
+    unremarkable and the reader was told to look at something the picture
+    showed as clean."""
+
+    # Findings that name a hop in their own message, and where the hop number
+    # they name comes from. Anything added here has to mark its hop, and
+    # anything that marks a hop has to be here.
+    NAMES_A_HOP = {
+        "latency_wall": lambda rep: [rep["worst_jump"]["hop"]],
+        "loop": lambda rep: list(rep["loop_at"]["hops"]),
+    }
+
+    def test_a_hop_is_blamed_exactly_when_the_report_blames_it(self):
+        """Marking the worst jump whenever there is one would put a warning on
+        a hop no worse than its neighbours: every path has a largest step, and
+        the finding only fires when that step is also most of the delay. The
+        mark has to follow the conclusion in both directions - no hop marked
+        without a finding behind it, and no such finding leaving its hop
+        unmarked, or the picture and the sentence drift apart."""
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            by_code = {f["code"]: f for f in rep["findings"]}
+            expected = {}
+            for name, where in self.NAMES_A_HOP.items():
+                if name in by_code:
+                    for hop in where(rep):
+                        expected[hop] = name
+            marked = {h["hop"]: h["blame"]["code"]
+                      for h in (rep.get("hops") or []) if h.get("blame")}
+            with self.subTest(scenario=code):
+                self.assertEqual(
+                    marked, expected,
+                    "the hops marked are not the hops the findings name")
+                for hop, name in marked.items():
+                    self.assertEqual(
+                        [h["blame"]["severity"] for h in rep["hops"] if h["hop"] == hop][0],
+                        by_code[name]["severity"],
+                        f"the mark on hop {hop} disagrees with the finding's severity")
+
+    def test_every_finding_that_marks_a_hop_is_one_this_test_knows(self):
+        """The pairing above is only a guard while it is complete. A new code
+        that marks a hop and is not listed would make the test assert that its
+        mark should not be there, and the obvious way to get green is to
+        delete the mark."""
+        marks = set()
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            marks |= {h["blame"]["code"] for h in (rep.get("hops") or []) if h.get("blame")}
+        self.assertEqual(marks, set(self.NAMES_A_HOP),
+                         "a finding marks a hop without this test knowing where it should land")
+
+    def test_the_mark_survives_a_compact_export(self):
+        """The hops are derived, not captured output, so they ride through the
+        compact report - and a picture that lost its only mark on the way to
+        the smaller file would be worse than one that never had it."""
+        setup, kw = S["latency_wall"]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        slim = m.compact_report(rep)
+        self.assertEqual([h.get("blame") for h in rep["hops"]],
+                         [h.get("blame") for h in slim["hops"]])
+
+    def test_the_chain_asks_the_report_before_it_works_it_out(self):
+        """Order is the whole point: a hop the report has already blamed has to
+        outrank the counters, or the two disagree and the louder one wins by
+        accident."""
+        fn = nd.VIEWER_TEMPLATE.split("function hopSeverity(h, probes){", 1)[1] \
+                               .split("\n}", 1)[0]
+        self.assertIn("h.blame", fn)
+        self.assertLess(fn.index("h.blame"), fn.index("h.timed_out"),
+                        "the counters are consulted before the conclusion")
+        # A critical code arriving here must not be drawn as a warning.
+        self.assertIn("'critical'", fn)
+        self.assertIn("'crit'", fn)
+
+    def test_a_hop_is_judged_against_what_the_path_actually_returned(self):
+        """Counting a hop's timings against a hardcoded three assumed every
+        source sends three probes and reports them all. Where a source gives
+        one representative timing per hop, every hop had fewer than three and
+        the whole path came out marked - a parsing shape drawn as a fault, and
+        enough yellow to bury the hop the verdict was naming."""
+        fn = nd.VIEWER_TEMPLATE.split("function hopSeverity(h, probes){", 1)[1] \
+                               .split("\n}", 1)[0]
+        self.assertNotIn("length < 3", fn,
+                         "the probe count is still hardcoded")
+        self.assertIn("probes >= 3", fn,
+                      "a path reporting one timing throughout has no sample to judge against")
+        self.assertIn("h.times_ms.length < probes", fn)
+        # And the sample has to be measured, not assumed, at the call site.
+        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1]
+        self.assertIn("const probes = hops.reduce(", chain)
+
+
 class TestViewerTemplate(unittest.TestCase):
     def test_an_exported_report_hides_the_controls_that_produce_one(self):
         """A self-contained export is a finished report. It was still showing a

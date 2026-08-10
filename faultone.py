@@ -10033,7 +10033,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .led.crit{background:var(--crit); box-shadow:0 0 6px var(--crit);}
   .led.skip{background:#333d47; box-shadow:none;}
 
-  .main{padding:20px; overflow-x:hidden;}
+  .main{padding:24px; max-width:1080px; overflow-x:hidden;}
   .empty-state{
     color:var(--text-dim); font-family:var(--mono); font-size:13px;
     padding:40px 10px; text-align:center; border:1px dashed var(--border); border-radius:8px;
@@ -10043,7 +10043,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      eight findings to work out the culprit is the thing it exists to spare you. */
   .verdict{
     border:1px solid var(--border); border-left:4px solid var(--text-dim);
-    background:var(--panel); border-radius:8px; padding:13px 16px; margin-bottom:16px;
+    background:var(--panel); border-radius:8px; padding:16px 24px; margin-bottom:16px;
     box-shadow:0 6px 20px rgba(0,0,0,.35);
   }
   /* The most important block on the page shared its background with every
@@ -10073,13 +10073,13 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      compete with the lamps that are already green. */
   .verdict.ok{border-left-color:var(--ok);}
   .verdict .vlabel{
-    font-family:var(--mono); font-size:10px; text-transform:uppercase;
-    letter-spacing:0.08em; color:var(--text-dim-lift); margin-bottom:5px;
+    font-family:var(--mono); font-size:11px; text-transform:uppercase;
+    letter-spacing:0.08em; color:var(--text-dim-lift); margin-bottom:8px;
   }
   .verdict .vhead{font-size:20px; font-weight:600; line-height:1.3; margin-bottom:12px;}
   .verdict .vmeta{
-    font-family:var(--mono); font-size:11.5px; color:var(--text-dim-lift);
-    display:flex; flex-wrap:wrap; gap:14px; margin-bottom:8px;
+    font-family:var(--mono); font-size:12px; color:var(--text-dim-lift);
+    display:flex; flex-wrap:wrap; gap:16px; margin-bottom:12px;
   }
   /* Where the fault is. Deliberately the largest thing on the page after the
      verdict itself: someone who does not know what a layer is can still read
@@ -10117,9 +10117,9 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .verdict .vnext b{color:var(--accent); font-weight:600;}
   /* Stage strip: the whole chain at a glance, the way a handheld tester shows
      it. Detail lives in the findings below. */
-  .stages{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;}
+  .stages{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:24px;}
   .stage{
-    font-family:var(--mono); font-size:11px; padding:4px 9px; border-radius:5px;
+    font-family:var(--mono); font-size:11px; padding:4px 8px; border-radius:6px;
     border:1px solid var(--border); background:var(--panel); color:var(--text-dim);
     display:flex; gap:6px; align-items:center;
   }
@@ -10138,18 +10138,18 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .changes .row.worse{color:var(--warn);}
   .changes .row.better{color:var(--ok);}
   .changes .row.neutral{color:var(--text-dim);}
-  .findings{display:flex; flex-direction:column; gap:8px; margin-bottom:22px;}
+  .findings{display:flex; flex-direction:column; gap:8px; margin-bottom:24px;}
   .finding{
-    display:flex; gap:10px; padding:11px 13px; border-radius:7px;
+    display:flex; gap:12px; padding:12px; border-radius:6px;
     border:1px solid var(--border); background:var(--panel);
   }
   .finding .sev{width:8px; height:8px; border-radius:50%; margin-top:5px; flex-shrink:0;}
   .finding.ok .sev{background:var(--ok); box-shadow:0 0 6px var(--ok);}
   .finding.warning .sev{background:var(--warn); box-shadow:0 0 6px var(--warn);}
   .finding.critical .sev{background:var(--crit); box-shadow:0 0 6px var(--crit);}
-  .finding .msg{font-size:13.5px;}
+  .finding .msg{font-size:13px; line-height:1.55;}
   .finding .tag{
-    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    font-family:var(--mono); font-size:11px; text-transform:uppercase;
     letter-spacing:0.06em; color:var(--text-dim); margin-bottom:3px;
   }
   .finding .tagline{display:flex; align-items:center; gap:7px; margin-bottom:3px;}
@@ -10159,7 +10159,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      underneath it. The cause is the one that gets weight, because on a long
      report it is the line the reader is looking for. */
   .finding .rel{
-    font-family:var(--mono); font-size:10px; text-transform:uppercase;
+    font-family:var(--mono); font-size:11px; text-transform:uppercase;
     letter-spacing:0.06em; padding:1px 6px; border-radius:9px;
     border:1px solid var(--border); color:var(--text-dim); white-space:nowrap;
   }
@@ -10172,7 +10172,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* Layer badge: which OSI layer a finding implicates. Deliberately monochrome
      so it never competes with the severity color for attention. */
   .layer{
-    font-family:var(--mono); font-size:10px; letter-spacing:0.04em;
+    font-family:var(--mono); font-size:11px; letter-spacing:0.04em;
     padding:1px 6px; border-radius:9px; white-space:nowrap;
     border:1px solid var(--border); color:var(--text-dim); background:var(--panel-2);
   }
@@ -10184,11 +10184,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   }
 
   .panel{
-    background:var(--panel); border:1px solid var(--border); border-radius:8px;
-    margin-bottom:14px; overflow:hidden;
+    background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    margin-bottom:12px; overflow:hidden;
   }
   .panel-head{
-    display:flex; align-items:center; gap:10px; padding:9px 13px;
+    display:flex; align-items:center; gap:12px; padding:8px 12px;
     background:var(--panel-2); border-bottom:1px solid var(--border);
     font-family:var(--mono); font-size:12px; cursor:pointer; user-select:none;
   }
@@ -10198,7 +10198,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .panel.collapsed .chev{transform:rotate(-90deg);}
   .panel.collapsed .panel-body{display:none;}
   .panel.collapsed .panel-desc{display:none;}
-  .panel-body{padding:12px 14px;}
+  .panel-body{padding:12px;}
   /* What this panel checked. Inline rather than on hover: the sidebar is a list
      you scan before clicking, but this is a result you read - and screenshot. */
   .panel-desc{
@@ -10227,14 +10227,14 @@ VIEWER_TEMPLATE = r"""<!doctype html>
 
   .section-title{
     font-family:var(--mono); font-size:11px; color:var(--text-dim);
-    text-transform:uppercase; letter-spacing:0.08em; margin:0 0 10px;
+    text-transform:uppercase; letter-spacing:0.08em; margin:0 0 12px;
   }
   /* Wrap rather than scroll: a 12-hop trace with long PTR names ran several
      screens wide, so the end of the path - the part that matters - sat off
      the right edge. Wrapping keeps the whole path visible at any width. */
   .hop-chain{
-    display:flex; flex-wrap:wrap; align-items:stretch; gap:4px 0;
-    padding:6px 2px 14px; margin-bottom:22px;
+    display:flex; flex-wrap:wrap; align-items:stretch; gap:8px 0;
+    padding:0; margin:0 0 24px;
   }
   .hop-node{
     flex:0 1 auto; min-width:110px; max-width:230px;
@@ -10290,6 +10290,39 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     margin-left:6px; padding-left:14px;
   }
   .hop-arrow.handoff span{font-size:9px; letter-spacing:0.04em;}
+
+  /* Proportional digits change width as they change value, so a column of
+     latencies shifts sideways every time one of them ticks over - the numbers
+     are the reading, and they were the least steady thing on the page. Tabular
+     figures fix the advance width; slashed zero keeps a zero from reading as a
+     capital O in an interface name or a hex address. Applied only where digits
+     are load-bearing, since tabular figures in prose are worse than neither. */
+  .hop-sub, .hop-meta, .verdict .vmeta, .stage, .led-row, .report-meta,
+  .finding .tag, .changes .row, pre{
+    font-variant-numeric:tabular-nums;
+    font-feature-settings:"tnum" 1, "zero" 1;
+  }
+  body{-webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;}
+
+  /* A dark console is right for the box it was run on and wrong for where the
+     report ends up - a laptop in a meeting, a ticket read on a phone. Rather
+     than ship a theme switch nobody would find, the page follows the reader's
+     own system setting, which is the answer they already gave. Dark stays the
+     default, so a terminal-shaped audience sees no change. The glows go: a
+     halo around a lamp reads as depth on black and as a printing fault on
+     white, which is the same reason the print block drops them. */
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f6f8fa; --panel:#ffffff; --panel-2:#eef1f5; --border:#d5dbe2;
+      --text:#0f1720; --text-dim:#5a6572; --text-dim-lift:#48525d;
+      --accent:#0f6f66; --accent-dim:#9fd4ce;
+      --ok:#1a7f37; --warn:#8a5b00; --crit:#b3261e;
+    }
+    .brand .dot, .led, .finding .sev{box-shadow:none;}
+    .verdict{box-shadow:0 1px 3px rgba(16,24,40,.08);}
+    .hop-node.crit{box-shadow:0 6px 16px -10px rgba(179,38,30,.55);}
+    .topbar{background:linear-gradient(180deg,#ffffff,#f6f8fa);}
+  }
 
   /* A report often has to reach someone who will not open a file - it goes
      into a ticket, an email or a change record as a PDF. Printed as it stands,

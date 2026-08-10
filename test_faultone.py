@@ -7590,6 +7590,51 @@ class TestViewerTemplate(unittest.TestCase):
                     self._contrast(m.group(1), white), 4.5,
                     f"{name} is unreadable on paper")
 
+    def test_the_light_palette_is_readable_too(self):
+        """The page now follows the reader's system setting, which means half
+        the audience never sees the palette the colours were chosen against.
+        Amber on near-black is the combination that survives a dark theme and
+        fails a light one, so every colour is checked against the light ground
+        rather than assumed to have been darkened enough."""
+        import re
+        block = nd.VIEWER_TEMPLATE.split("@media (prefers-color-scheme: light){", 1)
+        self.assertEqual(len(block), 2, "the light palette is gone")
+        rules = block[1].split("}", 1)[0]
+        ground = re.search(r"--bg:(#[0-9a-fA-F]{6})", rules).group(1)
+        for name in ("--text", "--text-dim", "--text-dim-lift",
+                     "--ok", "--warn", "--crit", "--accent"):
+            m = re.search(rf"{name}:(#[0-9a-fA-F]{{6}})", rules)
+            self.assertTrue(m, f"{name} is not restated for the light palette")
+            with self.subTest(colour=name):
+                self.assertGreaterEqual(
+                    self._contrast(m.group(1), ground), 4.5,
+                    f"{name} is unreadable on the light ground")
+
+    def test_dark_stays_the_default(self):
+        """Following the system setting is only safe if it is additive. Making
+        light the base and darkening under a query would flip the appearance
+        for every reader whose machine reports no preference at all."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertNotIn("prefers-color-scheme: dark", template)
+        first_root = template.index(":root{")
+        light = template.index("@media (prefers-color-scheme: light){")
+        self.assertLess(first_root, light,
+                        "the dark palette has to be declared before the light override")
+
+    def test_the_numbers_do_not_shift_as_they_change(self):
+        """Proportional digits change width with their value, so a column of
+        latencies moves sideways every time one ticks over - and the numbers
+        are the reading. Tabular figures are asked for only where digits are
+        load-bearing; in prose they are worse than leaving it alone."""
+        template = nd.VIEWER_TEMPLATE
+        rule = template.split("font-variant-numeric:tabular-nums", 1)
+        self.assertEqual(len(rule), 2, "tabular figures are gone")
+        selectors = rule[0].rsplit("}", 1)[1]
+        for carries_numbers in (".hop-sub", ".hop-meta", ".verdict .vmeta", "pre"):
+            self.assertIn(carries_numbers, selectors)
+        # The message text is prose and must not be caught by it.
+        self.assertNotIn(".finding .msg", selectors)
+
     def test_the_platform_is_named_the_way_a_reader_would_say_it(self):
         """platform.system() answers with the kernel's name, so a Mac calls
         itself "Darwin" - accurate, and meaningless to most people reading a

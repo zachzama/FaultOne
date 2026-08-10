@@ -11905,7 +11905,9 @@ def build_parser():
                      help="run the diagnosis once, write a report to FILE, and exit. A '.html' "
                           "name gives a single self-contained page that opens in a browser; any "
                           "other name gives JSON, which is smaller to paste and is what "
-                          "--baseline reads. Use - for stdout")
+                          "--baseline reads. Use - for stdout, which is always JSON and "
+                          "comes out on one line so a terminal can select it in one "
+                          "click")
     ap.add_argument("--export-compact", metavar="FILE",
                      help="like --export, without the captured command output behind "
                           "the checks that passed. Same verdict, findings, hop diagram "
@@ -12004,11 +12006,22 @@ def main():
         export_error = None
         if export_path:
             if to_stdout:
-                if wants_html:
-                    sys.stdout.write(render_report_html(written))
-                else:
-                    json.dump(json_safe(written), sys.stdout, indent=2)
-                    sys.stdout.write("\n")
+                # One line, because stdout is where a report goes to be piped
+                # or pasted. Indented, a compact report is 192 logical lines
+                # and about 198 rows on an 80-column terminal, so taking it off
+                # a box you cannot copy a file from means dragging a selection
+                # across all of it and scrolling part-way through. On one line
+                # a terminal's triple-click takes the whole thing: a soft wrap
+                # is not a line break to it. A named file keeps the
+                # indentation - that is where a report goes to be read, diffed
+                # and used as a baseline.
+                #
+                # JSON, always. The format comes from the filename extension
+                # and "-" has none, so the branch that used to write a page
+                # here could not be reached: to_stdout means the name is "-",
+                # and wants_html means it ends in .html.
+                json.dump(json_safe(written), sys.stdout, separators=(",", ":"))
+                sys.stdout.write("\n")
             else:
                 try:
                     # 0600: the report contains internal addressing, MAC

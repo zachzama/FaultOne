@@ -7299,6 +7299,66 @@ class TestExitStatus(unittest.TestCase):
         self.assertNotIn("Traceback", out.stderr)
         self.assertEqual(out.returncode, 3)
 
+    def test_a_report_sent_to_stdout_is_one_line(self):
+        """stdout is where a report goes to be piped or pasted. Indented, a
+        compact one is 192 logical lines and about 198 rows on an 80-column
+        terminal, so taking it off a box you cannot copy a file from meant
+        dragging a selection across all of it and scrolling part-way through.
+        On one line a terminal's triple-click takes the whole thing - a soft
+        wrap is not a line break to it."""
+        import subprocess
+        out = subprocess.run([sys.executable, nd.__file__, "--export-compact", "-",
+                              "--quick", "--target", "127.0.0.1"],
+                             capture_output=True, text=True, timeout=180)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        body = out.stdout.strip()
+        self.assertEqual(body.count("\n"), 0, "the report came out on several lines")
+        json.loads(body)
+
+    def test_a_report_written_to_a_file_keeps_its_indentation(self):
+        """A file is where a report goes to be read, diffed and used as a
+        baseline. Squeezing that onto one line to suit the paste path would
+        trade the readable copy for the pasteable one."""
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "report.json")
+            out = subprocess.run([sys.executable, nd.__file__, "--export-compact", path,
+                                  "--quick", "--target", "127.0.0.1"],
+                                 capture_output=True, text=True, timeout=180)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            with open(path) as fh:
+                text = fh.read()
+        self.assertGreater(text.count("\n"), 20, "the file lost its indentation")
+        json.loads(text)
+
+    def test_stdout_carries_json_and_says_so(self):
+        """The format comes from the filename extension and "-" has none, so a
+        branch that wrote a page to stdout could never run: to_stdout means the
+        name is "-", and wants_html means it ends in .html. Unreachable code
+        that reads as a supported route is worse than no code - someone writes
+        `--export - > report.html` and gets JSON in it."""
+        src = open(nd.__file__, encoding="utf-8").read()
+        block = src.split("            if to_stdout:", 1)[1].split("            else:", 1)[0]
+        self.assertNotIn("render_report_html", block,
+                         "the unreachable html branch is back on stdout")
+        self.assertIn("separators=", block)
+        help_text = src.split('ap.add_argument("--export", metavar="FILE"', 1)[1] \
+                       .split(")\n", 1)[0]
+        self.assertIn("always JSON", help_text)
+
+    def test_the_enclosed_page_is_unaffected_by_how_stdout_is_written(self):
+        """The island inside a self-contained export has always been written
+        compact, and is built by a different function - so the two cannot drift
+        into disagreeing about what a report looks like."""
+        src = open(nd.__file__, encoding="utf-8").read()
+        island = src.split("def render_report_html", 1)[1].split("\n\n\n", 1)[0]
+        self.assertIn('separators=(",", ":")', island)
+        page = nd.render_report_html({"findings": [], "raw": {}, "hops": [],
+                                      "stages": [], "verdict": None})
+        blob = page.split('type="application/json">', 1)[1].split("</script>", 1)[0]
+        self.assertEqual(blob.count("\n"), 0)
+
     def test_a_crash_is_unknown_not_a_warning(self):
         """An uncaught exception exits 1 by default, and 1 now means WARNING -
         so a scheduled check would read a broken tool as a mild finding about

@@ -1339,7 +1339,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **152** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 908 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 912 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 152 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1501,7 +1501,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 908 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 912 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2688,6 +2688,21 @@ sudo python3 faultone.py --export - > report.json    # or redirect it
 With `--export -`, stdout carries nothing but the JSON — every human-readable
 line goes to stderr — so piping and redirecting stay clean.
 
+Sent to stdout the JSON is written on **one line**; written to a named file it
+keeps its indentation. The two destinations are for different things. A file is
+read, diffed and handed to `--baseline`, so it stays legible. stdout is piped or
+pasted, and a compact report indented is 192 logical lines — about 198 rows on
+an 80-column terminal — which on a box you can't copy a file from means dragging
+a selection across all of it and scrolling part-way through. On one line a
+terminal's triple-click takes the whole thing, because a soft wrap is not a line
+break to it. The viewer's paste box removes the wrapping again and ignores a
+shell prompt either side.
+
+`-` is always JSON. The format is taken from the filename extension and `-`
+hasn't got one, so there is no way to ask for the self-contained page here —
+`--export - > report.html` gives you JSON in a file named `.html`. Name the file
+instead.
+
 ## Optional tools it will use if present
 
 None is required. The rule for every one of them is the same: use it when it's
@@ -2827,7 +2842,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-908 tests, no dependencies, no network, a few seconds — so they run
+912 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

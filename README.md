@@ -99,6 +99,19 @@ captured output of every command, kept so a conclusion can be audited later.
 python3 faultone.py --export-compact report.json    # ~5 KB instead of ~120 KB
 ```
 
+**Can't copy a file off it at all?** No `scp`, no outbound connection, nothing
+to install — but you can always read the screen. Print the report instead:
+
+```bash
+python3 faultone.py --export-compact -              # one line, on stdout
+```
+
+Triple-click it, copy, and paste it into the box in the viewer's sidebar. SSH
+sends characters and your own terminal draws them, so the selection never
+involves the box — which is exactly why this works where a file transfer
+doesn't. It comes out on one line so a single click takes all of it, and the
+viewer copes with the wrapping and with a stray shell prompt either side.
+
 Same verdict, same findings, same hop diagram, same stage strip — all of that is
 derived and none of it is what makes an export big. What's kept is the evidence
 behind the stages that aren't passing, plus any check that couldn't run, because
@@ -294,7 +307,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 908 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 912 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

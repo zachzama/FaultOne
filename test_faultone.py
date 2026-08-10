@@ -7515,6 +7515,40 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
                          "this device is drawn clean whatever the report says")
         self.assertIn("sideSeverity(data, 'local')", node)
 
+    def test_a_trace_that_stops_does_not_pretend_to_a_hop_count(self):
+        """Three consecutive timeouts were drawn as three cards, which reads as
+        three identified routers and implies the destination is four hops away.
+        Nothing is recorded for any of them - no address, no timing, no reply
+        to have measured - and how far the path runs past the stall is exactly
+        what is not known. One node, saying so."""
+        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
+                                  .split("\nfunction ", 1)[0]
+        self.assertIn("while(stallFrom > 0 && hops[stallFrom - 1].timed_out) stallFrom--;",
+                      chain, "the trailing run of timeouts is not found")
+        self.assertIn("if(hopIndex >= stallFrom) return;", chain,
+                      "the collapsed hops are still drawn one by one as well")
+        collapsed = chain.split("if(stalled){", 1)[1].split("  }", 1)[0]
+        self.assertIn("how far the path runs past here is unknown", collapsed)
+        # Severity through the same function every other hop uses, not written
+        # in - a literal here is the shape the other three legs had.
+        self.assertIn("sev: hopSeverity(first, probes)", collapsed)
+
+    def test_a_timeout_with_a_reply_after_it_stays_its_own_hop(self):
+        """A router that drops probes but forwards traffic is a normal thing to
+        meet in the middle of a path, and the reply from the hop beyond proves
+        that hop exists. Only a run reaching the end of the trace is unknown in
+        extent. No scenario produces a middle timeout, so this asserts the
+        shape of the rule: the run is counted backwards from the end and stops
+        at the first hop that answered."""
+        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
+                                  .split("\nfunction ", 1)[0]
+        walk = chain.split("let stallFrom = hops.length;", 1)[1].split(";", 2)
+        self.assertIn("hops[stallFrom - 1].timed_out", walk[0],
+                      "the run is not walked back from the end of the trace")
+        self.assertNotIn("hops[0]", walk[0])
+        self.assertNotIn("filter", walk[0],
+                         "collecting every timeout would take the middle ones too")
+
     def test_the_destination_is_drawn_once(self):
         """A target node was appended after every hop, and in a hundred and
         forty eight of the hundred and fifty two reports the last hop already

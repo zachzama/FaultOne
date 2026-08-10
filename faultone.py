@@ -10730,7 +10730,21 @@ function renderHopChain(data){
 
   const nodes = [{label:'source', sub:'this device',
                   sev: sideSeverity(data, 'local')}];
-  hops.forEach(h => {
+
+  // A run of timeouts reaching the end of the trace is one fact, not
+  // several: nothing answered from that TTL onward and the trace stopped.
+  // Drawn as a card each it read as three identified routers that timed
+  // out, and implied the destination is four hops away - which is the one
+  // thing not known. Nothing is recorded for those hops either: no address,
+  // no timing, no reply to have measured. A timeout with a reply after it
+  // is a different fact and stays its own hop, because something forwarded
+  // the probe and that hop is therefore known to exist.
+  let stallFrom = hops.length;
+  while(stallFrom > 0 && hops[stallFrom - 1].timed_out) stallFrom--;
+  const stalled = hops.length - stallFrom;
+
+  hops.forEach((h, hopIndex) => {
+    if(hopIndex >= stallFrom) return;
     const avg = h.avg_ms != null ? h.avg_ms : avgMs(h.times_ms);
     // zone: inside the site vs out on the provider's network
     const zone = h.cgnat ? 'cgnat' : (h.private === true ? 'lan' : (h.private === false ? 'wan' : ''));
@@ -10749,6 +10763,18 @@ function renderHopChain(data){
       cgnat: !!h.cgnat,
     });
   });
+  if(stalled){
+    const first = hops[stallFrom], last = hops[hops.length - 1];
+    nodes.push({
+      label: stalled === 1 ? `hop ${escapeHtml(String(first.hop))}`
+                           : `hops ${escapeHtml(String(first.hop))}\u2013${escapeHtml(String(last.hop))}`,
+      sub: 'no reply',
+      meta: `${stalled} TTL${stalled === 1 ? '' : 's'} probed, nothing answered \u00b7 `
+          + `how far the path runs past here is unknown`,
+      sev: hopSeverity(first, probes),
+    });
+  }
+
   // The destination, drawn once. When the trace reached it the last hop IS the
   // target, and appending a second node put the same address on the page twice
   // - the second copy carrying a hardcoded ok, so a target the report had just

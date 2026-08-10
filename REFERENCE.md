@@ -318,6 +318,43 @@ Reported at **25%** of the ceiling. Without `tcp_max_orphans` there is no
 denominator and nothing is claimed: a count on its own says nothing about
 whether it is a lot.
 
+## The path summary agrees with the finding
+
+Naming a hop is a claim that it is the one to go and look at. `latency_wall`
+already declines to make that claim below **half** the round trip — the share
+test is what makes its own sentence true — and the summary line was making it
+anyway:
+
+```
+latency_wall fired: False
+-> biggest latency jump: +23.0ms at hop 8 (10.0.7.1), 13% of the 182ms end to end
+```
+
+Ten hops each adding about the same, and the reader sent to hop 8, where nothing
+is unusual. The analysis had refused to say it; the display said it regardless.
+
+```
+-> no single hop adds most of the delay: the 182ms builds up across the path,
+   the largest step being 13% of it at hop 8
+```
+
+Both read the same `LATENCY_WALL_SHARE`, so they cannot drift into disagreeing.
+And the delay is still reported: 182ms is worth knowing about even when nothing
+on the path is at fault for it — silence would be worse than the wrong hop.
+
+### Why there is no waterfall
+
+A per-hop latency bar was prototyped and rejected. On a path with one wall it
+restates what the summary already says in words, and less precisely — the
+sentence also names whose side of the demarc it falls on. On an evenly graded
+path every bar comes out the same length, which is the same conclusion the line
+above now states outright.
+
+It would have cost around eighteen columns on lines already running to ninety,
+plus scaling and width handling, to say something already said. The bar chart
+belongs where a reader must compare many values and no rule can summarise them;
+here a rule can.
+
 ## Which part of its own answer took the time
 
 "The service answered in 900ms" is true and useless. Getting a connection,
@@ -1302,7 +1339,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **152** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 857 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 861 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 152 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1464,7 +1501,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 857 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 861 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2790,7 +2827,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-857 tests, no dependencies, no network, a few seconds — so they run
+861 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

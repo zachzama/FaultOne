@@ -10996,10 +10996,23 @@ def _render_path(report, out, tint, width):
         where = ("in the provider's carrier-NAT layer" if wj.get("cgnat")
                  else "inside this site" if wj.get("private")
                  else "on the provider's side")
-        share = (f", {wj['share_pct']}% of the {wj['total_ms']:.0f}ms end to end"
-                 if wj.get("share_pct") is not None and wj.get("total_ms") else "")
-        out.append(f"  -> biggest latency jump: +{wj['delta_ms']}ms at hop {wj['hop']} "
-                   f"({wj['host']}){share}, {where}")
+        share_pct = wj.get("share_pct")
+        total = wj.get("total_ms")
+        # Naming a hop is a claim that it is the one to go and look at, and on
+        # an evenly graded path it is not. latency_wall already declines to
+        # fire below this share - it is the test that makes its own sentence
+        # true - and the summary was naming a hop anyway, sending the reader
+        # to hop 8 of ten hops that each add about the same.
+        dominates = share_pct is None or share_pct >= LATENCY_WALL_SHARE * 100
+        if not dominates and total:
+            out.append(f"  -> no single hop adds most of the delay: the {total:.0f}ms "
+                       f"builds up across the path, the largest step being "
+                       f"{wj['share_pct']}% of it at hop {wj['hop']}")
+        else:
+            share = (f", {share_pct}% of the {total:.0f}ms end to end"
+                     if share_pct is not None and total else "")
+            out.append(f"  -> biggest latency jump: +{wj['delta_ms']}ms at hop {wj['hop']} "
+                       f"({wj['host']}){share}, {where}")
 
 def _render_neighbours(report, out, tint, width):
     """Which switch port this device is on."""

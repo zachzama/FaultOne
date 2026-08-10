@@ -2845,6 +2845,53 @@ class TestAFixThatNeedsHandsIsMarkedAsOne(unittest.TestCase):
         self.assertIn("rel-hardware", page)
 
 
+class TestThePathSummaryAgreesWithTheFinding(unittest.TestCase):
+    """Naming a hop is a claim that it is the one to go and look at. The wall
+    finding already declines to make that claim below half the round trip -
+    the share test is what makes its own sentence true - and the summary line
+    was making it anyway."""
+
+    def summary(self, avgs):
+        m = fresh()
+        mtr(m, [{"count": i + 1, "host": f"10.0.{i}.1", "Loss%": 0.0, "Snt": 30,
+                 "Avg": v} for i, v in enumerate(avgs)])
+        ping_map(m, inet_loss=0, avg=avgs[-1], mdev=5.0)
+        rep = m.diagnose("8.8.8.8", None, quick=False)
+        lines = [l.strip() for l
+                 in m.render_text_report(rep).split("PATH TO", 1)[1].splitlines()
+                 if l.strip().startswith("->") and "hop" in l]
+        fired = any(f["code"] == "latency_wall" for f in rep["findings"])
+        return fired, (lines[0] if lines else "")
+
+    def test_a_path_with_one_wall_names_the_hop(self):
+        fired, line = self.summary([1.0, 620.0, 640.0])
+        self.assertTrue(fired)
+        self.assertIn("biggest latency jump", line)
+        self.assertIn("hop 2", line)
+
+    def test_an_evenly_graded_path_names_no_hop_as_the_answer(self):
+        """Ten hops each adding about the same. The old line said "biggest
+        latency jump at hop 8", sending the reader to a hop doing nothing
+        unusual."""
+        fired, line = self.summary([8, 22, 41, 55, 74, 96, 118, 141, 160, 182])
+        self.assertFalse(fired, "the finding correctly stays quiet here")
+        self.assertIn("no single hop", line)
+        self.assertNotIn("biggest latency jump", line)
+
+    def test_the_two_use_one_threshold_between_them(self):
+        """The summary and the finding must not be able to disagree, which
+        means they cannot each carry their own number."""
+        source = open(nd.__file__).read()
+        summary = source.split("no single hop adds most of the delay", 1)[0][-700:]
+        self.assertIn("LATENCY_WALL_SHARE", summary)
+
+    def test_the_delay_is_still_reported_when_no_hop_owns_it(self):
+        """Silence would be worse than the wrong hop: 182ms is worth knowing
+        about even when nothing on the path is at fault for it."""
+        _fired, line = self.summary([8, 22, 41, 55, 74, 96, 118, 141, 160, 182])
+        self.assertIn("182ms", line)
+
+
 class TestTheSuiteDoesNotBreakItsOwnClock(unittest.TestCase):
     """`nd.time` is not a copy of anything - it is the `time` module, shared by
     every module in the process. So `nd.time.sleep = ...` disables sleeping

@@ -7412,9 +7412,19 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
     # Findings that name a hop in their own message, and where the hop number
     # they name comes from. Anything added here has to mark its hop, and
     # anything that marks a hop has to be here.
+    @staticmethod
+    def _target_hops(rep):
+        return [h["hop"] for h in (rep.get("hops") or [])
+                if "target" in (h.get("roles") or [])]
+
     NAMES_A_HOP = {
         "latency_wall": lambda rep: [rep["worst_jump"]["hop"]],
         "loop": lambda rep: list(rep["loop_at"]["hops"]),
+        # Named by role, not by number - which hop is the destination depends
+        # on the path. Both assert traffic is not reaching it, so a clean
+        # target hop underneath them is the picture contradicting the sentence.
+        "egress_blocked": lambda rep: TestTheChainMarksTheHopTheVerdictNames._target_hops(rep),
+        "inet_partial_loss": lambda rep: TestTheChainMarksTheHopTheVerdictNames._target_hops(rep),
     }
 
     def test_a_hop_is_blamed_exactly_when_the_report_blames_it(self):
@@ -7434,8 +7444,16 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
             by_code = {f["code"]: f for f in rep["findings"]}
             expected = {}
             for name, where in self.NAMES_A_HOP.items():
-                if name in by_code:
-                    for hop in where(rep):
+                if name not in by_code:
+                    continue
+                for hop in where(rep):
+                    held = expected.get(hop)
+                    # Two conclusions can land on the same hop; the more
+                    # serious one owns it. Spelled out rather than left to
+                    # whichever was written last in the table above, which is
+                    # how this agreed with the code by accident.
+                    if held is None or (nd.SEVERITY_RANK[by_code[name]["severity"]]
+                                        > nd.SEVERITY_RANK[by_code[held]["severity"]]):
                         expected[hop] = name
             marked = {h["hop"]: h["blame"]["code"]
                       for h in (rep.get("hops") or []) if h.get("blame")}
@@ -7465,6 +7483,47 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
             marks |= {h["blame"]["code"] for h in (rep.get("hops") or []) if h.get("blame")}
         self.assertEqual(marks, set(self.NAMES_A_HOP),
                          "a finding marks a hop without this test knowing where it should land")
+
+    def test_the_worse_conclusion_owns_the_target_hop(self):
+        """No scenario fires both of these at once, so the corpus cannot reach
+        the rule and it is asserted here instead. Left to the order they happen
+        to be listed in, the milder one could take a hop the more serious one
+        was about."""
+        # The serious one is listed first on purpose: with it last, taking the
+        # last conclusion and taking the worst give the same answer, and the
+        # test agrees with either implementation.
+        hops = [{"hop": 1, "roles": []}, {"hop": 2, "roles": ["target"]}]
+        nd._mark_target_hop(hops, [
+            {"code": "inet_partial_loss", "severity": "critical"},
+            {"code": "egress_blocked", "severity": "warning"},
+        ])
+        self.assertEqual(hops[1]["blame"],
+                         {"code": "inet_partial_loss", "severity": "critical"})
+        self.assertNotIn("blame", hops[0], "a hop with no target role was marked")
+
+    def test_a_hop_already_carrying_a_worse_mark_keeps_it(self):
+        """The path check runs first and knows things about a specific hop that
+        this does not - which end of a routing loop it is, for one. A general
+        statement about the destination must not overwrite it."""
+        hops = [{"hop": 2, "roles": ["target"],
+                 "blame": {"code": "loop", "severity": "critical"}}]
+        nd._mark_target_hop(hops, [{"code": "egress_blocked", "severity": "warning"}])
+        self.assertEqual(hops[0]["blame"]["code"], "loop")
+
+    def test_a_finding_that_declines_to_call_it_loss_marks_nothing(self):
+        """inet_loss_unmeasured exists to say that one unanswered probe out of
+        four is not established loss - it is the report refusing to conclude.
+        Marking the destination on the strength of it would be the picture
+        claiming what the sentence just declined to, which is the whole reason
+        the codes are named rather than taken from whatever marked the
+        outbound direction."""
+        hops = [{"hop": 2, "roles": ["target"]}]
+        nd._mark_target_hop(hops, [
+            {"code": "inet_loss_unmeasured", "severity": "warning"},
+            {"code": "dns_fail", "severity": "critical"},
+            {"code": "cgnat", "severity": "warning"},
+        ])
+        self.assertNotIn("blame", hops[0])
 
     def test_the_mark_survives_a_compact_export(self):
         """The hops are derived, not captured output, so they ride through the

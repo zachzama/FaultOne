@@ -9662,6 +9662,53 @@ def _check_internet(raw, findings, target, probes):
     return inet_loss
 
 
+SEVERITY_RANK = {"ok": 0, "warning": 1, "critical": 2}
+
+# Findings whose subject is the destination itself, and which assert that
+# traffic to it is not arriving. They mark the target hop by role rather than
+# by number, since which hop is the target varies with the path.
+TARGET_UNREACHED = ("egress_blocked", "inet_partial_loss")
+
+
+def _mark_target_hop(hops, findings):
+    """Stop the path drawing a clean destination the report says is not.
+
+    The chain colours each hop from the trace's own replies, and a trace gets
+    through where the traffic being diagnosed does not: an egress policy that
+    blocks ICMP echo and TCP 443 while leaving traceroute's probes alone
+    answers at every hop. So the report said nothing reaches the target and the
+    picture drew the target green, one panel apart.
+
+    These two codes are named rather than taken from whatever marked the
+    outbound direction, because most of what marks it is not about reaching the
+    target at all - a resolver that is down, carrier NAT, a local port limit -
+    and the path to the target really is fine in those. One of them says so
+    outright: inet_loss_unmeasured exists to report that a single unanswered
+    probe out of four is not established loss, and marking the destination on
+    the strength of it would be the picture claiming what the sentence
+    declines to. Findings that already agree with a clean path are left alone
+    for the same reason: destination_unresponsive says the trace reached the
+    target and the target is what went quiet, which is a clean path and a
+    marked endpoint, and that is what it should look like.
+
+    A hop already carrying a more serious mark keeps it - the path check runs
+    first and knows things about a specific hop that this does not.
+    """
+    reached = [f for f in findings if f["code"] in TARGET_UNREACHED]
+    if not reached:
+        return
+    worst = max(reached, key=lambda f: SEVERITY_RANK.get(f["severity"], 0))
+    for hop in hops:
+        if "target" not in (hop.get("roles") or []):
+            continue
+        held = hop.get("blame")
+        if held and SEVERITY_RANK.get(held["severity"], 0) >= \
+                SEVERITY_RANK.get(worst["severity"], 0):
+            return
+        hop["blame"] = {"code": worst["code"], "severity": worst["severity"]}
+        return
+
+
 def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
              progress=None, inventory=False, ports_speculative=False,
              uplink_mbps=None):
@@ -9754,6 +9801,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     hops, path_insight, path_source = _check_path(
         raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
         trace=probes.get("trace"))
+
+    # Runs here because it is the first point where both exist: the internet
+    # checks reach their conclusion before there is a path to mark.
+    _mark_target_hop(hops, findings)
 
     # Overall call quality to the target: latency, jitter and loss reduced to
     # one number people recognise. Uses the ping we already ran.

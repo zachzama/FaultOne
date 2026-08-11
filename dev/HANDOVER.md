@@ -1,8 +1,8 @@
 # Open threads
 
-Not a harness and not documentation. One thing that is unfinished and one that
-is finished but easy to undo by accident, written down because the reasoning
-behind them is not in the code and would otherwise have to be rediscovered.
+Not a harness and not documentation. What is unfinished, and what is finished
+but easy to undo by accident, written down because the reasoning behind them is
+not in the code and would otherwise have to be rediscovered.
 
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
@@ -29,6 +29,53 @@ roughly a nineteen per cent chance of nine clean runs by luck.
 collector immediately. The failing assertion was never captured the first time,
 so the diagnosis above is inference from mechanism and rate, and a second round
 of inference would not be worth much.
+
+## Open: the badge row, which cannot be added until the repo is public
+
+Three badges were designed for the top of the README and are not there,
+because every one of them 404s against a private repo. Both badge services
+read through the public API, so this is not a matter of getting the URLs
+right - there is nothing to read.
+
+```markdown
+[![tests](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml/badge.svg)](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/zachzama/FaultOne?color=2E7D32)](https://github.com/zachzama/FaultOne/releases)
+[![Licence](https://img.shields.io/github/license/zachzama/FaultOne?color=555)](LICENSE)
+```
+
+Check whether it is time, without opening a browser - each of these prints
+what the badge would say:
+
+```bash
+curl -s https://img.shields.io/github/v/release/zachzama/FaultOne | grep -o 'aria-label="[^"]*"'
+curl -s https://img.shields.io/github/license/zachzama/FaultOne  | grep -o 'aria-label="[^"]*"'
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://github.com/zachzama/FaultOne/actions/workflows/tests.yml/badge.svg
+```
+
+While private they answer `repo not found`, `no releases or repo not found`,
+and `404`. When they answer with a version, a licence and `200`, the block
+above can go in under the first line of the README.
+
+Deliberately three, and deliberately these three. The repo this idea came from
+carries eleven, covering coverage, three OpenSSF checks, a build tool and a
+linter - none of which run here. A badge for a service this project does not
+use is the same stale number the suite spends 963 tests preventing, moved to
+the first thing anyone reads.
+
+A test-count badge was considered and rejected: it would be a number in a URL,
+and the guard that pins every other count in the docs reads prose, not a
+shields path. It would be the one count in the repository free to drift.
+
+## Settled: what was done to the README's design, and what was not
+
+Four options were drawn up and rendered on a branch before any were applied.
+Two shipped: the report as a generated hero image, and two native GitHub
+alerts. The badges are above. The fourth was a nav row of anchor links under
+the title, declined because the README is one page with eight headings and
+GitHub already renders a table of contents from the heading icon on every
+file - it would have been a row of links above content that fits on two
+screens.
 
 ## Settled: why the path view looks the way it does
 

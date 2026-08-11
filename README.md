@@ -64,7 +64,7 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 nothing behind:
 
 ```bash
-ssh -C -J jump user@box "python3 - --report --quick" < faultone.py
+ssh -C -J jump user@box "python3 - --report" < faultone.py
 ```
 
 `-C` because OpenSSH doesn't compress by default, and the file is 597 KB of

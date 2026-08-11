@@ -172,6 +172,36 @@ corroborate one facing the other, and this box faces both. Without that, client
 loss and backend loss are both layer 3 and the tool named one while presenting
 the other as its consequence.
 
+```
+                         a fault is reported
+                                  |
+                  which way does the evidence face?
+                                  |
+      +---------------------------+---------------------------+
+      |                           |                           |
+ the way in                this box                  the way out
+ (downstream)              (local)                   (upstream)
+      |                           |                           |
+ clients cannot get in     its own link, NIC,        it cannot reach what
+ or are turned away:       stack, clock, and the     it depends on: the
+ the accept queue,         queues it drops           gateway, DNS, the
+ SYN cookies, and the      packets into              path out, a backend,
+ certificate it serves                               a certificate
+      |                           |                           |
+      |                    explains both ways, so             |
+      |                    it is the cause whenever           |
+      |                    it is present                      |
+      |                           |                           |
+      +----- neither explains nor corroborates the other -----+
+```
+
+Within any one branch the layer rule applies as normal: the lowest layer with a
+live fault is the cause, and everything above it is a symptom. `FINDING_SIDE`
+is the table that puts each finding on a branch. An unlisted code falls back to
+`local`, which is the safe answer because it faces both ways — but a test fails
+on any emitted code the table doesn't name, so that fallback stays a decision
+somebody made rather than one nobody noticed.
+
 What it doesn't claim: it applies one plausible ordering, consistently — it
 doesn't know your network. It still says *likely*. It tells you how much of
 itself managed to run, names faults it can't explain, and refuses to call

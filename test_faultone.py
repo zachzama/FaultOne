@@ -1046,10 +1046,19 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
 
         term = Terminal()
         saved = dict(os.environ)
+        saved_os = nd.OS_NAME
         try:
             for key in ("NO_COLOR", "TERM"):
                 os.environ.pop(key, None)
             os.environ["TERM"] = "xterm-256color"
+
+            # There is a fifth condition - Windows never gets colour - and it
+            # short-circuits the rest. Run these on a stated platform rather
+            # than on whichever one happens to be here: on Windows every
+            # assertFalse below passes for that reason alone, so the four
+            # conditions this test exists for would go unexercised and it
+            # would stay green with all of them deleted.
+            nd.OS_NAME = "Linux"
             self.assertTrue(nd.use_color(term), "a real terminal gets colour")
 
             os.environ["NO_COLOR"] = "1"
@@ -1062,7 +1071,15 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
 
             self.assertFalse(nd.use_color(term, True), "--no-color did not override")
             self.assertFalse(nd.use_color(_io.StringIO()), "a pipe got colour")
+
+            # And the fifth, on its own terms: a console that may not read an
+            # escape sequence is not sent one, whatever else is true.
+            nd.OS_NAME = "Windows"
+            self.assertFalse(nd.use_color(term),
+                             "Windows is excluded deliberately - cmd.exe cannot "
+                             "be relied on to interpret an escape sequence")
         finally:
+            nd.OS_NAME = saved_os
             os.environ.clear()
             os.environ.update(saved)
 
@@ -8027,6 +8044,21 @@ class TestExitStatus(unittest.TestCase):
     its output. Before it, a run reporting a degraded link exited 0 and a
     wrapper saw success while the tool was saying something was wrong."""
 
+    def assertReachedAVerdict(self, out):
+        """0, 1 and 2 all mean the run produced an answer - that is this
+        class's own convention, severity in the exit code. Only 3 means it
+        could not.
+
+        The two tests below asserted 0, which additionally requires the
+        machine running the suite to be healthy. That held on a laptop and
+        stopped holding the first time they ran anywhere else: a CI runner
+        found something critical, exited 2, and two tests about the *shape* of
+        the output failed for a reason that had nothing to do with shape."""
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn(out.returncode, (0, 1, 2),
+                      "exited %d, so no verdict was reached: %s"
+                      % (out.returncode, out.stderr))
+
     def status(self, *severities, verdict=True):
         report = {"findings": [{"severity": s} for s in severities]}
         if verdict:
@@ -8076,7 +8108,7 @@ class TestExitStatus(unittest.TestCase):
         out = subprocess.run([sys.executable, nd.__file__, "--export-compact", "-",
                               "--quick", "--target", "127.0.0.1"],
                              capture_output=True, text=True, timeout=180)
-        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertReachedAVerdict(out)
         body = out.stdout.strip()
         self.assertEqual(body.count("\n"), 0, "the report came out on several lines")
         json.loads(body)
@@ -8092,7 +8124,7 @@ class TestExitStatus(unittest.TestCase):
             out = subprocess.run([sys.executable, nd.__file__, "--export-compact", path,
                                   "--quick", "--target", "127.0.0.1"],
                                  capture_output=True, text=True, timeout=180)
-            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertReachedAVerdict(out)
             with open(path) as fh:
                 text = fh.read()
         self.assertGreater(text.count("\n"), 20, "the file lost its indentation")
@@ -8294,6 +8326,14 @@ class TestPythonCompatibility(unittest.TestCase):
                 self.fail(f"{name} uses syntax newer than Python "
                           f"{nd.MIN_PYTHON[0]}.{nd.MIN_PYTHON[1]}: "
                           f"{e.msg} (line {e.lineno})")
+            except TypeError:
+                # feature_version arrived in 3.8, so on the floor itself this
+                # argument does not exist - the guard defending 3.7 was the
+                # one thing that could not run on 3.7, and errored there the
+                # first time anything tried. It is also the one interpreter
+                # where the check is redundant: the file was imported to get
+                # here, so anything newer than 3.7 already failed to compile.
+                tree = ast.parse(src)
             for node in ast.walk(tree):
                 why = NEWER.get(type(node).__name__)
                 if why:
@@ -8308,6 +8348,41 @@ class TestPythonCompatibility(unittest.TestCase):
                     self.fail("%s:%d subscripts the builtin %s, which is a "
                               "type only from 3.9" % (name, node.lineno,
                                                       node.value.id))
+
+    def test_every_text_file_it_opens_names_its_encoding(self):
+        """Without one, Python uses the platform's locale encoding, which is
+        UTF-8 on Linux and macOS and cp1252 on Windows. So this was invisible
+        on both machines it had ever run on, and on Windows it wrote a report
+        whose em dashes came back as replacement characters - caught by a
+        viewer that no longer matched the template it was generated from.
+
+        A diagnostic must not lose a report to a byte it did not expect
+        either, so reads and writes both replace rather than raise. That is
+        the same decision already made for stdout: a diagnosis that ran should
+        not be lost on the way out."""
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        bad = []
+        for node in ast.walk(tree):
+            opener = None
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                opener = node.func.id if node.func.id == "open" else None
+            elif (isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "fdopen"):
+                opener = "os.fdopen"
+            if not opener:
+                continue
+            mode = ""
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                mode = node.args[1].value or ""
+            if "b" in mode:                      # bytes carry no encoding
+                continue
+            if not any(k.arg == "encoding" for k in node.keywords):
+                bad.append("%s:%d %s(" % ("faultone.py", node.lineno, opener))
+        self.assertEqual(bad, [], "text-mode opens with no encoding, which "
+                                  "means cp1252 on Windows: " + ", ".join(bad))
 
     def test_only_standard_library_is_imported(self):
         import ast

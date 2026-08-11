@@ -9,6 +9,10 @@ something nobody thought to assert about.
 
 All five are stdlib-only and offline, like everything else here.
 
+`HANDOVER.md` sits alongside them and is not one of them: it records what
+is unfinished and what was tried and rejected, since a commit says what was
+done rather than what was ruled out.
+
 ## `deep_e2e.py` — does the whole pipeline hold, for every finding?
 
 ```bash

@@ -2931,10 +2931,13 @@ removed, and nothing pins prose the way the counts are pinned.
   `report.json` on your own machine. Generated from `VIEWER_TEMPLATE` by
   `--emit-viewer`; a test holds the two byte-identical, so edit the template
   and regenerate rather than editing the file.
-- `dev/` — two release harnesses that are not part of the tool: `deep_e2e.py`
-  runs every finding through the whole pipeline, `equivalence.py` proves a
-  change stayed inert by diffing every scenario against a git ref. See
-  [dev/README.md](dev/README.md).
+- `dev/` — five harnesses that are not part of the tool: `deep_e2e.py` runs
+  every finding through the whole pipeline, `equivalence.py` proves a change
+  stayed inert by diffing every scenario against a git ref, `audit.py` checks
+  the rules between findings under one fault and under six, `about.py` compares
+  the GitHub description against this file, and `release.py` cuts a release
+  without dropping half of it. `HANDOVER.md` alongside them records what is
+  unfinished and what was tried and rejected. See [dev/README.md](dev/README.md).
 
 ## The repository description
 

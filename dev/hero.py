@@ -19,6 +19,14 @@ it. The test corpus is synthetic and exists for exactly this.
 own OS and interpreter, which would make every regeneration a diff. They are
 pinned here, so re-running this on another machine produces the same bytes and
 the image only changes when the report does.
+
+Pinning the banner was not enough, and CI is what said so. A scenario stubs
+what the tool *runs*, not what it *reads*: a few checks open files under /proc
+directly, which exist on Linux and do not on a Mac, so the same scenario
+reported different coverage on each and the committed image matched only the
+machine it was drawn on. The platform and those readers are both fixed below,
+which also makes the banner honest - it says Linux because the report is now
+genuinely a Linux-shaped one.
 """
 import os
 import re
@@ -68,7 +76,17 @@ def report_lines():
 
     setup, kw = T.S[SCENARIO]
     mod = T.fresh()
+    # The report is a Linux one wherever it is drawn, which is what the banner
+    # has always claimed.
+    mod.OS_NAME = "Linux"
     setup(mod)
+    # The three checks that read the host rather than running a command. Left
+    # live they answer from whatever machine is drawing, so the picture came
+    # out differently on Linux and on a Mac. "Could not read it" is a state the
+    # report already knows how to show, and it is the same one on both.
+    for name in ("cmd_kernel_drops", "cmd_kernel_log", "cmd_clock_sync"):
+        setattr(mod, name, (lambda n: lambda *a, **k: {
+            "ok": False, "cmd": n, "error": "not read for this example"})(name))
     report = mod.diagnose(quick=False, **T.scenario_kwargs(kw))
     text = mod.render_text_report(report, color=True, width=WIDTH_COLS)
 

@@ -11465,6 +11465,32 @@ def worst_by_scope(findings):
     return worst
 
 
+# Drawn in ASCII on purpose. Block and box-drawing characters make a better
+# looking bar and arrive as mojibake on exactly the boxes this runs on - a
+# serial console, a LANG=C jump host, a stripped appliance - and a bar that
+# cannot be read is worse than a number that can.
+BAR_FULL = "#"
+BAR_EMPTY = "."
+
+
+def render_bar(value, maximum, cells):
+    """A `cells`-wide bar for `value` against `maximum`. "" if undrawable.
+
+    Anything above zero keeps at least one filled cell. The HTML ribbon gives
+    a hop that added almost nothing a four-pixel sliver for the same reason:
+    rounding a real measurement down to an empty bar draws it as nothing
+    having happened, which is a different claim than "not much".
+    """
+    if cells <= 0 or value is None or not maximum or maximum <= 0:
+        return ""
+    frac = value / maximum
+    frac = 0.0 if frac < 0 else (1.0 if frac > 1 else frac)
+    filled = int(frac * cells + 0.5)
+    if filled == 0 and value > 0:
+        filled = 1
+    return BAR_FULL * filled + BAR_EMPTY * (cells - filled)
+
+
 def _render_inbound(report, out, tint, width):
     """The other direction, as far as it can honestly be drawn: one hop.
 
@@ -11524,6 +11550,37 @@ def _render_path(report, out, tint, width):
     elif not hops:
         out.append("  (no hops parsed - traceroute may be unavailable or blocked)")
     demarc = report.get("demarc_hop")
+    # The path as a bar, one row per hop, sized by what that hop added. The
+    # HTML report has drawn this since the ribbon landed; the text report was
+    # still asking the reader to hold "12.4 ms" against "28.9 ms" in their
+    # head. Both are built from the same two numbers so the two reports cannot
+    # come to disagree about where the time went.
+    #
+    # The denominator is the last hop that answered, the same one the worst
+    # jump takes its share of - a path ending in silence has no total, and
+    # scaling to the slowest hop instead would draw every path as if one hop
+    # ate all of it.
+    answered = [h.get("avg_ms") for h in hops if h.get("avg_ms") is not None]
+    total_ms = answered[-1] if answered else None
+    timed = [h for h in hops if h.get("delta_ms") is not None]
+    bar_cells = max(0, min(24, width - 40))
+    # One segment is not a shape, and under eight cells the bar says less than
+    # the numbers already beside it. The ribbon declines under two hops too.
+    if total_ms and len(timed) >= 2 and bar_cells >= 8:
+        steepest = max(timed, key=lambda x: x["delta_ms"] or 0)
+        out.append(f"  where the {total_ms:.0f}ms went")
+        for h in timed:
+            d = h["delta_ms"] or 0
+            share = round(100.0 * d / total_ms)
+            # Only point at a hop when it really is the one to go and look at.
+            # latency_wall declines to fire below this share and the summary
+            # below says so in words; an arrow on the largest of ten even
+            # steps would contradict both.
+            mark = ("   <- biggest jump" if h is steepest
+                    and share >= LATENCY_WALL_SHARE * 100 else "")
+            out.append(f"  {str(h.get('hop', '?')):>3}  "
+                       f"{render_bar(d, total_ms, bar_cells)} {d:6.1f}ms {share:>3}%{mark}")
+        out.append("")
     for h in hops:
         times = [t for t in (h.get("times_ms") or []) if t is not None]
         if h.get("timed_out"):
@@ -11623,7 +11680,15 @@ def _render_link_tables(report, out, tint, width):
         sev = "ok" if cq["mos"] >= MOS_WARN else ("warning" if cq["mos"] >= MOS_BAD else "critical")
         out.append("")
         out.append("CALL QUALITY (estimated, to " + str(cq.get("target", "?")) + ")")
-        out.append(f"  MOS {tint(str(cq['mos']), sev)} ({rating})   "
+        # MOS drawn on its own scale, which runs 1 to 5 and not 0 to 5 - the
+        # bottom of the scale is "unusable", not "nothing measured". The word
+        # beside it says which band the score is in; the bar says how much
+        # room is left before the band below, which the number alone does not
+        # unless the reader already knows where the scale ends.
+        gauge = render_bar(cq["mos"] - 1, 4, 12) if width >= 78 else ""
+        out.append(f"  MOS {tint(str(cq['mos']), sev)}"
+                   + (f" {gauge}" if gauge else "")
+                   + f" ({rating})   "
                    f"latency {cq['avg_ms']:.0f}ms · jitter {(cq.get('jitter_ms') or 0):.0f}ms · "
                    f"loss {cq['loss_pct']:.0f}%")
 
@@ -11640,7 +11705,16 @@ def _render_link_tables(report, out, tint, width):
         # formed in the renderer.
         scope_sev = worst_by_scope(report.get("findings"))
         out.append("INTERFACE ERROR COUNTERS")
-        out.append(f"  {'iface':<10}{'packets':>14}{'errors':>9}{'drops':>8}{'err/M':>8}   live")
+        # err/M against the worst interface in the table, which answers the
+        # question the table is read for: not "how many" but "which one".
+        # A clean box is the common case and a column of empty bars would be
+        # eight rows of noise, so the column appears only once one of them has
+        # something to be worse than.
+        ppms = [i.get("err_ppm") or 0 for i in ifaces]
+        worst_ppm = max(ppms) if ppms else 0
+        rank_col = worst_ppm > 0 and width >= 96
+        out.append(f"  {'iface':<10}{'packets':>14}{'errors':>9}{'drops':>8}{'err/M':>8}"
+                   + ("  " + " " * 10 if rank_col else "") + "   live")
         for i in ifaces:
             if i["delta_errors"] is None:
                 live = "(not sampled)"
@@ -11668,7 +11742,10 @@ def _render_link_tables(report, out, tint, width):
                 if peak and peak >= max(mean, 0.01) * PEAK_WORTH_SHOWING:
                     rate += f", peak {peak:g}"
             row = (f"  {i['name']:<10}{i['packets']:>14,}{i['errors']:>9,}"
-                   f"{i['drops']:>8,}{i['err_ppm']:>8}   {live}{rate}")
+                   f"{i['drops']:>8,}{i['err_ppm']:>8}"
+                   + ("  " + render_bar(i.get("err_ppm") or 0, worst_ppm, 10)
+                      if rank_col else "")
+                   + f"   {live}{rate}")
             out.append(tint(row, scope_sev[i["name"]]) if i["name"] in scope_sev else row)
 
     optics = ((report.get("raw", {}) or {}).get("optics") or {}).get("interfaces") or {}

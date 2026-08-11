@@ -477,6 +477,118 @@ class TestMtrDisplayHeuristics(unittest.TestCase):
         self.assertIn("partial reply loss", nd.render_text_report(report, color=False, width=90))
 
 
+class TestBarRendering(unittest.TestCase):
+    """The magnitude bar, and the path drawn with it."""
+
+    def test_bar_is_proportional_and_fixed_width(self):
+        self.assertEqual(nd.render_bar(50, 100, 10), "#####.....")
+        self.assertEqual(nd.render_bar(100, 100, 10), "##########")
+        self.assertEqual(nd.render_bar(0, 100, 10), "..........")
+        self.assertEqual(len(nd.render_bar(37, 100, 24)), 24)
+
+    def test_a_real_measurement_never_rounds_away_to_nothing(self):
+        # The sliver rule. 0.4% of the total is under half a cell, and drawing
+        # it empty would say the hop added nothing rather than very little.
+        self.assertEqual(nd.render_bar(0.4, 100, 10).count("#"), 1)
+
+    def test_bar_declines_rather_than_lying(self):
+        for bad in [None, 0, -5]:
+            self.assertEqual(nd.render_bar(10, bad, 10), "")
+        self.assertEqual(nd.render_bar(None, 100, 10), "")
+        self.assertEqual(nd.render_bar(10, 100, 0), "")
+
+    def test_bar_clamps_instead_of_overflowing_its_width(self):
+        # Deltas are clamped at zero and cannot quite sum to the total, so a
+        # rounding artefact must not draw wider than the bar it lives in.
+        self.assertEqual(nd.render_bar(150, 100, 8), "########")
+        self.assertEqual(nd.render_bar(-3, 100, 8), "........")
+
+    def _path_report(self, times):
+        hops = [{"hop": i + 1, "host": f"10.0.0.{i + 1}", "display": f"h{i + 1}",
+                 "times_ms": [t], "timed_out": False} for i, t in enumerate(times)]
+        info = nd.annotate_hops(hops, "10.0.0.1", "8.8.8.8")
+        rep = {"os": "Linux", "target": "8.8.8.8", "findings": [], "raw": {},
+               "hops": hops}
+        rep.update(info)
+        out = []
+        nd._render_path(rep, out, lambda s, sev: s, 100)
+        return "\n".join(out)
+
+    def test_path_bar_is_drawn_and_shares_the_total(self):
+        text = self._path_report([1.0, 5.0, 25.0])
+        self.assertIn("where the 25ms went", text)
+        self.assertIn("#", text.split("where the")[1])
+
+    def test_one_timed_hop_is_not_a_shape_to_compare(self):
+        self.assertNotIn("where the", self._path_report([12.0]))
+
+    def test_arrow_only_where_one_hop_really_dominates(self):
+        # 92% of the path in one step - worth pointing at.
+        self.assertIn("<- biggest jump", self._path_report([1.0, 2.0, 25.0]))
+        # An evenly graded path has no hop to send the reader to, and the
+        # summary line below says exactly that.
+        self.assertNotIn("<- biggest jump",
+                         self._path_report([10.0, 20.0, 30.0, 40.0]))
+
+    def test_the_report_stays_ascii(self):
+        # Box drawing would look better and arrive as mojibake on a serial
+        # console, which is where this runs.
+        text = self._path_report([1.0, 5.0, 25.0])
+        self.assertEqual(text, text.encode("ascii", "replace").decode("ascii"))
+
+    def test_a_narrow_terminal_drops_the_bar_rather_than_wrapping_it(self):
+        hops = [{"hop": i + 1, "host": f"10.0.0.{i + 1}", "display": f"h{i + 1}",
+                 "times_ms": [t], "timed_out": False} for i, t in enumerate([1.0, 5.0, 25.0])]
+        info = nd.annotate_hops(hops, "10.0.0.1", "8.8.8.8")
+        rep = {"os": "Linux", "target": "8.8.8.8", "findings": [], "raw": {},
+               "hops": hops}
+        rep.update(info)
+        out = []
+        nd._render_path(rep, out, lambda s, sev: s, 44)
+        self.assertNotIn("where the", "\n".join(out))
+
+
+class TestMagnitudeColumns(unittest.TestCase):
+    """Call quality and the error table, read as magnitudes."""
+
+    def _link_text(self, ifaces, width=100, mos=None):
+        rep = {"findings": [], "raw": {"link_stats": {"interfaces": ifaces}}}
+        if mos is not None:
+            rep["call_quality"] = {"mos": mos, "avg_ms": 24.0, "jitter_ms": 2.0,
+                                   "loss_pct": 0.0, "target": "8.8.8.8"}
+        out = []
+        nd._render_link_tables(rep, out, lambda s, sev: s, width)
+        return "\n".join(out)
+
+    def _iface(self, name, ppm):
+        return {"name": name, "packets": 1000, "errors": int(ppm), "drops": 0,
+                "err_ppm": ppm, "delta_errors": None, "delta_drops": None,
+                "sample_seconds": 0}
+
+    def test_mos_is_drawn_on_a_one_to_five_scale(self):
+        # 3.0 is halfway up a scale that starts at 1, not 60% of one that
+        # starts at 0 - drawing it from zero would flatter every score.
+        text = self._link_text([], mos=3.0)
+        gauge = [w for w in text.split() if set(w) <= set("#.") and len(w) == 12]
+        self.assertEqual(gauge[0].count("#"), 6)
+
+    def test_a_clean_table_draws_no_empty_column(self):
+        text = self._link_text([self._iface("en0", 0.0), self._iface("en1", 0.0)])
+        self.assertNotIn("..........", text)
+
+    def test_the_worst_interface_fills_the_bar(self):
+        text = self._link_text([self._iface("en0", 1.0), self._iface("en1", 313.0)])
+        rows = {l.split()[0]: l for l in text.splitlines() if l.startswith("  en")}
+        self.assertIn("##########", rows["en1"])
+        self.assertEqual(rows["en0"].count("#"), 1)   # present, but plainly minor
+
+    def test_narrow_terminals_keep_the_numbers_over_the_picture(self):
+        text = self._link_text([self._iface("en0", 1.0), self._iface("en1", 313.0)],
+                               width=80)
+        self.assertNotIn("##########", text)
+        self.assertIn("313", text)
+
+
 class TestMissingToolsAreNotFaults(unittest.TestCase):
     """On a stripped appliance the tools this program shells out to may simply
     not exist. A check that couldn't run must never be reported as a fault -

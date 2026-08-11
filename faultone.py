@@ -703,7 +703,7 @@ def list_resolvers(with_reason=False):
             reason = res.get("error") or "ipconfig would not run"
     else:
         try:
-            with open("/etc/resolv.conf") as fh:
+            with open("/etc/resolv.conf", encoding="utf-8", errors="replace") as fh:
                 found = parse_resolvers(fh.read())
         except OSError as e:
             reason = f"/etc/resolv.conf could not be read ({e.strerror or e})"
@@ -1753,7 +1753,7 @@ def _snmp_counters_linux():
     things - and a collision here would be silent.
     """
     try:
-        with open("/proc/net/snmp") as fh:
+        with open("/proc/net/snmp", encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return {}
@@ -1934,7 +1934,7 @@ def _read_softnet():
     """
     processed = dropped = 0
     try:
-        with open("/proc/net/softnet_stat") as fh:
+        with open("/proc/net/softnet_stat", encoding="utf-8", errors="replace") as fh:
             rows = 0
             for line in fh:
                 cols = line.split()
@@ -1951,7 +1951,7 @@ def _read_softnet():
 def _read_listen_drops():
     """TcpExt counters for connections dropped because a listen queue was full."""
     try:
-        with open("/proc/net/netstat") as fh:
+        with open("/proc/net/netstat", encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return {}
@@ -2036,7 +2036,7 @@ def _read_text(path):
     skip the field, or leave the default - and that distinction is load-bearing.
     """
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read().strip()
     except OSError:
         return None
@@ -2058,13 +2058,13 @@ def _read_conntrack():
                         "/proc/sys/net/nf_conntrack_max"))):
         for path in paths:
             try:
-                with open(path) as fh:
+                with open(path, encoding="utf-8", errors="replace") as fh:
                     out[key] = int(fh.read().strip())
                 break
             except (OSError, ValueError):
                 continue
     try:
-        with open("/proc/net/stat/nf_conntrack") as fh:
+        with open("/proc/net/stat/nf_conntrack", encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return out
@@ -2107,12 +2107,14 @@ def _read_neigh_table(base="/proc"):
     """
     out = {}
     try:
-        with open(os.path.join(base, "sys/net/ipv4/neigh/default/gc_thresh3")) as fh:
+        path = os.path.join(base, "sys/net/ipv4/neigh/default/gc_thresh3")
+        with open(path, encoding="utf-8", errors="replace") as fh:
             out["gc_thresh3"] = int(fh.read().strip())
     except (OSError, ValueError):
         pass
     try:
-        with open(os.path.join(base, "net/stat/arp_cache")) as fh:
+        with open(os.path.join(base, "net/stat/arp_cache"),
+                  encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
         return out
@@ -2247,7 +2249,8 @@ def _read_thermal_throttle(base="/sys/devices/system/cpu"):
         best = None
         for name in names:
             try:
-                with open(os.path.join(base, name, "thermal_throttle", field)) as fh:
+                with open(os.path.join(base, name, "thermal_throttle", field),
+                          encoding="utf-8", errors="replace") as fh:
                     value = int(fh.read().strip())
             except (OSError, ValueError):
                 continue
@@ -3118,7 +3121,7 @@ def _uptime_seconds():
     nothing rather than guessing.
     """
     try:
-        with open("/proc/uptime") as fh:
+        with open("/proc/uptime", encoding="utf-8", errors="replace") as fh:
             return float(fh.read().split()[0])
     except (OSError, ValueError, IndexError):
         return None
@@ -3205,14 +3208,15 @@ def _link_stats_linux(base="/sys/class/net"):
         vals = {}
         for field in LINK_COUNTERS:
             try:
-                with open(os.path.join(sdir, field)) as fh:
+                with open(os.path.join(sdir, field), encoding="utf-8", errors="replace") as fh:
                     vals[field] = int(fh.read().strip())
             except (OSError, ValueError):
                 # Not every driver exports every counter. None means "unknown",
                 # which must not be presented as "zero errors" - see below.
                 vals[field] = None
         try:
-            with open(os.path.join(base, name, "operstate")) as fh:
+            with open(os.path.join(base, name, "operstate"),
+                      encoding="utf-8", errors="replace") as fh:
                 vals["operstate"] = fh.read().strip()
         except OSError:
             vals["operstate"] = "unknown"
@@ -3221,7 +3225,8 @@ def _link_stats_linux(base="/sys/class/net"):
         # that has flapped hundreds of times still reads "up" between drops,
         # which is exactly why an intermittent fault survives a snapshot.
         try:
-            with open(os.path.join(base, name, "carrier_changes")) as fh:
+            with open(os.path.join(base, name, "carrier_changes"),
+                      encoding="utf-8", errors="replace") as fh:
                 vals["carrier_changes"] = int(fh.read().strip())
         except (OSError, ValueError):
             vals["carrier_changes"] = None     # kernels before 3.15, or not a real NIC
@@ -11487,7 +11492,7 @@ def extract_embedded_report(text):
 
 def load_report_file(path):
     """Read a report from either format - JSON, or a self-contained page."""
-    with open(path) as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     if path.lower().endswith((".html", ".htm")):
         report = extract_embedded_report(text)
@@ -12419,7 +12424,7 @@ def main():
     args = ap.parse_args()
 
     if args.emit_viewer:
-        with open(args.emit_viewer, "w") as f:
+        with open(args.emit_viewer, "w", encoding="utf-8", errors="replace") as f:
             f.write(VIEWER_TEMPLATE)
         print(f"Wrote the viewer to {args.emit_viewer} "
               f"({len(VIEWER_TEMPLATE):,} bytes). Open it and drop a report.json on it.")
@@ -12512,7 +12517,7 @@ def main():
                     # addresses and listening ports - not for other users of a
                     # shared box.
                     fd = os.open(export_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
+                    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
                         if wants_html:
                             f.write(render_report_html(written))
                         else:

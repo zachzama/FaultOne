@@ -11811,15 +11811,21 @@ def _render_services(report, out, tint, width):
     if inv.get("hosts"):
         out.append("")
         out.append(f"NEIGHBOURS ({inv['count']} known to this device, nothing was probed)")
+        # The shape of the segment before the hosts in it. This sat at the
+        # bottom, after twenty addresses and a note saying forty were not
+        # shown, which is where a reader arrives already having read the list
+        # they needed it to make sense of. One line, and it is the only part
+        # that survives the cap - a stray on 169.254 among fifty on a /24 is
+        # the thing worth seeing, and it can be the entry the cap cuts.
+        if len(inv.get("subnets", {})) > 1:
+            out.append("  subnets: " + ", ".join(f"{net}.0/24 x{n}"
+                                                 for net, n in sorted(inv["subnets"].items())))
         show_names = any(h.get("name") for h in inv["hosts"])
         for host in inv["hosts"][:20]:
             name_col = f"{(host.get('name') or '-')[:30]:<32}" if show_names else ""
             out.append(f"  {host['ip']:<16}{name_col}{host.get('mac') or '-'}")
         if inv["count"] > 20:
             out.append(f"  ... and {inv['count'] - 20} more")
-        if len(inv.get("subnets", {})) > 1:
-            out.append("  subnets: " + ", ".join(f"{net}.0/24 x{n}"
-                                                 for net, n in sorted(inv["subnets"].items())))
 
     socks = (report.get("raw", {}) or {}).get("sockets") or {}
     if socks.get("states"):

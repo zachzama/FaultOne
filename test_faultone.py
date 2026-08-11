@@ -6932,6 +6932,95 @@ class TestVersioning(unittest.TestCase):
                           if c["what"] == "faultone version"], [])
 
 
+class TestNeighbourInventory(unittest.TestCase):
+    """--inventory, end to end.
+
+    It cannot be a scenario: the registry is keyed by finding code and every
+    entry has to fire the finding it is named for, and a passive listing is not
+    a finding. So nothing exercised it - not the collector, not the section of
+    the text report, not the panel in the viewer, not the trip through an
+    export. Sixteen hosts came out of this path on a real machine while the
+    corpus reported none, which is the difference between untested and unused.
+    """
+
+    ARP = ("192.168.1.1 dev eth0 lladdr 54:07:7d:bf:2d:34 REACHABLE\n"
+           "192.168.1.20 dev eth0 lladdr 8c:4f:00:33:47:20 STALE\n"
+           "192.168.1.21 dev eth0 lladdr 0e:eb:f5:e9:7e:fd REACHABLE\n"
+           "10.20.0.7 dev eth0 lladdr 3c:31:74:e0:12:a3 REACHABLE\n"
+           # The stray that makes the summary worth reading: a link-local
+           # address on a LAN usually means something never got a lease.
+           "169.254.85.111 dev eth0 lladdr aa:d1:86:0c:3f:da STALE\n"
+           # Neither of these is a host: one is multicast, one has no MAC
+           # because the lookup failed rather than because anything answered.
+           "224.0.0.251 dev eth0 lladdr 01:00:5e:00:00:fb REACHABLE\n"
+           "192.168.1.99 dev eth0  FAILED\n")
+
+    def run_inventory(self, resolve=None):
+        m = fresh()
+        m.cmd_arp = lambda: {"ok": True, "cmd": "ip neigh", "stdout": self.ARP}
+        # build_inventory looks names up against the first configured resolver,
+        # in a thread pool, over the network. Every other test of it passes
+        # resolve_names=False; a run through diagnose() cannot, so the lookup
+        # itself is stubbed - which covers the naming path rather than dodging
+        # it, and sends nothing.
+        looked_up = []
+        def ptr(server, ip, timeout=1.0):
+            looked_up.append(ip)
+            return (resolve or {}).get(ip)
+        m.dns_ptr = ptr
+        report = m.diagnose("8.8.8.8", None, quick=True, inventory=True)
+        return m, report, looked_up
+
+    def test_the_neighbour_table_becomes_an_inventory(self):
+        _m, report, _ = self.run_inventory()
+        inv = report.get("inventory")
+        self.assertTrue(inv, "--inventory produced nothing")
+        ips = [h["ip"] for h in inv["hosts"]]
+        self.assertIn("192.168.1.1", ips)
+        self.assertIn("169.254.85.111", ips)
+        # A multicast group is not a neighbour, and an entry with no MAC is a
+        # lookup that failed rather than a device that answered.
+        self.assertNotIn("224.0.0.251", ips)
+        self.assertNotIn("192.168.1.99", ips)
+        self.assertEqual(inv["count"], len(ips))
+        self.assertEqual(sorted(inv["subnets"]), ["10.20.0", "169.254.85", "192.168.1"])
+
+    def test_nothing_is_looked_up_over_the_network_without_a_resolver(self):
+        """The lookup is stubbed here, so this asserts the shape rather than
+        the absence: names are asked for once per host and no more."""
+        _m, report, looked_up = self.run_inventory(resolve={"192.168.1.1": "gw.lan"})
+        self.assertEqual(sorted(looked_up), sorted(h["ip"] for h in report["inventory"]["hosts"]))
+        named = [h for h in report["inventory"]["hosts"] if h.get("name")]
+        self.assertEqual([h["name"] for h in named], ["gw.lan"])
+
+    def test_the_report_says_what_the_segment_looks_like_before_listing_it(self):
+        """The subnet summary is the only part that survives the twenty-host
+        cap, and it used to sit underneath the list it explains - reached after
+        twenty addresses and a note that forty more were not shown."""
+        m, report, _ = self.run_inventory()
+        lines = m.render_text_report(report, color=False, width=88).splitlines()
+        head = next(i for i, l in enumerate(lines) if l.startswith("NEIGHBOURS ("))
+        subnets = next(i for i, l in enumerate(lines) if l.strip().startswith("subnets:"))
+        first_host = next(i for i, l in enumerate(lines[head:], head)
+                          if "lladdr" not in l and ":" in l and l.startswith("  1"))
+        self.assertLess(subnets, first_host, "the summary is still below the list")
+        self.assertLess(head, subnets)
+        self.assertIn("169.254.85.0/24 x1", lines[subnets])
+
+    def test_the_inventory_reaches_both_exports_and_the_viewer(self):
+        """Four render paths, none of which anything walked before: the JSON,
+        the compact JSON, the self-contained page, and the panel that draws
+        it."""
+        m, report, _ = self.run_inventory()
+        self.assertTrue((report.get("raw") or {}).get("inventory"),
+                        "the raw panel for it is missing")
+        slim = m.compact_report(report)
+        self.assertEqual(slim.get("inventory"), report.get("inventory"))
+        page = m.render_report_html(report)
+        self.assertIn("192.168.1.1", page)
+        self.assertIn("neighbours (passive)", m.VIEWER_TEMPLATE)
+
+
 class TestDocsMatchReality(unittest.TestCase):
     """Three times now a documented number has drifted from the truth - test
     counts, a flag that didn't exist, a UI field that had been deleted. A

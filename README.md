@@ -2,6 +2,13 @@
 
 **153 findings it can reach. One line saying which one to fix first.**
 
+```bash
+python3 faultone.py --report           # full check, ~7 seconds
+python3 faultone.py --report --quick   # the essentials, ~2 seconds
+```
+
+Python 3.7 or newer, and nothing else.
+
 You're SSH'd into a box and something is broken. **Is it this box, the way in,
 or the way out?** FaultOne runs the checks you'd run by hand, then does the part
 that actually takes experience: it works out which fault is the **cause** and
@@ -44,14 +51,7 @@ One Python file. Nothing to install, nothing left behind, no port opened.
 
 ## Use it
 
-**On the box, over SSH:**
-
-```bash
-python3 faultone.py --report           # full check, ~7 seconds
-python3 faultone.py --report --quick   # the essentials, ~2 seconds
-```
-
-That's the whole tool. Everything below is optional.
+The two commands at the top are the whole tool. Everything here is optional.
 
 **What it aims at.** By default (`--target auto`) a box with clients connected
 is diagnosed against **the backend it depends on most** — read off its own open

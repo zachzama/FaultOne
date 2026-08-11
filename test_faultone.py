@@ -7746,6 +7746,48 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
                          "this device is drawn clean whatever the report says")
         self.assertIn("sideSeverity(data, 'local')", node)
 
+    def test_a_marked_hop_does_not_rely_on_colour_alone(self):
+        """Red and green are the commonest pair a reader cannot tell apart, and
+        the chain was the one place a severity arrived as hue and nothing else.
+        The stage chips say PASS and FAIL, the zones say OK and FAULT, a
+        finding carries its severity in its tag - a marked hop said it in a
+        tint and a border and left it there."""
+        template = nd.VIEWER_TEMPLATE
+        fn = template.split("function hopWord(sev){", 1)
+        self.assertEqual(len(fn), 2, "the word on a marked hop is gone")
+        self.assertIn("${hopWord(n.sev)}", template, "it is defined and never drawn")
+        words = template.split("const HOP_WORD = {", 1)[1].split("}", 1)[0]
+        # The vocabulary is the one the zones already use, not a second set.
+        for severity in ("warn", "crit"):
+            self.assertIn(severity, words)
+        self.assertIn("ZONE_WORD.", words,
+                      "the hop words are a separate list from the zone words")
+        # And only the marked ones: a word on every hop is noise on the hops
+        # the reader is being told to look past.
+        self.assertNotIn("ok:", words)
+
+    def test_the_words_for_a_state_are_defined_once(self):
+        """ZONE_WORD was inside renderDiagnosis, so the chain could not reach
+        it. Copying the strings across would have been a second vocabulary for
+        one idea, and the two would drift the first time one was reworded."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertEqual(template.count("const ZONE_WORD = {"), 1)
+        before = template.split("const ZONE_WORD = {", 1)[0]
+        self.assertNotIn("function renderDiagnosis", before,
+                         "ZONE_WORD is scoped inside the renderer again")
+
+    def test_the_line_to_a_destination_nothing_answered_is_broken(self):
+        """The node already says it was not reached. A line that stops is read
+        before any label on the node it points at."""
+        template = nd.VIEWER_TEMPLATE
+        self.assertIn("unreached: true", template, "the target is not flagged")
+        self.assertIn(".hop-arrow.unreached span{", template)
+        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("nodes[i+1].unreached", chain,
+                      "the connector decides from something other than the flag")
+        # Read off the flag, not off the wording of the node's own caption.
+        self.assertNotIn("=== 'not reached by the trace'", chain)
+
     def test_a_trace_that_stops_does_not_pretend_to_a_hop_count(self):
         """Three consecutive timeouts were drawn as three cards, which reads as
         three identified routers and implies the destination is four hops away.

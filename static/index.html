@@ -421,6 +421,18 @@
   .hop-label{font-family:var(--mono); font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em;}
   .hop-sub{font-family:var(--mono); font-size:13px; margin-top:4px; word-break:break-word;}
   .hop-arrow{flex:0 0 auto; display:flex; align-items:center; padding:0 8px; color:var(--text-dim); font-family:var(--mono);}
+  /* A marked hop says which it is, so the chain does not rely on hue alone. */
+  .hop-sev{
+    font-family:var(--mono); font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; padding:0 5px; border-radius:8px;
+    margin-left:6px; border:1px solid currentColor; white-space:nowrap;
+  }
+  .hop-node.warn .hop-sev{color:var(--warn);}
+  .hop-node.crit .hop-sev{color:var(--crit);}
+  /* A line that stops is read before any label on the node it points at. */
+  .hop-arrow.unreached span{
+    display:block; width:22px; border-top:1px dashed var(--text-dim);
+  }
   .hop-meta{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:4px;}
   .hop-meta .jump{color:var(--warn);}
   /* Where traffic stops being the site's network and becomes their ISP's -
@@ -723,6 +735,23 @@ function hopSeverity(h, probes){
 // and rtt stay on the node's own line, where they are readings rather than a
 // judgement.
 const ZONE_SEV = {pass: 'ok', warn: 'warn', fail: 'crit', skip: 'ok'};
+// The words the report uses for a state. Module scope because the path
+// chain says them too, and a second set for the hops would be a second
+// vocabulary for one idea.
+const ZONE_WORD = {pass: 'OK', warn: 'DEGRADED', fail: 'FAULT',
+                   // The socket table was read and nothing was coming in.
+                   // That is an answer, not a gap.
+                   skip: 'none connected'};
+// Red and green are the commonest pair a reader cannot tell apart, and the
+// hop chain was the one place a severity arrived as hue and nothing else -
+// the stage chips say PASS and FAIL, the zones say OK and FAULT, a finding
+// carries its severity in its tag. Only a marked hop gets a word: putting
+// one on the clean hops would be noise across most of the page, and the
+// clean ones are already the ones being told to look past.
+const HOP_WORD = {warn: ZONE_WORD.warn, crit: ZONE_WORD.fail};
+function hopWord(sev){
+  return HOP_WORD[sev] ? `<span class="hop-sev">${HOP_WORD[sev]}</span>` : '';
+}
 function sideSeverity(data, side){
   const z = (data.sides || []).find(s => s.side === side);
   return ZONE_SEV[z && z.state] || 'ok';
@@ -822,7 +851,7 @@ function renderHopChain(data){
   const lastHop = hops[hops.length - 1];
   if(!(lastHop && (lastHop.roles || []).indexOf('target') !== -1)){
     nodes.push({label:'target', sub: data.target || '', sev: '',
-                meta: 'not reached by the trace'});
+                unreached: true, meta: 'not reached by the trace'});
   }
 
   // The other direction, as far as it can honestly be drawn: one hop. A
@@ -859,11 +888,15 @@ function renderHopChain(data){
       ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'
         : (n.entersNetwork ? `<div class="hop-arrow handoff">→<span>${escapeHtml(n.entersNetwork)}</span></div>` : '')}
       <div class="hop-node ${n.sev}">
-        <div class="hop-label">${escapeHtml(n.label)}</div>
+        <div class="hop-label">${escapeHtml(n.label)}${hopWord(n.sev)}</div>
         <div class="hop-sub">${escapeHtml(n.sub)}</div>
         ${n.meta ? `<div class="hop-meta">${n.meta}</div>` : ''}
       </div>
-      ${i < nodes.length - 1 && !(nodes[i+1] && (nodes[i+1].demarcBefore || nodes[i+1].entersNetwork)) ? '<div class="hop-arrow">→</div>' : ''}
+      ${i < nodes.length - 1 && !(nodes[i+1] && (nodes[i+1].demarcBefore || nodes[i+1].entersNetwork))
+        ? (nodes[i+1] && nodes[i+1].unreached
+            ? '<div class="hop-arrow unreached" title="the trace never got past here"><span></span></div>'
+            : '<div class="hop-arrow">→</div>')
+        : ''}
     `).join('') + '</div>';
 }
 
@@ -923,10 +956,6 @@ function renderDiagnosis(data, opts){
   const sides = data.sides || [];
   const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
                      upstream: 'what this box depends on'};
-  const ZONE_WORD = {pass: 'OK', warn: 'DEGRADED', fail: 'FAULT',
-                     // The socket table was read and nothing was coming in.
-                     // That is an answer, not a gap.
-                     skip: 'none connected'};
   const sidesHtml = sides.length ? `
     <div class="zones">
       ${sides.map((z, i) => `

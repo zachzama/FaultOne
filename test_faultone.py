@@ -8367,6 +8367,21 @@ class TestPythonCompatibility(unittest.TestCase):
         not be lost on the way out."""
         import ast
         import os
+        # A string literal is ast.Constant from 3.8 and ast.Str on 3.7, and
+        # ast.Str is gone again in 3.12 - so neither name can simply be used.
+        # Reading the mode through this is the difference between recognising
+        # open(path, "rb") as binary and reporting it as a text open with no
+        # encoding, which is what this guard did on the floor version: written
+        # to catch a cross-version bug, and version-dependent itself.
+        legacy_str = getattr(ast, "Str", ())
+
+        def literal(node):
+            if isinstance(node, ast.Constant):
+                return node.value
+            if legacy_str and isinstance(node, legacy_str):
+                return node.s
+            return None
+
         root = os.path.dirname(os.path.abspath(nd.__file__))
         bad = []
         # The suite is checked too, and it is not pedantry: the tool was fixed
@@ -8387,8 +8402,8 @@ class TestPythonCompatibility(unittest.TestCase):
                 if not opener:
                     continue
                 mode = ""
-                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-                    mode = node.args[1].value or ""
+                if len(node.args) > 1:
+                    mode = literal(node.args[1]) or ""
                 if "b" in mode:                  # bytes carry no encoding
                     continue
                 if not any(k.arg == "encoding" for k in node.keywords):

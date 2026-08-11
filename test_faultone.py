@@ -7606,6 +7606,82 @@ class TestDocsMatchReality(unittest.TestCase):
                 self.assertEqual(str(actual), shown.replace(",", ""),
                                  f"{name} is {actual} in code, {shown} in the reference")
 
+    #: Thresholds a check compares against with a strictly exclusive operator,
+    #: and why that is the right one for each. Everything else has to fire *at*
+    #: the value it documents, because that value is what the reference states
+    #: the bar to be - "40 carrier transitions per day before a link counts as
+    #: flapping" is a promise that 40 flaps is enough.
+    EXCLUSIVE_THRESHOLDS = {
+        "COVERAGE_THIN_PCT": "below this a verdict is thin; at it, it is not",
+        "MAX_CHECK_PORTS": "a ceiling - more than this many ports is too many",
+        "QUEUE_DELAY_MS": "excess delay under this is not queuing",
+        "QUEUE_RTT_MULTIPLE": "a round trip under this multiple is not queuing",
+        "SHARED_FAULT_INTERFACES": "fewer than this is not yet a shared fault",
+        "STANDARD_MTU": "smaller than the standard MTU, not equal to it",
+        "UPLINK_UNKNOWN_FLOOR_MBPS": "traffic below this needs no caveat",
+    }
+
+    def test_a_threshold_fires_at_the_value_it_documents(self):
+        """The reference states the bar. The code has to agree about whether
+        the bar itself counts.
+
+        Ten of these comparisons were changed from `>=` to `>` and the whole
+        suite stayed green on every one. Each scenario drives its finding from
+        well above the bar - which is right for "does this fire" and says
+        nothing about where the bar is - so a documented 40 could become an
+        actual 41 with nothing to notice, on a tool whose stated purpose is
+        that you can say what the bar was when someone pushes back.
+
+        This does not replace a boundary fixture per finding, and it does not
+        check the value is a good one. It pins whether the value is included,
+        which is the half that was drifting silently.
+        """
+        import re
+        source = open(nd.__file__).read()
+        ref = dict(self.docs())["REFERENCE.md"]
+        table = ref.split("## The numbers behind the judgements", 1)[1].split("\n## ", 1)[0]
+        names = [n for n, _v, _w in
+                 re.findall(r"\| `([A-Z_0-9]+)` \| \*\*([0-9.,]+)\*\* \| ([^|]*)\|", table)]
+        self.assertGreaterEqual(len(names), 60, "the threshold table lost entries")
+
+        exclusive_now, flipped = set(), []
+        inclusive = 0
+        for name in names:
+            ops = {a or b for a, b in
+                   re.findall(r"([<>]=?)\s*" + name + r"\b|" + name + r"\s*([<>]=?)", source)}
+            if not ops:
+                continue                      # a cap or a label, never compared
+            # A threshold read from both sides is a boundary between two bands
+            # - `< X` is one and `>= X` is the other - and that is exhaustive
+            # and unambiguous. Two operators pointing the *same* way is not:
+            # it means one of several comparisons against the same constant was
+            # changed and the rest were not, which is how a flip hides when a
+            # threshold is used in more than one place.
+            if (">" in ops and ">=" in ops) or ("<" in ops and "<=" in ops):
+                flipped.append((name, sorted(ops)))
+            if ops & {">=", "<="}:
+                inclusive += 1
+            else:
+                exclusive_now.add(name)
+
+        self.assertEqual(
+            flipped, [],
+            "compared both at-or-beyond and strictly beyond, so one use has "
+            "drifted from the others: "
+            + ", ".join(f"{n} {ops}" for n, ops in flipped))
+        self.assertGreaterEqual(inclusive, 50,
+                                "most thresholds should fire at their documented value")
+        unexplained = sorted(exclusive_now - set(self.EXCLUSIVE_THRESHOLDS))
+        self.assertEqual(
+            unexplained, [],
+            "these no longer fire at the value the reference documents, and no "
+            "reason is recorded for it: " + ", ".join(unexplained))
+        stale = sorted(set(self.EXCLUSIVE_THRESHOLDS) - exclusive_now)
+        self.assertEqual(
+            stale, [],
+            "listed as deliberately exclusive but compared inclusively now: "
+            + ", ".join(stale))
+
     def test_no_judgement_threshold_is_left_undocumented(self):
         """A new check that quietly adds a threshold is the way this table goes
         stale. Anything a finding compares against has to appear."""

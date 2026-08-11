@@ -7851,19 +7851,61 @@ class TestDocsMatchReality(unittest.TestCase):
                     self.assertEqual(rows, claimed,
                                      f"{name}: '{m.group(0).strip()}' lists {rows}")
 
+    def hero_text(self):
+        """The words inside the hero image, in order.
+
+        The example moved from a fenced block in the README into an SVG, and a
+        picture is where a stale example hides best - nobody reads it as text,
+        so nothing notices when the tool stops saying it. The characters are
+        still there in the tspans, so this guard did not have to be given up,
+        only pointed somewhere else."""
+        import os
+        import re
+        path = os.path.join(os.path.dirname(os.path.abspath(nd.__file__)),
+                            "docs", "hero-dark.svg")
+        with open(path) as fh:
+            svg = fh.read()
+        runs = re.findall(r'<tspan\b[^>]*>(.*?)</tspan>', svg, re.S)
+        text = "".join(runs)
+        return (text.replace("&amp;", "&").replace("&lt;", "<")
+                    .replace("&gt;", ">"))
+
     def test_the_example_verdict_is_shaped_like_a_real_one(self):
         """The README opens on a sample verdict. It had drifted: no coverage on
         the confidence line, and a stage strip missing a stage - both added
         after it was written. A stale example is a promise the tool breaks in
         the first thirty seconds."""
-        import re
-        readme = dict(self.docs())["README.md"]
-        block = readme.split("LIKELY ROOT CAUSE:", 1)[1].split("```", 1)[0]
+        block = self.hero_text()
+        self.assertIn("LIKELY ROOT CAUSE:", block,
+                      "the hero image no longer shows a verdict")
         self.assertRegex(block, r"confidence: \w+ \(\d+ of \d+ checks ran\)",
                          "the example omits the coverage the tool now prints")
         stages = [s for s, _f, _w in nd.STAGE_RULES]
         for stage in stages:
             self.assertIn(stage, block, f"the example strip is missing '{stage}'")
+
+    def test_the_hero_image_is_what_the_tool_renders_today(self):
+        """Stronger than checking the words are plausible: regenerate both
+        images and require the committed bytes. A generated asset that nobody
+        regenerates is a screenshot with extra steps, and this one sits at the
+        top of the page where it is the first thing anyone believes."""
+        import os
+        import sys
+        root = os.path.dirname(os.path.abspath(nd.__file__))
+        sys.path.insert(0, os.path.join(root, "dev"))
+        try:
+            import hero
+        except ImportError:
+            self.skipTest("dev/hero.py is not present")
+        lines = hero.report_lines()
+        for theme in hero.THEMES:
+            path = os.path.join(root, "docs", "hero-%s.svg" % theme)
+            with open(path) as fh:
+                committed = fh.read()
+            self.assertEqual(
+                hero.svg(lines, theme), committed,
+                "docs/hero-%s.svg is stale - the report changed since it was "
+                "drawn. Re-run: python3 dev/hero.py" % theme)
 
     def test_every_verdict_line_the_readme_shows_is_one_the_tool_prints(self):
         """A worked example is only worth showing if it is what comes out. The

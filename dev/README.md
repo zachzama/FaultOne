@@ -1,13 +1,13 @@
 # dev/
 
-Five harnesses that are **not part of the tool**. Nothing here ships to a box,
+Six harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
 nothing about what the tool does. They exist because the questions that come up
 before a release are not the ones a test suite answers: it checks that each
 thing still does what it was written to do, not whether a change leaked into
 something nobody thought to assert about.
 
-All five are stdlib-only and offline, like everything else here.
+All six are stdlib-only and offline, like everything else here.
 
 `HANDOVER.md` sits alongside them and is not one of them: it records what
 is unfinished and what was tried and rejected, since a commit says what was
@@ -113,6 +113,30 @@ last gate, skips the bump and the tag it already made, and pushes. A version
 that matches with no tag behind it is still refused, because that is a
 half-finished cut or a hand edit and guessing between them is worse than
 stopping.
+
+## `hero.py` — draw the report for the README
+
+```bash
+python3 dev/hero.py          # writes docs/hero-dark.svg and docs/hero-light.svg
+```
+
+The image at the top of the README is the tool's own output, rendered through
+the tool. A screenshot is a claim about the output that stops being true the
+moment the output changes, and nothing would notice; the suite regenerates both
+images and requires the committed bytes, so a stale one fails rather than sits
+there being believed.
+
+Two things it is careful about. The report comes from a **test scenario, never
+a live run** — a report is a map of the network it was taken on, so a hero
+taken from a real machine would publish the addressing of whoever built it. And
+the output is **byte-identical every time**: the banner's timestamp, OS and
+interpreter are pinned, so regenerating produces no diff unless the report
+itself changed.
+
+Every glyph carries its own `x` rather than one position per run. `textLength`
+would be shorter, and is honoured by browsers and ignored by some preview
+renderers — which draws a line wider than the panel it sits in, on exactly the
+machines nobody tested.
 
 ## `audit.py` — do the rules between findings hold, one fault or six?
 

@@ -5089,6 +5089,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   "throughput_limited_by",
                   # Which part of its own service's answer took the time.
                   "own_service_timing",
+                  # How this box is told to reach the internet. It says nothing
+                  # about whether anything is broken - only that the checks and
+                  # the traffic may not take the same route.
+                  "proxy_configured",
                   # What kind of adapter this is. Context that reframes every
                   # physical-layer reading below it, never a fault itself.
                   "virtual_nic"}
@@ -5491,6 +5495,7 @@ RAW_STAGE = {
     # The fallback when ping is filtered: reaching the target the way an
     # application would, before calling a site's uplink down.
     "reachability_tcp": "internet",
+    "proxy": "internet",
     # Kept when the TCP path is used instead, so both attempts are on record.
     "path_trace_icmp": "internet",
     "path_mtu": "mtu",
@@ -9591,6 +9596,65 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                 })
 
 
+def _check_proxy(raw, findings, target):
+    """Say when the checks and the traffic take different routes.
+
+    Every probe here goes direct: ping, traceroute and a TCP connect do not
+    read a proxy setting, and nothing in the standard library makes them. An
+    application on the same box, told to use a proxy, does not go direct. So
+    on a proxied box the checks measure a path that nothing here uses, and a
+    completely clean report can sit beside a user who cannot load anything.
+
+    Reported as context and never as a fault. A proxy is a normal thing to
+    have and this says nothing about whether it is working - only that
+    thirty-odd findings below are about a route that may not be the one in
+    use, which is the reader's to weigh and not the tool's to guess at.
+    """
+    cfg = cmd_proxy_config()
+    raw["proxy"] = cfg
+    # A collector that could not run returns the shape every other one does,
+    # without these keys. Nothing is known about the routing then, which is
+    # not the same as knowing there is no proxy - so it says nothing.
+    env = {k: v for k, v in (cfg.get("env") or {}).items()
+           if not k.lower().startswith("no_")}
+    sysc = cfg.get("system") or {}
+    on = (sysc.get("HTTPEnable") == "1" or sysc.get("HTTPSEnable") == "1")
+    pac = sysc.get("ProxyAutoConfigEnable") == "1"
+    wpad = sysc.get("ProxyAutoDiscoveryEnable") == "1"
+    if not (env or on or pac or wpad):
+        return
+
+    where = []
+    if env:
+        where.append("set in this shell's environment ("
+                     + ", ".join(sorted(env)) + ")")
+    if on:
+        server = sysc.get("HTTPSProxy") or sysc.get("HTTPProxy") or "a proxy"
+        where.append(f"configured on this system ({server})")
+    if pac:
+        where.append("configured by a PAC file"
+                     + (f" at {sysc['ProxyAutoConfigURLString']}"
+                        if sysc.get("ProxyAutoConfigURLString") else ""))
+    if wpad:
+        where.append("discovered automatically (WPAD)")
+
+    findings.append({
+        "severity": "ok",
+        "layer": 7,
+        "code": "proxy_configured",
+        "message": f"This box is told to reach the internet through a proxy - "
+                   f"{'; '.join(where)}. Every check here went direct: a ping, a "
+                   f"traceroute and a TCP connect do not read that setting. So what "
+                   f"is said below about reaching {target}, and about resolving names "
+                   f"for it, describes the direct route rather than the one an "
+                   f"application here would take - and the two can disagree "
+                   f"completely."
+                   + (" Read from this shell's environment, which is not necessarily "
+                      "what a service running here sees." if env and not (on or pac or wpad)
+                      else ""),
+    })
+
+
 def _check_internet(raw, findings, target, probes):
     """Does traffic get off the site, and is the gateway ruled out first?
 
@@ -9844,6 +9908,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
                             parallel=not soak)
     _check_gateway(raw, findings, gw, probes, arp_entries)
 
+    _check_proxy(raw, findings, target)
     inet_loss = _check_internet(raw, findings, target, probes)
 
     say("reading the path and measuring MTU")
@@ -11432,6 +11497,62 @@ class Progress:
             self.stream.write("\r" + " " * self._width + "\r")
             self.stream.flush()
             self._width = 0
+
+
+# The conventional names, lower and upper. Both are honoured by curl, pip, apt
+# and most runtimes, and a box very often sets only one of the pair.
+PROXY_ENV_VARS = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+
+
+def parse_scutil_proxy(text):
+    """The scalar settings out of `scutil --proxy`.
+
+    The output is a plist rendered as nested blocks. Only the top-level
+    scalars matter here, and the nested ones - the exceptions list - are
+    skipped rather than parsed: a list of hosts that bypass the proxy does not
+    change the answer to "is one configured".
+    """
+    out, depth = {}, 0
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.endswith("{"):
+            depth += 1
+            continue
+        if stripped == "}":
+            depth = max(0, depth - 1)
+            continue
+        if depth != 1 or " : " not in stripped:
+            continue
+        key, _, value = stripped.partition(" : ")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def cmd_proxy_config():
+    """How this box is told to reach the internet, if it is told anything.
+
+    Nothing is probed and nothing is contacted - this reads configuration that
+    is already there. The point is not the proxy itself but what it means for
+    every other check: ping, traceroute and a TCP connect do not read any of
+    this, so they measure the direct path whether or not the direct path is
+    the one anything here uses.
+    """
+    env = {}
+    for name in PROXY_ENV_VARS:
+        for key in (name, name.upper()):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+    system = {}
+    if OS_NAME == "Darwin" and which("scutil"):
+        res = run(["scutil", "--proxy"], timeout=5)
+        if res.get("ok") and res.get("code") == 0:
+            system = parse_scutil_proxy(res.get("stdout", ""))
+    return {"ok": True, "cmd": "proxy configuration (read, not probed)",
+            "code": 0, "stderr": "", "env": env, "system": system,
+            "stdout": "\n".join([f"{k}={v}" for k, v in sorted(env.items())]
+                                 + [f"{k}: {v}" for k, v in sorted(system.items())])
+                      or "no proxy configuration found"}
 
 
 def use_color(stream, disabled=False):

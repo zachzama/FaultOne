@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 152
+difference is which one it puts at the top, and that is the whole product: 153
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1340,16 +1340,16 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **152** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
+| **Data collections** | **33** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Findings** | **153** | Distinct conclusions it can reach and state in plain language. 131 are faults; 22 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 949 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 955 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 152 findings are the useful figure** if you want to know what the tool can
+**The 153 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
-### The 32 things it inspects
+### The 33 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1386,6 +1386,9 @@ end.
 30. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
 31. The TLS certificate this box *serves*, read from the outside in
 32. This box's own service, asked over HTTP for an answer rather than a connection
+33. Proxy configuration — how this box is told to reach the internet: the
+    `http_proxy` family, and on macOS the system settings including a PAC file
+    or WPAD. Read, never probed
 
 **Derived from the above, not separately collected:** call quality (MOS), the
 site edge and network handoffs, latency deltas and jitter per hop, link
@@ -1507,7 +1510,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 949 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 955 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2747,6 +2750,15 @@ becomes a fault.
 
 **Better data than the fallback gives**
 
+- **`scutil`** — macOS only, and part of the system rather than something
+  to install. It is how the system-wide proxy settings are read: an explicit
+  HTTP or HTTPS proxy, a PAC file and its URL, or WPAD auto-discovery. On
+  Linux the same question is answered only by the `http_proxy` family of
+  environment variables, which is the honest limit — a system-wide proxy
+  there is a per-application convention rather than a setting anything can
+  read. Absent either way, no proxy is reported, which is not the same as
+  reporting there is none.
+
 - **`mtr`** — per-hop loss over many cycles, which a single traceroute can't
   give you. When present it replaces the traceroute entirely, and the report
   says `path via mtr`. Loss is read from the destination backwards: loss at an
@@ -2876,7 +2888,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-949 tests, no dependencies, no network, a few seconds — so they run
+955 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -2955,7 +2967,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 152 findings with readable rules instead of
+> way out - and who owns it. Ranks 153 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

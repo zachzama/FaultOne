@@ -900,6 +900,81 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             nd.render_report_html(report))["findings"][0]["message"], message)
         self.assertIn("Drucker", nd.render_text_report(report, color=False, width=90))
 
+    def _proxy(self, env=None, system=None):
+        m = fresh()
+        m.cmd_proxy_config = lambda: {
+            "ok": True, "cmd": "proxy configuration (read, not probed)", "code": 0,
+            "stderr": "", "stdout": "", "env": env or {}, "system": system or {}}
+        found = []
+        m._check_proxy({}, found, "8.8.8.8")
+        return found
+
+    def test_a_proxied_box_is_told_the_checks_went_direct(self):
+        """Every probe here goes direct - a ping, a traceroute and a TCP
+        connect do not read a proxy setting, and nothing in the standard
+        library makes them. An application on the same box, told to use one,
+        does not. So the checks measure a route nothing here uses, and a clean
+        report can sit beside a user who cannot load anything."""
+        for label, kwargs in (
+                ("an environment variable", {"env": {"https_proxy": "http://p:8080"}}),
+                ("a system setting", {"system": {"HTTPEnable": "1", "HTTPProxy": "p"}}),
+                ("a PAC file", {"system": {"ProxyAutoConfigEnable": "1",
+                                           "ProxyAutoConfigURLString": "http://wpad/x.dat"}}),
+                ("WPAD", {"system": {"ProxyAutoDiscoveryEnable": "1"}})):
+            with self.subTest(configured_by=label):
+                found = self._proxy(**kwargs)
+                self.assertEqual([f["code"] for f in found], ["proxy_configured"])
+                self.assertEqual(found[0]["severity"], "ok", "a proxy is not a fault")
+                self.assertIn("went direct", found[0]["message"])
+
+    def test_no_proxy_alone_is_not_a_proxy(self):
+        """no_proxy lists what bypasses one. On a box with only that set there
+        is nothing to bypass, and reporting it would put a caveat on every
+        finding for no reason."""
+        self.assertEqual(self._proxy(env={"no_proxy": "localhost,10.0.0.0/8"}), [])
+        self.assertEqual(self._proxy(env={"NO_PROXY": "*"}), [])
+
+    def test_nothing_configured_says_nothing(self):
+        self.assertEqual(self._proxy(), [])
+        # A disabled system setting is not a configured proxy either.
+        self.assertEqual(self._proxy(system={"HTTPEnable": "0", "FTPPassive": "1"}), [])
+
+    def test_a_collector_that_could_not_run_makes_no_claim(self):
+        """It returns the shape every other one does when it fails, without the
+        keys this reads. Nothing is known about the routing then - which is not
+        the same as knowing there is no proxy, and saying either would be a
+        guess."""
+        m = fresh()
+        m.cmd_proxy_config = lambda: {"ok": False, "cmd": "proxy configuration",
+                                      "applicable": False, "error": "not available"}
+        found = []
+        m._check_proxy({}, found, "8.8.8.8")
+        self.assertEqual(found, [])
+
+    def test_the_environment_caveat_is_only_made_when_it_applies(self):
+        """A variable in this shell is not what a daemon here sees, and saying
+        so matters. A system-wide setting is what everything sees, and the same
+        sentence would then be wrong."""
+        env_only = self._proxy(env={"http_proxy": "http://p:3128"})[0]["message"]
+        self.assertIn("this shell's environment, which is not necessarily", env_only)
+        system = self._proxy(system={"HTTPEnable": "1", "HTTPProxy": "p"})[0]["message"]
+        self.assertNotIn("not necessarily what a service", system)
+
+    def test_scutil_output_is_read_at_the_top_level_only(self):
+        """The exceptions list is a nested block, and a key inside it must not
+        be read as a setting of its own."""
+        parsed = nd.parse_scutil_proxy(
+            "<dictionary> {\n"
+            "  ExceptionsList : <array> {\n"
+            "    0 : *.local\n"
+            "  }\n"
+            "  HTTPEnable : 1\n"
+            "  HTTPProxy : proxy.example.com\n"
+            "}\n")
+        self.assertEqual(parsed.get("HTTPEnable"), "1")
+        self.assertEqual(parsed.get("HTTPProxy"), "proxy.example.com")
+        self.assertNotIn("0", parsed, "a nested entry was read as a setting")
+
     def test_colour_is_off_wherever_it_cannot_be_read(self):
         """Four conditions, and the two that were missing are the ones that
         matter to this audience. A dumb terminal cannot interpret an escape
@@ -7204,7 +7279,11 @@ class TestDocsMatchReality(unittest.TestCase):
             "findings": (len(codes), [r"\*\*(\d+) distinct conclusions", r"(\d+)\s+findings"]),
             "faults": (len(faults), [r"(\d+)\s+are faults"]),
             "ranked causes": (len(nd.VERDICT_RULES), [r"Ranked causes\*\* \| \*\*(\d+)\*\*"]),
-            "collections": (32, [r"\*\*(\d+)\s+things are inspected",
+            # The one count here that is not derived: "a thing inspected" is a
+            # human grouping, not a function - some collectors run several
+            # times, and some are helpers rather than collections. Raised to
+            # 33 when proxy configuration was added.
+            "collections": (33, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -7275,6 +7354,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_mtr": "Hop-by-hop path",
         "cmd_optics": "Optical module power and alarms",
         "cmd_own_http": "asked over HTTP for an answer",
+        "cmd_proxy_config": "how this box is told to reach the internet",
         "cmd_own_tls": "certificate this box *serves*",
         "cmd_path_mtu": "Path MTU",
         "cmd_ping": "reachability and loss",
@@ -9840,6 +9920,17 @@ def own_service(nd, port="8080", **fields):
             "tls": False, "ms": 4.0, "status": 200}
     base.update(fields)
     nd.cmd_own_http = lambda p, timeout=5, address="127.0.0.1", tls=False: dict(base, port=p)
+
+@scenario("proxy_configured")
+def _(nd):
+    # A box told to reach the internet through a proxy. Nothing is broken -
+    # the point of the finding is that every other check went direct, so it
+    # measured a route this box's applications would not use.
+    nd.cmd_proxy_config = lambda: {
+        "ok": True, "cmd": "proxy configuration (read, not probed)", "code": 0,
+        "stderr": "", "stdout": "HTTPEnable: 1\nHTTPSProxy: proxy.example.com",
+        "env": {}, "system": {"HTTPEnable": "1", "HTTPSEnable": "1",
+                              "HTTPSProxy": "proxy.example.com", "HTTPSPort": "8080"}}
 
 @scenario("own_service_timing")
 def _(nd):

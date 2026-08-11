@@ -10697,14 +10697,33 @@ class TestEveryFindingFires(unittest.TestCase):
         import socket as _socket
         # the real collector, not fresh()'s stub - this is about what the
         # function does with what the resolver hands it
-        real = _socket.getaddrinfo
+        #
+        # Both halves are stubbed on purpose. This used to hand the real
+        # connector a live resolver's own addresses and assume the IPv6 one
+        # would fail, so it asserted the fallback on machines with no IPv6 and
+        # asserted nothing on machines that have it - passing or failing on a
+        # property of the network the suite was run from rather than on the
+        # code. Documentation addresses, and a connector that cannot reach
+        # anything, keep the answer the same everywhere.
+        real_gai, real_connect = _socket.getaddrinfo, nd._connect_once
         _socket.getaddrinfo = lambda h, p, *a, **k: [
-            (_socket.AF_INET6, _socket.SOCK_STREAM, 6, "", ("2606:4700:4700::1111", p, 0, 0)),
-            (_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("1.1.1.1", p))]
+            (_socket.AF_INET6, _socket.SOCK_STREAM, 6, "", ("2001:db8::1", p, 0, 0)),
+            (_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("192.0.2.1", p))]
+
+        def only_v4_answers(host, port_num, family, socktype, proto, sockaddr,
+                            ip_version, timeout):
+            if ip_version == 6:
+                return {"ok": False, "cmd": f"tcp connect {host}:{port_num}",
+                        "error": "timed out", "reason": "timeout", "ip_version": 6}
+            return {"ok": True, "cmd": f"tcp connect {host}:{port_num}",
+                    "stdout": "open", "stderr": "", "code": 0, "ip_version": 4}
+
+        nd._connect_once = only_v4_answers
         try:
             res = nd.cmd_check_port("dual.example", 443, timeout=3)
         finally:
-            _socket.getaddrinfo = real
+            _socket.getaddrinfo = real_gai
+            nd._connect_once = real_connect
         self.assertTrue(res["ok"])
         self.assertEqual(res["ip_version"], 4)          # fell back and succeeded
         self.assertEqual(res["families_tried"], [6, 4])

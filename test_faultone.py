@@ -8266,15 +8266,48 @@ class TestPythonCompatibility(unittest.TestCase):
 
     def test_the_source_parses_at_the_stated_floor(self):
         """Catches a newer bit of syntax slipping in - which wouldn't fail here,
-        only on the appliance, months later."""
+        only on the appliance, months later.
+
+        The suite is checked too, and not out of tidiness: CI runs it on the
+        floor version to prove the tool works there, so a walrus in a test
+        fails the build for the one reason that says nothing about the tool.
+        This guard covered faultone.py alone, which left the file doing the
+        proving unable to fail here."""
         import ast
-        with open(nd.__file__) as fh:
-            src = fh.read()
-        try:
-            ast.parse(src, feature_version=nd.MIN_PYTHON)
-        except SyntaxError as e:
-            self.fail(f"faultone.py uses syntax newer than Python "
-                      f"{nd.MIN_PYTHON[0]}.{nd.MIN_PYTHON[1]}: {e.msg} (line {e.lineno})")
+        import os
+        root = os.path.dirname(os.path.abspath(nd.__file__))
+        # ast.parse's feature_version is a partial check, which is easy to
+        # mistake for a total one: it rejects an f-string '=', a match and an
+        # except*, and it accepts a walrus, positional-only parameters and
+        # list[int] without complaint. All three of those are fatal on 3.7 and
+        # all three would have shipped. The parse is the first pass; the walk
+        # below is the part it does not do.
+        NEWER = {"NamedExpr": "the walrus operator (3.8+)"}
+        GENERIC = {"list", "dict", "set", "frozenset", "tuple", "type"}
+        for name in ("faultone.py", "test_faultone.py"):
+            path = os.path.join(root, name)
+            with open(path) as fh:
+                src = fh.read()
+            try:
+                tree = ast.parse(src, feature_version=nd.MIN_PYTHON)
+            except SyntaxError as e:
+                self.fail(f"{name} uses syntax newer than Python "
+                          f"{nd.MIN_PYTHON[0]}.{nd.MIN_PYTHON[1]}: "
+                          f"{e.msg} (line {e.lineno})")
+            for node in ast.walk(tree):
+                why = NEWER.get(type(node).__name__)
+                if why:
+                    self.fail(f"{name}:{node.lineno} uses {why}")
+                if isinstance(node, ast.arguments) and getattr(
+                        node, "posonlyargs", []):
+                    self.fail("%s:%d uses positional-only parameters (3.8+)"
+                              % (name, node.posonlyargs[0].lineno))
+                if (isinstance(node, ast.Subscript)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id in GENERIC):
+                    self.fail("%s:%d subscripts the builtin %s, which is a "
+                              "type only from 3.9" % (name, node.lineno,
+                                                      node.value.id))
 
     def test_only_standard_library_is_imported(self):
         import ast

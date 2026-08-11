@@ -1520,7 +1520,7 @@ matters rather than hoping your laptop resembles it.
 Every report records the interpreter alongside the tool version:
 
 ```
-FaultOne 1.8.1 - Linux - python 3.11.2 - 2026-08-06T15:16:44-07:00
+FaultOne 1.9.0 - Linux - python 3.11.2 - 2026-08-06T15:16:44-07:00
 ```
 
 so a `--baseline` taken before an upgrade reports "python: 3.9.6 -> 3.11.2"
@@ -1540,7 +1540,7 @@ carries the version that produced it — in the JSON, at the top of the terminal
 output, and in the badge of a self-contained page:
 
 ```
-FaultOne 1.8.1 - Linux - 2026-08-06T14:58:06-07:00
+FaultOne 1.9.0 - Linux - 2026-08-06T14:58:06-07:00
 ```
 
 That matters most for `--baseline`: comparing this visit against one taken by a

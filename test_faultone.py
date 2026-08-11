@@ -536,6 +536,30 @@ class TestBarRendering(unittest.TestCase):
         text = self._path_report([1.0, 5.0, 25.0])
         self.assertEqual(text, text.encode("ascii", "replace").decode("ascii"))
 
+    def test_nothing_the_tool_writes_itself_is_non_ascii(self):
+        """The check above renders one section, and the character that broke
+        this was in two others - a separator in the call-quality line and one
+        between the relation marks. Every scenario, whole report: the fixtures
+        name their hosts in ASCII, so anything non-ASCII in the output came
+        from the tool rather than from the data."""
+        offenders = {}
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            text = m.render_text_report(rep, color=False, width=88)
+            for ch in set(text):
+                if ord(ch) > 127:
+                    offenders.setdefault(ch, []).append(code)
+        self.assertEqual(
+            offenders, {},
+            "the tool writes characters a serial console cannot: "
+            + "; ".join(f"U+{ord(c):04X} {c!r} in {len(v)} scenario(s)"
+                        for c, v in offenders.items()))
+
     def test_a_narrow_terminal_drops_the_bar_rather_than_wrapping_it(self):
         hops = [{"hop": i + 1, "host": f"10.0.0.{i + 1}", "display": f"h{i + 1}",
                  "times_ms": [t], "timed_out": False} for i, t in enumerate([1.0, 5.0, 25.0])]
@@ -875,6 +899,44 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
         self.assertEqual(nd.extract_embedded_report(
             nd.render_report_html(report))["findings"][0]["message"], message)
         self.assertIn("Drucker", nd.render_text_report(report, color=False, width=90))
+
+    def test_a_name_it_cannot_print_does_not_cost_the_report(self):
+        """A hostname is data and can be anything the network carries. On a
+        terminal that cannot encode it - LANG=C, an out-of-band console - the
+        write used to raise and the whole diagnosis was lost to a traceback
+        because a neighbour had an umlaut in its name. Running the checks and
+        then failing to deliver them is the shape of failure this tool exists
+        to avoid."""
+        import io as _io
+        import subprocess
+        report = {"os": "Linux", "raw": {}, "hops": [], "stages": [], "port_results": [],
+                  "findings": [{"severity": "warning", "layer": 2, "code": "duplicate_ip",
+                                "message": "Drucker-Büro-2 answered for 10.0.0.5"}],
+                  "verdict": {"headline": "Two devices answer for one address",
+                              "owner": "o", "confidence": "high", "next_step": "n",
+                              "severity": "warning"}}
+        text = nd.render_text_report(report, color=False, width=88)
+        # Unguarded, this is the raise. The guard is applied to the real
+        # streams in main(), so the same treatment is applied here.
+        stream = _io.TextIOWrapper(_io.BytesIO(), encoding="ascii")
+        stream.reconfigure(errors="replace")
+        stream.write(text)
+        stream.flush()
+        self.assertIn("Drucker-B", stream.buffer.getvalue().decode("ascii"))
+
+    def test_the_streams_are_made_survivable_before_anything_is_written(self):
+        """It has to happen before the first write, not after the first
+        failure - and it must not be fatal itself, since a stream that refuses
+        to be reconfigured is still a stream worth trying to print to."""
+        src = open(nd.__file__, encoding="utf-8").read()
+        fn = src.split("def _survive_a_narrow_encoding", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('errors="replace"', fn)
+        self.assertIn("sys.stdout", fn)
+        self.assertIn("sys.stderr", fn)
+        self.assertIn("except (AttributeError, ValueError, OSError)", fn)
+        body = src.split("def main():", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("_survive_a_narrow_encoding()", body)
+        self.assertLess(body.index("_survive_a_narrow_encoding()"), body.index("build_parser()"))
 
 
 class TestParserRobustness(unittest.TestCase):

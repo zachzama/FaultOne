@@ -11689,7 +11689,7 @@ def _render_link_tables(report, out, tint, width):
         out.append(f"  MOS {tint(str(cq['mos']), sev)}"
                    + (f" {gauge}" if gauge else "")
                    + f" ({rating})   "
-                   f"latency {cq['avg_ms']:.0f}ms · jitter {(cq.get('jitter_ms') or 0):.0f}ms · "
+                   f"latency {cq['avg_ms']:.0f}ms, jitter {(cq.get('jitter_ms') or 0):.0f}ms, "
                    f"loss {cq['loss_pct']:.0f}%")
 
     ifaces = [i for i in ((report.get("raw", {}).get("link_stats") or {}).get("interfaces") or [])
@@ -12056,7 +12056,7 @@ def render_text_report(report, color=False, width=None):
         if f.get("kind") == "hardware":
             marks.append("needs hands on it")
         if marks:
-            out.append(" " * 26 + tint("^ " + " · ".join(marks),
+            out.append(" " * 26 + tint("^ " + ", ".join(marks),
                                        "critical" if relation == "cause" else "ok"))
 
     low = report.get("lowest_broken_layer")
@@ -12184,8 +12184,35 @@ def build_parser():
     return ap
 
 
+def _survive_a_narrow_encoding():
+    """Print what can be printed rather than dying on one character.
+
+    Everything this tool writes itself is ASCII, deliberately: box drawing and
+    separators look better and arrive as mojibake on a serial console. But a
+    hostname is not ours. A printer called Drucker-Buero, a switch named in
+    Chinese, a PTR record with an accent - those are data read off the wire,
+    and mangling them would be worse than showing them, so they are passed
+    through as they came.
+
+    On a terminal that cannot encode them - LANG=C, an out-of-band console,
+    PYTHONIOENCODING=ascii - writing one used to raise, and the whole report
+    was lost to a traceback because a neighbour had an umlaut in its name.
+    That is the shape of failure this tool exists to avoid: a diagnosis that
+    ran and then could not be delivered. The character is replaced and the
+    rest of the report survives.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # Not a text stream, or one that will not be reconfigured. The
+            # report is worth attempting either way.
+            pass
+
+
 def main():
     """Parse the flags and run whichever single action was asked for."""
+    _survive_a_narrow_encoding()
     ap = build_parser()
     args = ap.parse_args()
 

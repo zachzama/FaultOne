@@ -6853,6 +6853,64 @@ class TestVersioning(unittest.TestCase):
         self.assertIn("FaultOne - Linux", out)
         self.assertNotIn("None", out.splitlines()[0])
 
+    def test_the_report_ends_on_its_own_answer(self):
+        """Fifty-seven lines when nothing is wrong and seventy when something
+        is, so in an ordinary terminal the verdict has scrolled off by the time
+        it finishes. What was left on screen was a note about a flag the reader
+        had not used. Every tool this borrows from closes on its own conclusion
+        - a plan summary, a pass and fail count, a vulnerability tally."""
+        for code in ("latency_wall", "path_loss", "all_clear"):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            lines = [l for l in m.render_text_report(rep, color=False, width=88).splitlines()
+                     if l.strip()]
+            with self.subTest(scenario=code):
+                self.assertTrue(lines[-1].strip() or lines[-2].strip())
+                tail = "\n".join(lines[-2:])
+                self.assertIn("=>", tail, "the report does not close on its answer")
+                # The words are the verdict's own, not a second sentence that
+                # could disagree with the first.
+                head = rep["verdict"]["headline"]
+                self.assertIn(head.split(" - ")[0][:40], tail.replace("\n   ", " "))
+                self.assertNotIn("Raw command output", lines[-1])
+
+    def test_the_closing_line_says_who_owns_it(self):
+        """The headline says what is wrong. Without the owner the last thing on
+        screen names a fault and not a person to take it to, which is half the
+        promise the tool opens with."""
+        setup, kw = S["path_loss"]
+        m = fresh(); setup(m)
+        rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+        # Joined and re-spaced: the line wraps, so the owner can straddle the
+        # break and an assertion against the raw text would depend on where.
+        tail = " ".join(" ".join(
+            m.render_text_report(rep, color=False, width=200).splitlines()[-2:]).split())
+        self.assertIn("owner:", tail)
+        self.assertIn(rep["verdict"]["owner"], tail)
+
+    def test_the_closing_line_is_skipped_when_there_is_no_verdict(self):
+        """A report rendered from a partial or foreign file has no conclusion to
+        repeat, and inventing an empty one is worse than ending without."""
+        for rep in ({"os": "Linux", "findings": [], "hops": [], "raw": {}},
+                    {"verdict": None, "findings": [], "hops": [], "raw": {}},
+                    {"verdict": {"severity": "ok"}, "findings": [], "hops": [], "raw": {}}):
+            with self.subTest(shape=sorted(rep)):
+                out = nd.render_text_report(rep, color=False, width=80)
+                self.assertNotIn("=>", out.splitlines()[-1])
+
+    def test_the_answer_is_not_worked_out_twice(self):
+        """It is the verdict's own headline and owner, read from the report. A
+        second derivation here is a second thing that can disagree with the
+        first, on the two lines a reader is most likely to quote."""
+        src = open(nd.__file__, encoding="utf-8").read()
+        fn = src.split("def _render_closing_answer", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('v.get("owner")', fn)
+        self.assertIn("v['headline']", fn)
+        for invented in ("findings", "severity_of", "max(", "sort"):
+            self.assertNotIn(invented + "(", fn,
+                             "the closing line is deriving something of its own")
+
     def test_a_malformed_report_still_renders(self):
         """Reports now arrive from files, so the renderer shouldn't die on one
         whose shape is wrong - a partial page beats a traceback."""

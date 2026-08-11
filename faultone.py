@@ -11935,7 +11935,11 @@ def render_text_report(report, color=False, width=None):
     out.append("")
 
     v = report.get("verdict")
-    if v:
+    # A headline is what the block is for, and a report can arrive from a file
+    # now - pasted in, read as a baseline, exported by an older version. One
+    # carrying a verdict without a headline used to raise here, which is the
+    # traceback this renderer exists to avoid: a partial page beats a crash.
+    if v and v.get("headline"):
         bar = "=" * min(width, 72)
         out.append(bar)
         for line in textwrap.wrap(f"LIKELY ROOT CAUSE: {v['headline']}", width=min(width, 72)):
@@ -12067,7 +12071,39 @@ def render_text_report(report, color=False, width=None):
 
     _render_comparison(report, out, tint, width)
     out.append("Raw command output is not shown here - use --export to capture it.")
+    _render_closing_answer(report, out, tint, width)
     return "\n".join(out)
+
+
+def _render_closing_answer(report, out, tint, width):
+    """Say the answer again as the last thing on screen.
+
+    A report is fifty-seven lines when nothing is wrong and seventy when
+    something is. In an eighty by twenty-four terminal the verdict has scrolled
+    off by the time it finishes, and what the reader is left looking at is a
+    note about a flag they did not use. The conclusion is at the top, which is
+    right for reading the report and wrong for finishing it.
+
+    So it is said twice: once in full where the reader starts, and once in a
+    line where the reader stops. Every tool people copy this from closes on its
+    own conclusion - a plan summary, a pass and fail count, a vulnerability
+    tally - and this one closed on housekeeping.
+
+    Not a second verdict, and nothing worked out here. The headline and the
+    owner are the ones the verdict already carries, so there is no second
+    sentence that could disagree with the first.
+    """
+    v = report.get("verdict")
+    if not v or not v.get("headline"):
+        return
+    owner = v.get("owner")
+    line = f"=> {v['headline']}"
+    if owner:
+        line += f"  (owner: {owner})"
+    out.append("")
+    for wrapped in textwrap.wrap(line, width=min(width, 100),
+                                 subsequent_indent="   "):
+        out.append(tint(wrapped, v.get("severity", "warning")))
 
 
 def build_parser():

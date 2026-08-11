@@ -900,6 +900,47 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             nd.render_report_html(report))["findings"][0]["message"], message)
         self.assertIn("Drucker", nd.render_text_report(report, color=False, width=90))
 
+    def test_colour_is_off_wherever_it_cannot_be_read(self):
+        """Four conditions, and the two that were missing are the ones that
+        matter to this audience. A dumb terminal cannot interpret an escape
+        sequence, so it prints it - a report read on a serial console or an
+        out-of-band card came back with ESC[31m through the middle of it. That
+        is the same terminal that could not encode a middle dot."""
+        import io as _io
+
+        class Terminal(_io.StringIO):
+            def isatty(self):
+                return True
+
+        term = Terminal()
+        saved = dict(os.environ)
+        try:
+            for key in ("NO_COLOR", "TERM"):
+                os.environ.pop(key, None)
+            os.environ["TERM"] = "xterm-256color"
+            self.assertTrue(nd.use_color(term), "a real terminal gets colour")
+
+            os.environ["NO_COLOR"] = "1"
+            self.assertFalse(nd.use_color(term), "NO_COLOR is set and was ignored")
+            del os.environ["NO_COLOR"]
+
+            os.environ["TERM"] = "dumb"
+            self.assertFalse(nd.use_color(term), "a dumb terminal was sent escape codes")
+            os.environ["TERM"] = "xterm-256color"
+
+            self.assertFalse(nd.use_color(term, True), "--no-color did not override")
+            self.assertFalse(nd.use_color(_io.StringIO()), "a pipe got colour")
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+    def test_the_override_reaches_the_only_place_colour_is_decided(self):
+        """A flag nothing consults is a flag that lies. There is exactly one
+        call, so this pins that it is passed rather than defaulted."""
+        src = open(nd.__file__, encoding="utf-8").read()
+        self.assertIn("use_color(msg, args.no_color)", src)
+        self.assertEqual(src.count("use_color("), 2, "a second caller appeared")
+
     def test_a_name_it_cannot_print_does_not_cost_the_report(self):
         """A hostname is data and can be anything the network carries. On a
         terminal that cannot encode it - LANG=C, an out-of-band console - the

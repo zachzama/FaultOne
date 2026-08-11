@@ -11434,12 +11434,27 @@ class Progress:
             self._width = 0
 
 
-def use_color(stream):
-    """Color only for a real terminal, and honor NO_COLOR - output gets pasted
-    into tickets and piped into files, where escape codes are just noise."""
+def use_color(stream, disabled=False):
+    """Color only for a real terminal, and only where it can be read.
+
+    Output gets pasted into tickets and piped into files, where escape codes
+    are just noise - so a stream that is not a terminal never gets them, and
+    NO_COLOR turns them off wherever it is set.
+
+    TERM=dumb is the case that matters most here and was missing. A dumb
+    terminal cannot interpret an escape sequence by definition, so it prints
+    it: a report read on a serial console or an out-of-band card comes out
+    with ESC[31m scattered through it. That is the same class of terminal that
+    could not encode a middle dot, and the same audience - somebody reading a
+    diagnosis on a console because there is no other way in.
+
+    `disabled` is the override for when all of that guesses wrong.
+    """
     return bool(
-        getattr(stream, "isatty", lambda: False)()
+        not disabled
+        and getattr(stream, "isatty", lambda: False)()
         and os.environ.get("NO_COLOR") is None
+        and os.environ.get("TERM") != "dumb"
         and OS_NAME != "Windows"
     )
 
@@ -12134,6 +12149,10 @@ def build_parser():
                      help="list the neighbours this device already knows about, from its own "
                           "ARP/neighbour table. Passive - nothing is probed or scanned, so it "
                           "is safe on a network you don't own")
+    ap.add_argument("--no-color", action="store_true",
+                     help="never colour the output. Colour is already off when the output "
+                          "is redirected, when NO_COLOR is set, and on a dumb terminal - "
+                          "this is the override for when that detection is wrong")
     ap.add_argument("--quiet", action="store_true",
                      help="don't show the progress line while the checks run (it is already "
                           "hidden when output is redirected)")
@@ -12322,7 +12341,7 @@ def main():
             # Printed even when --report wasn't asked for, if the file couldn't
             # be written: the alternative is doing the work and handing back
             # nothing.
-            print(render_text_report(report, color=use_color(msg)), file=msg)
+            print(render_text_report(report, color=use_color(msg, args.no_color)), file=msg)
 
         if export_error:
             print(f"\nCould not write {export_path}: {export_error}. The report is above.",

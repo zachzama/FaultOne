@@ -380,7 +380,11 @@ locked-down box often unavailable. The colour vocabulary is deliberately small
 and means one thing throughout: **red is critical, amber is warning, green is
 fine.** It is switched off unless stdout is a real terminal, and honours
 `NO_COLOR`, because reports get pasted into tickets and piped into files where
-escape codes are noise.
+escape codes are noise. It is off on a `TERM=dumb` terminal too: a dumb
+terminal cannot interpret an escape sequence, so it prints it, and a report
+read on a serial console or an out-of-band card would come back with `ESC[31m`
+through the middle of it. `--no-color` overrides all of that for when the
+detection guesses wrong.
 
 Two tables were entirely monochrome — the interface error counters and the link
 modes, which are the tables carrying the actual numbers. On a box with eight
@@ -1339,7 +1343,7 @@ they're spelled out:
 | **Data collections** | **32** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **152** | Distinct conclusions it can reach and state in plain language. 131 are faults; 17 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 947 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 949 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 152 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1393,6 +1397,8 @@ utilization, and the comparison against a `--baseline`.
 --report                 print the findings to this terminal and exit
 --inventory              list neighbours already known to this device (passive)
 --quiet                  hide the progress line while the checks run
+--no-color               never colour the output (already off when redirected,
+                         when NO_COLOR is set, and on a dumb terminal)
 --version                print the version and exit
 --quick                  skip the traceroute and path MTU (~2s instead of ~7s)
 --soak SECONDS           sample over a window instead of taking a snapshot
@@ -1501,7 +1507,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 947 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 949 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2870,7 +2876,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-947 tests, no dependencies, no network, a few seconds — so they run
+949 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

@@ -7213,6 +7213,44 @@ class TestDocsMatchReality(unittest.TestCase):
                 with open(path) as fh:
                     yield name, fh.read()
 
+    def test_every_documented_python_version_is_the_one_the_code_enforces(self):
+        """The minimum version is written out in five places across two files
+        and enforced in one, and nothing tied them together: raising
+        MIN_PYTHON would leave five hand-maintained copies saying the old
+        number, each of them advice about whether the tool will run at all.
+
+        The rule is not 'the string 3.7 appears' - that goes stale with the
+        thing it is meant to catch. It is that the box needs MIN_PYTHON, so
+        any other version on a line about Python has to say for itself that
+        it is a requirement of the reader's own machine instead."""
+        want = "%d.%d" % nd.MIN_PYTHON
+        # A requirement, not a transcript: capitalised prose ("Python 3.7"), or
+        # the bare-number form ("the box still only needs 3.7"). Sample output
+        # quoting the interpreter that produced it is neither.
+        forms = (r"Python (\d+\.\d+)", r"needs? (?:only )?(\d+\.\d+)")
+        seen = {}
+        for name, text in self.docs():
+            for n, line in enumerate(text.splitlines(), 1):
+                # Per clause, so "needs 3.9 on your machine; the box needs 3.7"
+                # cannot excuse the half of the sentence about the box.
+                for clause in line.split(";"):
+                    for form in forms:
+                        for ver in re.findall(form, clause):
+                            if ver == want:
+                                seen.setdefault(name, (n, line.strip()))
+                                continue
+                            self.assertIn(
+                                "your", clause,
+                                "%s:%d documents Python %s, but the code enforces "
+                                "%s. A version other than the minimum has to say "
+                                "it is a requirement of the reader's own machine:"
+                                "\n  %s" % (name, n, ver, want, clause.strip()))
+        # ...and it cannot pass by there being nothing to check.
+        for name, _ in self.docs():
+            self.assertIn(name, seen,
+                          "%s never states the minimum version (%s), so this "
+                          "guard passed without checking anything" % (name, want))
+
     def test_the_transport_sizes_the_readme_quotes_are_real(self):
         """The readme tells someone on a bad link what it costs to push the
         file across, in four numbers. They are the kind that go stale silently:

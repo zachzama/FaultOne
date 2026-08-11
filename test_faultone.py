@@ -1379,7 +1379,7 @@ class TestTcpCounters(unittest.TestCase):
         d = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, d, True)
         path = os.path.join(d, "snmp")
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
         real_open = open
 
@@ -1715,9 +1715,9 @@ class TestSysfsCounterReading(unittest.TestCase):
         present = present if present is not None else list(nd.LINK_COUNTERS)
         values = values or {}
         for field in present:
-            with open(os.path.join(sdir, field), "w") as fh:
+            with open(os.path.join(sdir, field), "w", encoding="utf-8") as fh:
                 fh.write(str(values.get(field, 0)))
-        with open(os.path.join(base, iface, "operstate"), "w") as fh:
+        with open(os.path.join(base, iface, "operstate"), "w", encoding="utf-8") as fh:
             fh.write("up")
         return base
 
@@ -1751,7 +1751,7 @@ class TestSysfsCounterReading(unittest.TestCase):
         idir = os.path.join(base, iface)
         os.makedirs(idir)
         for name, value in (fields or {}).items():
-            with open(os.path.join(idir, name), "w") as fh:
+            with open(os.path.join(idir, name), "w", encoding="utf-8") as fh:
                 fh.write(str(value))
         return base
 
@@ -1986,7 +1986,7 @@ class TestNoVendorNames(unittest.TestCase):
             path = os.path.join(root, name)
             if not os.path.exists(path):
                 continue
-            with open(path, errors="replace") as fh:
+            with open(path, errors="replace", encoding="utf-8") as fh:
                 text = fh.read().lower()
             for frag in self.WITHHELD:
                 if frag in text:
@@ -2012,7 +2012,7 @@ class TestNoSecondCopy(unittest.TestCase):
     """
 
     def src(self):
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             return fh.read()
 
     def test_one_test_for_a_loopback_address(self):
@@ -2075,7 +2075,7 @@ class TestNoSecondCopy(unittest.TestCase):
         # the box rather than a flag raised on one branch.
         self.assertIn("ipv4", raw)
         self.assertIsInstance(raw["ipv4"], bool)
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         # And nothing reads it with the tri-state idiom any more.
         self.assertNotIn('raw.get("ipv4") is False', src)
@@ -2122,7 +2122,7 @@ class TestNoSecondCopy(unittest.TestCase):
         offenders = []
         for name in ("faultone.py", "test_faultone.py"):
             path = os.path.join(os.path.dirname(os.path.abspath(nd.__file__)), name)
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 text = fh.read()
             for m in re.finditer(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", text):
                 ip = m.group(0)
@@ -2151,7 +2151,8 @@ class TestNoSecondCopy(unittest.TestCase):
         """
         src = ""
         for name in ("faultone.py", "test_faultone.py"):
-            with open(os.path.join(os.path.dirname(os.path.abspath(nd.__file__)), name)) as fh:
+            root = os.path.dirname(os.path.abspath(nd.__file__))
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
                 src += fh.read()
         unused = sorted(ip for ip in self.REAL_ADDRESSES_ALLOWED if src.count(ip) < 2)
         self.assertEqual(unused, [], f"exempted but used nowhere: {unused}")
@@ -2170,7 +2171,7 @@ class TestFaultSides(unittest.TestCase):
         """A code missing from the table silently defaults to local, which lets
         it explain faults in both directions. The default is the safe one, but
         it should be a decision rather than an oversight."""
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         unclassified = sorted(c for c in emitted
                               if c not in nd.FINDING_SIDE and c not in nd.VERDICT_EXEMPT)
@@ -2179,7 +2180,7 @@ class TestFaultSides(unittest.TestCase):
                          f"or leave deliberately local)")
 
     def test_the_table_names_no_code_that_does_not_exist(self):
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         self.assertFalse(set(nd.FINDING_SIDE) - emitted)
 
@@ -2420,7 +2421,7 @@ class TestQuietGotchas(unittest.TestCase):
     def test_the_cache_check_runs_after_the_resolvers_are_probed(self):
         """It reads what that check collected. Ordered before it, it read an
         empty dict and said nothing - on every box, silently."""
-        src = open(nd.__file__).read()
+        src = open(nd.__file__, encoding="utf-8").read()
         # The call, not the definition - "def _check_dns_cache(raw, findings)"
         # contains the call as a substring, and matching that put the first
         # version of this assertion the wrong way round.
@@ -2850,7 +2851,7 @@ class TestWhatTheCauseAccountsFor(unittest.TestCase):
     def test_every_transport_symptom_is_a_finding_that_exists(self):
         """A code in this set that nothing emits is a rule about nothing, and
         the set is where the cause-versus-consequence answer comes from."""
-        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__, encoding="utf-8").read()))
         self.assertEqual(sorted(nd.TRANSPORT_SYMPTOMS - codes), [])
 
 
@@ -3014,7 +3015,7 @@ class TestAVirtualNicCannotFailAPhysicalCheck(unittest.TestCase):
         d = os.path.join(base, "eth0")
         os.makedirs(os.path.join(d, "device"))
         for field, value in (("mtu", "1500"), ("carrier", "1"), ("operstate", "up")):
-            with open(os.path.join(d, field), "w") as fh:
+            with open(os.path.join(d, field), "w", encoding="utf-8") as fh:
                 fh.write(value)
         target = os.path.join(base, "_drivers", "virtio_net")
         os.makedirs(target)
@@ -3286,7 +3287,7 @@ class TestAFixThatNeedsHandsIsMarkedAsOne(unittest.TestCase):
 
     def test_the_set_names_only_findings_that_exist(self):
         import re
-        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__, encoding="utf-8").read()))
         self.assertEqual(sorted(nd.HARDWARE_FINDINGS - codes), [])
 
     def test_it_is_a_kind_and_not_a_severity(self):
@@ -3360,7 +3361,7 @@ class TestThePathSummaryAgreesWithTheFinding(unittest.TestCase):
     def test_the_two_use_one_threshold_between_them(self):
         """The summary and the finding must not be able to disagree, which
         means they cannot each carry their own number."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         summary = source.split("no single hop adds most of the delay", 1)[0][-700:]
         self.assertIn("LATENCY_WALL_SHARE", summary)
 
@@ -3398,7 +3399,7 @@ class TestTheSuiteDoesNotBreakItsOwnClock(unittest.TestCase):
         A count with an allowance would have grown quietly every time somebody
         added one."""
         import ast
-        tree = ast.parse(open(__file__).read())
+        tree = ast.parse(open(__file__, encoding="utf-8").read())
 
         def patches_shared_clock(node):
             """An assignment to `nd.time.sleep` or `nd.time.monotonic`.
@@ -3613,7 +3614,7 @@ class TestTheListSaysWhatExplainsWhat(unittest.TestCase):
     def test_the_page_and_the_terminal_use_the_same_words(self):
         """Two renderers with two vocabularies for the same idea is how a
         report starts contradicting itself."""
-        src = open(nd.__file__).read()
+        src = open(nd.__file__, encoding="utf-8").read()
         template = src.split("const RELATION_LABEL", 1)[1].split("};", 1)[0]
         for key, label in nd.FINDING_RELATIONS.items():
             self.assertIn(f"'{label}'", template, f"{key} says something else on the page")
@@ -3836,7 +3837,7 @@ class TestAShareNeedsASample(unittest.TestCase):
     def test_the_sweep_covers_findings_that_can_actually_fire(self):
         """A list of codes that no longer exist would pass this silently."""
         import re
-        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__, encoding="utf-8").read()))
         for code, _ in self.TINY:
             self.assertIn(code, codes, f"{code} is in the sweep and not in the tool")
 
@@ -3898,7 +3899,7 @@ class TestUdpAndFragments(unittest.TestCase):
         snmp = ("Tcp: ActiveOpens InCsumErrors\nTcp: 10 0\n"
                 "Udp: InDatagrams InCsumErrors\nUdp: 500 20\n")
         d = tempfile.mkdtemp(); path = os.path.join(d, "snmp")
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(snmp)
         real = builtins.open
         builtins.open = lambda p, *a, **k: (real(path, *a, **k)
@@ -3915,7 +3916,7 @@ class TestUdpAndFragments(unittest.TestCase):
         that reads this file."""
         import os, tempfile, builtins
         d = tempfile.mkdtemp(); path = os.path.join(d, "snmp")
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write("Tcp: MaxConn ActiveOpens\nTcp: -1 10\n")
         real = builtins.open
         builtins.open = lambda p, *a, **k: (real(path, *a, **k)
@@ -3960,11 +3961,12 @@ class TestOrphanedSockets(unittest.TestCase):
         self.addCleanup(shutil.rmtree, base, True)
         os.makedirs(os.path.join(base, "net"))
         os.makedirs(os.path.join(base, "sys", "net", "ipv4"))
-        with open(os.path.join(base, "net", "sockstat"), "w") as fh:
+        with open(os.path.join(base, "net", "sockstat"), "w", encoding="utf-8") as fh:
             fh.write("sockets: used 380\n"
                      "TCP: inuse 12 orphan 7 tw 41 alloc 20 mem 3\n"
                      "UDP: inuse 6 mem 2\n")
-        with open(os.path.join(base, "sys", "net", "ipv4", "tcp_max_orphans"), "w") as fh:
+        orphans = os.path.join(base, "sys", "net", "ipv4", "tcp_max_orphans")
+        with open(orphans, "w", encoding="utf-8") as fh:
             fh.write("16384\n")
         got = nd._read_orphans(base)
         self.assertEqual(got["tcp_orphans"], 7)
@@ -4007,9 +4009,9 @@ class TestTooHotToMovePackets(unittest.TestCase):
         for cpu in range(4):
             d = os.path.join(base, f"cpu{cpu}", "thermal_throttle")
             os.makedirs(d)
-            with open(os.path.join(d, "package_throttle_count"), "w") as fh:
+            with open(os.path.join(d, "package_throttle_count"), "w", encoding="utf-8") as fh:
                 fh.write("7")
-            with open(os.path.join(d, "core_throttle_count"), "w") as fh:
+            with open(os.path.join(d, "core_throttle_count"), "w", encoding="utf-8") as fh:
                 fh.write(str(cpu))
         t = nd._read_thermal_throttle(base)
         self.assertEqual(t["package_throttles"], 7)
@@ -4155,7 +4157,7 @@ class TestOwnMarksWhoseServiceNotWhichCheck(unittest.TestCase):
         in a family of its own, is a line that reads as a rule and is not one.
         Asked of the whole table rather than of the entries we remembered."""
         import collections
-        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__).read()))
+        codes = set(re.findall(r'"code": "(\w+)"', open(nd.__file__, encoding="utf-8").read()))
         self.assertEqual([k for k in nd.SHARED_FAMILY if k not in codes], [])
         counts = collections.Counter(nd.SHARED_FAMILY.values())
         self.assertEqual([f for f, n in counts.items() if n < 2], [],
@@ -4495,7 +4497,7 @@ class TestTheSmallFileReader(unittest.TestCase):
         base = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, base, True)
         path = os.path.join(base, "value")
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write("  1000\n")
         self.assertEqual(nd._read_text(path), "1000")
 
@@ -4522,15 +4524,15 @@ class TestBondMembers(unittest.TestCase):
         for bond, members in bonds.items():
             bdir = os.path.join(base, bond, "bonding")
             os.makedirs(bdir)
-            with open(os.path.join(bdir, "slaves"), "w") as fh:
+            with open(os.path.join(bdir, "slaves"), "w", encoding="utf-8") as fh:
                 fh.write(" ".join(members))
-            with open(os.path.join(bdir, "mode"), "w") as fh:
+            with open(os.path.join(bdir, "mode"), "w", encoding="utf-8") as fh:
                 fh.write("802.3ad 4\n")
             for member, status in members.items():
                 mdir = os.path.join(base, member, "bonding_slave")
                 os.makedirs(mdir)
                 if status is not None:
-                    with open(os.path.join(mdir, "mii_status"), "w") as fh:
+                    with open(os.path.join(mdir, "mii_status"), "w", encoding="utf-8") as fh:
                         fh.write(status)
         return base
 
@@ -4549,7 +4551,7 @@ class TestBondMembers(unittest.TestCase):
         import os
         base = self.build({"bond0": {"eth0": None, "eth1": None}})
         for member, state in (("eth0", "up"), ("eth1", "down")):
-            with open(os.path.join(base, member, "operstate"), "w") as fh:
+            with open(os.path.join(base, member, "operstate"), "w", encoding="utf-8") as fh:
                 fh.write(state)
         self.assertEqual(nd._bond_members_linux(base)["bond0"]["down"], ["eth1"])
 
@@ -4583,11 +4585,11 @@ class TestNeighbourTable(unittest.TestCase):
         os.makedirs(os.path.join(base, "net", "stat"))
         os.makedirs(os.path.join(base, "sys", "net", "ipv4", "neigh", "default"))
         if arp_cache is not None:
-            with open(os.path.join(base, "net", "stat", "arp_cache"), "w") as fh:
+            with open(os.path.join(base, "net", "stat", "arp_cache"), "w", encoding="utf-8") as fh:
                 fh.write(arp_cache)
         if thresh is not None:
             with open(os.path.join(base, "sys", "net", "ipv4", "neigh",
-                                   "default", "gc_thresh3"), "w") as fh:
+                                   "default", "gc_thresh3"), "w", encoding="utf-8") as fh:
                 fh.write(str(thresh))
         return base
 
@@ -5878,7 +5880,7 @@ class TestProxyScale(unittest.TestCase):
         import inspect
         sig = inspect.signature(nd.run)
         self.assertIn("limit", sig.parameters)
-        with open(__file__) as fh:
+        with open(__file__, encoding="utf-8") as fh:
             src = fh.read()
         stale = re.findall(r"run = lambda cmd, timeout=\d+:(?! )", src)
         self.assertEqual(stale, [])
@@ -6672,7 +6674,7 @@ class TestVerdict(unittest.TestCase):
         something: path_loss shipped with no rule, so a 27% loss to the
         destination let a context finding (CGNAT) be named the root cause."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         emitted = set(re.findall(r'"code": "(\w+)"', src))
         ruled = {code for code, *_ in nd.VERDICT_RULES}
@@ -6688,7 +6690,7 @@ class TestVerdict(unittest.TestCase):
     def test_every_rule_code_is_one_a_finding_can_emit(self):
         # Guards against a rule keyed to a code that was renamed away.
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         emitted = set(re.findall(r'"code": "(\w+)"', src))
         for code, *_ in nd.VERDICT_RULES:
@@ -7324,7 +7326,7 @@ class TestDocsMatchReality(unittest.TestCase):
         for name in ("README.md", "REFERENCE.md"):
             path = os.path.join(root, name)
             if os.path.exists(path):
-                with open(path) as fh:
+                with open(path, encoding="utf-8") as fh:
                     yield name, fh.read()
 
     def test_every_documented_python_version_is_the_one_the_code_enforces(self):
@@ -7376,7 +7378,8 @@ class TestDocsMatchReality(unittest.TestCase):
             self.skipTest("ast.unparse needs Python 3.9 to check the stripped size")
         raw = open(nd.__file__, "rb").read()
         stripped = _ast.unparse(_ast.parse(raw.decode())).encode()
-        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md")).read()
+        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
+                      encoding="utf-8").read()
         claims = {
             "on disk": (len(raw), 597),
             "compressed": (len(gzip.compress(raw, 9)), 178),
@@ -7400,7 +7403,8 @@ class TestDocsMatchReality(unittest.TestCase):
         three times what it needs to - and the reader being written for here is
         the one on a serial console where that is nine minutes rather than
         two."""
-        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md")).read()
+        readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
+                      encoding="utf-8").read()
         for line in readme.splitlines():
             if line.startswith("ssh ") and "python3 -" in line:
                 with self.subTest(line=line[:48]):
@@ -7420,7 +7424,7 @@ class TestDocsMatchReality(unittest.TestCase):
         inspects, conclusions it can reach, and tests of its own code. They are
         easy to conflate and easier to leave stale, so each is pinned."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         codes = set(re.findall(r'"code": "(\w+)"', src))
         faults = {c for c in codes if c not in nd.VERDICT_EXEMPT}
@@ -7456,7 +7460,7 @@ class TestDocsMatchReality(unittest.TestCase):
         disagreeing - so all three are pinned to each other instead.
         """
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         collectors = set(re.findall(r"^def (cmd_\w+)", src, re.M))
         # A bare name, not a call: several collectors are handed to the job
@@ -7533,7 +7537,7 @@ class TestDocsMatchReality(unittest.TestCase):
         collectors were added across one session and every one of them stayed
         green while the list quietly described an older tool."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         collectors = set(re.findall(r"^def (cmd_\w+)", src, re.M))
         collectors |= {n for n in ("_bond_members_linux", "_read_neigh_table",
@@ -7595,7 +7599,7 @@ class TestDocsMatchReality(unittest.TestCase):
         other question: for every capability that exists, does the front page
         say so anywhere?"""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         readme = dict(self.docs())["README.md"].lower()
         missing = []
@@ -7610,7 +7614,7 @@ class TestDocsMatchReality(unittest.TestCase):
         """The other direction: an entry left behind after a feature is removed
         would keep demanding prose about something that no longer exists."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         stale = sorted(proof for proof, _ in self.README_MUST_DESCRIBE
                        if proof not in emitted and not hasattr(nd, proof))
@@ -7630,7 +7634,7 @@ class TestDocsMatchReality(unittest.TestCase):
         section listed two of the fourteen and opened with "Both are common",
         which was true when it was written and had been wrong for a while."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             probed = set(re.findall(r'which\("([a-z0-9_-]+)"\)', fh.read()))
         for name, text in self.docs():
             if "Optional tools it will use" not in text:
@@ -7640,7 +7644,7 @@ class TestDocsMatchReality(unittest.TestCase):
 
     def test_every_documented_flag_exists(self):
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             declared = set(re.findall(r'ap\.add_argument\("(--[a-z-]+)"', fh.read()))
         for name, text in self.docs():
             for flag in set(re.findall(r"`(--[a-z][a-z-]+)[ `]", text)):
@@ -7710,7 +7714,7 @@ class TestDocsMatchReality(unittest.TestCase):
         for name in ("faultone.py", "test_faultone.py", "README.md", "REFERENCE.md",
                      os.path.join("static", "index.html")):
             with self.subTest(file=name):
-                with open(os.path.join(root, name)) as fh:
+                with open(os.path.join(root, name), encoding="utf-8") as fh:
                     hits = [i for i, line in enumerate(fh, 1) if stale in line.lower()]
                 # report the lines, not the file - assertNotIn on a whole file
                 # prints the whole file
@@ -7745,7 +7749,7 @@ class TestDocsMatchReality(unittest.TestCase):
         did. A threshold nobody can find is one nobody can argue with - and a
         documented value that has drifted from the code is worse than none."""
         import re
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         ref = dict(self.docs())["REFERENCE.md"]
         table = ref.split("## The numbers behind the judgements", 1)[1].split("\n## ", 1)[0]
         documented = dict(re.findall(r"\| `([A-Z_0-9]+)` \| \*\*([0-9.,]+)\*\*", table))
@@ -7789,7 +7793,7 @@ class TestDocsMatchReality(unittest.TestCase):
         which is the half that was drifting silently.
         """
         import re
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         ref = dict(self.docs())["REFERENCE.md"]
         table = ref.split("## The numbers behind the judgements", 1)[1].split("\n## ", 1)[0]
         names = [n for n, _v, _w in
@@ -7838,7 +7842,7 @@ class TestDocsMatchReality(unittest.TestCase):
         """A new check that quietly adds a threshold is the way this table goes
         stale. Anything a finding compares against has to appear."""
         import re
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         ref = dict(self.docs())["REFERENCE.md"]
         # constants actually used in a comparison inside a _check_ function
         judging = set()
@@ -7880,7 +7884,7 @@ class TestDocsMatchReality(unittest.TestCase):
         import re
         path = os.path.join(os.path.dirname(os.path.abspath(nd.__file__)),
                             "docs", "hero-dark.svg")
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             svg = fh.read()
         runs = re.findall(r'<tspan\b[^>]*>(.*?)</tspan>', svg, re.S)
         text = "".join(runs)
@@ -7917,7 +7921,7 @@ class TestDocsMatchReality(unittest.TestCase):
         lines = hero.report_lines()
         for theme in hero.THEMES:
             path = os.path.join(root, "docs", "hero-%s.svg" % theme)
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 committed = fh.read()
             self.assertEqual(
                 hero.svg(lines, theme), committed,
@@ -7939,7 +7943,7 @@ class TestDocsMatchReality(unittest.TestCase):
         # Order is checked against the renderer rather than against one run:
         # no single scenario prints every line, and the one that does not print
         # "also, unrelated" would let a wrong order through.
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         body = src.split("def render_text_report", 1)[1]
         # Read out of the example rather than listed here, so a label the tool
@@ -7966,7 +7970,7 @@ class TestDocsMatchReality(unittest.TestCase):
         """The suite checked docs -> code (no flag documented that isn't real)
         but not code -> docs, so a flag could ship undocumented."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             declared = set(re.findall(r'ap\.add_argument\("(--[a-z-]+)"', fh.read()))
         ref = dict(self.docs())["REFERENCE.md"]
         documented = set(re.findall(r"(--[a-z][a-z-]+)", ref))
@@ -7995,7 +7999,7 @@ class TestDocsMatchReality(unittest.TestCase):
         being allowed to be any number at all - quote a timeout the code no
         longer uses and it counts as the stale third figure again."""
         import re
-        src = open(nd.__file__).read()
+        src = open(nd.__file__, encoding="utf-8").read()
         m = re.search(r'\["traceroute".*?timeout=(\d+)\)', src, re.S)
         self.assertIsNotNone(m, "the traceroute timeout moved; this guard reads it "
                                 "from the source to tell a documented timeout "
@@ -8125,7 +8129,7 @@ class TestExitStatus(unittest.TestCase):
                                   "--quick", "--target", "127.0.0.1"],
                                  capture_output=True, text=True, timeout=180)
             self.assertReachedAVerdict(out)
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 text = fh.read()
         self.assertGreater(text.count("\n"), 20, "the file lost its indentation")
         json.loads(text)
@@ -8162,10 +8166,11 @@ class TestExitStatus(unittest.TestCase):
         so a scheduled check would read a broken tool as a mild finding about
         the network."""
         import subprocess, os, tempfile
-        src = open(nd.__file__).read().replace(
+        src = open(nd.__file__, encoding="utf-8").read().replace(
             '    raw["interfaces"] = cmd_interfaces()',
             '    raise RuntimeError("simulated crash")', 1)
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                        encoding="utf-8") as fh:
             fh.write(src)
             broken = fh.name
         try:
@@ -8318,7 +8323,7 @@ class TestPythonCompatibility(unittest.TestCase):
         GENERIC = {"list", "dict", "set", "frozenset", "tuple", "type"}
         for name in ("faultone.py", "test_faultone.py"):
             path = os.path.join(root, name)
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 src = fh.read()
             try:
                 tree = ast.parse(src, feature_version=nd.MIN_PYTHON)
@@ -8361,33 +8366,40 @@ class TestPythonCompatibility(unittest.TestCase):
         the same decision already made for stdout: a diagnosis that ran should
         not be lost on the way out."""
         import ast
-        with open(nd.__file__, encoding="utf-8") as fh:
-            tree = ast.parse(fh.read())
+        import os
+        root = os.path.dirname(os.path.abspath(nd.__file__))
         bad = []
-        for node in ast.walk(tree):
-            opener = None
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                opener = node.func.id if node.func.id == "open" else None
-            elif (isinstance(node, ast.Call)
-                  and isinstance(node.func, ast.Attribute)
-                  and node.func.attr == "fdopen"):
-                opener = "os.fdopen"
-            if not opener:
-                continue
-            mode = ""
-            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-                mode = node.args[1].value or ""
-            if "b" in mode:                      # bytes carry no encoding
-                continue
-            if not any(k.arg == "encoding" for k in node.keywords):
-                bad.append("%s:%d %s(" % ("faultone.py", node.lineno, opener))
+        # The suite is checked too, and it is not pedantry: the tool was fixed
+        # first and Windows stayed red, because the test that compares the
+        # committed viewer against the template read the file itself through
+        # cp1252 and found a mismatch it had caused.
+        for name in ("faultone.py", "test_faultone.py"):
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
+                tree = ast.parse(fh.read())
+            for node in ast.walk(tree):
+                opener = None
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    opener = node.func.id if node.func.id == "open" else None
+                elif (isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "fdopen"):
+                    opener = "os.fdopen"
+                if not opener:
+                    continue
+                mode = ""
+                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                    mode = node.args[1].value or ""
+                if "b" in mode:                  # bytes carry no encoding
+                    continue
+                if not any(k.arg == "encoding" for k in node.keywords):
+                    bad.append("%s:%d %s(" % (name, node.lineno, opener))
         self.assertEqual(bad, [], "text-mode opens with no encoding, which "
                                   "means cp1252 on Windows: " + ", ".join(bad))
 
     def test_only_standard_library_is_imported(self):
         import ast
         import sys
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
         imported = set()
         for node in ast.walk(tree):
@@ -8598,11 +8610,13 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         import subprocess
         import tempfile
         node, src = prelude
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                        encoding="utf-8") as fh:
             fh.write(src + "\n" + body)
             path = fh.name
         try:
-            res = subprocess.run([node, path], capture_output=True, text=True, timeout=30)
+            res = subprocess.run([node, path], capture_output=True, text=True,
+                               timeout=30, encoding="utf-8")
             self.assertEqual(res.returncode, 0, res.stderr)
             return _json.loads(res.stdout)
         finally:
@@ -9243,7 +9257,8 @@ class TestViewerTemplate(unittest.TestCase):
                      "  try { return {ok: readPastedReport(t)}; }\n"
                      "  catch(e){ return {err: String(e.message)}; }\n"
                      "});\nprocess.stdout.write(JSON.stringify(out));\n")
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                        encoding="utf-8") as fh:
             fh.write(prog)
             path = fh.name
         try:
@@ -9502,7 +9517,7 @@ class TestViewerTemplate(unittest.TestCase):
     def test_the_raw_platform_name_is_still_in_the_report(self):
         """The label is for reading. Anything parsing the JSON wants the value
         platform.system() actually returned."""
-        self.assertIn('"os": OS_NAME', open(nd.__file__).read())
+        self.assertIn('"os": OS_NAME', open(nd.__file__, encoding="utf-8").read())
         self.assertIn("data.os_label || data.os", nd.VIEWER_TEMPLATE)
 
     def test_a_report_names_its_own_tab(self):
@@ -9535,7 +9550,7 @@ class TestViewerTemplate(unittest.TestCase):
                               "static", "index.html")
         if not os.path.exists(viewer):
             self.skipTest("viewer not present")
-        with open(viewer) as fh:
+        with open(viewer, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), nd.VIEWER_TEMPLATE,
                              "static/index.html and VIEWER_TEMPLATE have diverged - "
                              "regenerate with --emit-viewer")
@@ -9787,7 +9802,7 @@ class DiagnoseHarness(unittest.TestCase):
         the last one wins and the earlier value vanishes. That is exactly how
         the all_clear code went missing."""
         import ast
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
         dupes = []
         for node in ast.walk(tree):
@@ -11174,7 +11189,7 @@ class TestEveryFindingFires(unittest.TestCase):
     def test_every_code_has_a_scenario(self):
         """A finding nobody can trigger is a finding nobody has tested."""
         import re
-        with open(nd.__file__) as fh:
+        with open(nd.__file__, encoding="utf-8") as fh:
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         missing = sorted(emitted - set(S))
         self.assertFalse(missing, f"no scenario exercises: {missing}")
@@ -11253,7 +11268,7 @@ class TestEveryFindingFires(unittest.TestCase):
         classification is wrong, and it would then be suppressed by its own
         kind - which is how a rule like this quietly eats a real fault."""
         import re
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         for code in sorted(nd.LATENT):
             with self.subTest(code=code):
                 self.assertIn(f'"code": "{code}"', source, f"{code} is no longer emitted")
@@ -11616,7 +11631,7 @@ class TestEveryFindingFires(unittest.TestCase):
         the "cpu_" prefix stated the rule as a spelling convention and blocked
         a real fault - so the ban names the load-derived codes, and the
         assertion below is the one with teeth."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         for banned in ('"code": "high_load"', '"code": "cpu_load',
                        '"code": "cpu_busy', '"code": "load_'):
             self.assertNotIn(banned, source)
@@ -11640,7 +11655,7 @@ class TestEveryFindingFires(unittest.TestCase):
         the flow list - every connection this box has open, and who with. The
         second is large and nobody's business, and this check has no reason to
         open it."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         self.assertIn("/proc/net/stat/nf_conntrack", source)
         self.assertNotIn('"/proc/net/nf_conntrack"', source)
         self.assertNotIn("open('/proc/net/nf_conntrack')", source)
@@ -11781,7 +11796,7 @@ class TestEveryFindingFires(unittest.TestCase):
         """One target, outbound only. Routing is often asymmetric, so the
         return path is not tested and another service may see a different
         limit."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         pmtu = source.split('"code": "pmtu_blackhole"', 1)[1][:900]
         self.assertIn("outbound direction only", pmtu)
         self.assertIn("asymmetric", pmtu)
@@ -11987,7 +12002,7 @@ class TestEveryFindingFires(unittest.TestCase):
         different check, on a different part of the stack, measuring a
         different thing. They happen to share a number today; that is not the
         same as sharing a constant."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         conntrack = source.split("def _check_conntrack_table", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("CONNTRACK_REFUSAL_PER_DAY", conntrack)
         self.assertNotIn("ACCEPT_OVERFLOW_PER_DAY", conntrack)
@@ -11998,7 +12013,7 @@ class TestEveryFindingFires(unittest.TestCase):
     def test_the_per_day_rate_is_computed_in_one_place(self):
         """It was written three times, each slightly differently - one inverted
         the guard. Three copies of a rule is three chances for it to drift."""
-        source = open(nd.__file__).read()
+        source = open(nd.__file__, encoding="utf-8").read()
         self.assertEqual(source.count("/ 86400.0"), 1)
         # and the guard it encodes
         self.assertEqual(source.count("uptime < 3600"), 1)

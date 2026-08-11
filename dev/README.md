@@ -1,13 +1,13 @@
 # dev/
 
-Six harnesses that are **not part of the tool**. Nothing here ships to a box,
+Seven harnesses that are **not part of the tool**. Nothing here ships to a box,
 nothing here is imported by `faultone.py`, and deleting this directory changes
 nothing about what the tool does. They exist because the questions that come up
 before a release are not the ones a test suite answers: it checks that each
 thing still does what it was written to do, not whether a change leaked into
 something nobody thought to assert about.
 
-All six are stdlib-only and offline, like everything else here.
+All seven are stdlib-only and offline, like everything else here.
 
 `HANDOVER.md` sits alongside them and is not one of them: it records what
 is unfinished and what was tried and rejected, since a commit says what was
@@ -137,6 +137,26 @@ Every glyph carries its own `x` rather than one position per run. `textLength`
 would be shorter, and is honoured by browsers and ignored by some preview
 renderers — which draws a line wider than the panel it sits in, on exactly the
 machines nobody tested.
+
+## `slowest.py` — where does the suite spend its time?
+
+```bash
+python3 dev/slowest.py          # the whole suite, then the slowest 20
+python3 dev/slowest.py 40       # ...the slowest 40
+```
+
+Exits with the suite's own status, so it is a gate and not a report. CI runs
+this rather than the plain command and gets the timings for nothing.
+
+A slow suite is only ever fixed with a list. One test was **eighty-four per
+cent** of the runtime and nobody knew: `--export` to an unwritable path, with
+no `--quick`, so every run did a full traceroute and waited out its sixty
+second timeout to test that a *write* fails. One flag took the suite from
+seventy-two seconds to thirteen.
+
+The reason it runs in CI too is that the slow machine has to be the one that
+reports. Windows takes eight times longer than Linux, and no run on a laptop
+can show why.
 
 ## `audit.py` — do the rules between findings hold, one fault or six?
 

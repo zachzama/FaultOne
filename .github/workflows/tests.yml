@@ -48,11 +48,26 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # Windows Defender scans every file this touches, and the suite spawns
+      # interpreters and writes temporary files by the hundred. Excluding the
+      # workspace is the one lever available before knowing what is slow, and
+      # it cannot fail the build if it is refused.
+      - name: take the workspace out of Defender's way
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       # No install step. That is the point of the tool, and if one were ever
       # needed here it would mean the promise on the front page had stopped
       # being true.
+      #
+      # Run through dev/slowest.py rather than directly: same tests, same exit
+      # status, plus a list of where the time went. Windows takes eight times
+      # longer than Linux and no local run can show why, so the slow machine
+      # has to be the one that reports.
       - name: the suite
-        run: python test_faultone.py
+        run: python dev/slowest.py 25
 
       - name: it starts
         shell: bash

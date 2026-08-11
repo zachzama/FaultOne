@@ -8093,8 +8093,14 @@ class TestExitStatus(unittest.TestCase):
         --soak, on a box someone had to reach. A full disk or a wrong path used
         to print a traceback and hand back nothing."""
         import subprocess
+        # --quick --target 127.0.0.1, because what is being tested is the
+        # write failing after a run, not the run. Without them this did a full
+        # traceroute: on any path that does not answer one, that is sixty
+        # seconds of timeout, and it was eighty-four per cent of the entire
+        # suite's runtime for a test whose subject is an unwritable file.
         out = subprocess.run([sys.executable, nd.__file__, "--export",
-                              "/nonexistent-dir/report.json"],
+                              "/nonexistent-dir/report.json",
+                              "--quick", "--target", "127.0.0.1"],
                              capture_output=True, text=True, timeout=180)
         self.assertIn("LIKELY ROOT CAUSE", out.stdout)
         self.assertIn("Could not write", out.stderr)

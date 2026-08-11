@@ -32,7 +32,7 @@ It fits two shapes of box and tells them apart on its own:
 ========================================================================
 LIKELY ROOT CAUSE: The loss is on what talks to this box, not on what it
 talks to
-  owner: the path between this box and the people using it   confidence: medium (15 of 18 checks ran)
+  owner: the path between this box and the people using it   confidence: medium (16 of 19 checks ran)
   next: Everything this box depends on is clean, so the service itself
   is healthy. The loss is between here and your users - the edge, the
   load balancer in front, or the internet path to them.
@@ -40,12 +40,18 @@ talks to
 
   clients in FAULT  ->  this box ok  ->  depends on ok
 
-  link PASS   address PASS   gateway PASS   internet FAIL   dns PASS   mtu PASS   ports PASS
+  clients FAIL   link PASS   address PASS   gateway PASS   internet PASS
+  dns PASS   mtu PASS   ports PASS
 ```
 
 Three boxes and an arrow answer *where* before anything asks you to know what a
 layer is. On a box nothing connects to, the first one reads `none connected` and
 the strip below carries the detail.
+
+The strip reads in the same order: the way in, then the box, then the way out.
+Note what it does **not** say here — `internet PASS`, because what this box
+depends on is fine. The fault is on the traffic arriving at it, and that is a
+different direction with a different owner.
 
 One Python file. Nothing to install, nothing left behind, no port opened.
 
@@ -345,7 +351,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
 - `faultone.py` — the whole tool
 - `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 957 tests, no dependencies
+- `test_faultone.py` — `python3 test_faultone.py`, 961 tests, no dependencies
 - `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

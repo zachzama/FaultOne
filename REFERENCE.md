@@ -450,8 +450,9 @@ hardware-derived; thirteen of them are ones where the answer is unambiguous.
 
 ## What the stage strip will not be asked to carry
 
-The strip is the chain this tool reasons about: link, address, gateway,
-internet, DNS, MTU, ports. A finding that moves none of it is allowed — a wrong
+The strip is the chain this tool reasons about: clients, link, address,
+gateway, internet, DNS, MTU, ports - the way in, then the box, then the way
+out. A finding that moves none of it is allowed — a wrong
 clock breaks authentication and certificate validity rather than the wire, and
 the strip does not model that — but only as a **warning**.
 
@@ -459,7 +460,7 @@ A *critical* finding that moves no stage produces this:
 
 ```
 verdict: CRITICAL
-strip:   link SKIP  address PASS  gateway PASS  internet PASS  dns PASS  mtu SKIP  ports SKIP
+strip:   clients -  link SKIP  address PASS  gateway PASS  internet PASS  dns PASS  mtu SKIP  ports SKIP
 ```
 
 A critical verdict beside a strip on which nothing failed — the same misleading
@@ -1218,8 +1219,8 @@ an arrow:
 ```
 
 The panel is shown on **every** box, including one that only talks outward. It
-was hidden there at first, on the grounds that two boxes and an arrow restate a
-seven-stage strip that says the same thing more precisely. That reasoning
+was hidden there at first, on the grounds that two boxes and an arrow restate an
+eight-stage strip that says the same thing more precisely. That reasoning
 optimises for a reader who can already read the strip — and boxes that only
 talk outward are the common case, so hiding it there meant the panel written
 for someone who *cannot* read the strip was the one they would almost never be
@@ -1343,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **153** | Distinct conclusions it can reach and state in plain language. 131 are faults; 22 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 957 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 961 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 153 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1512,7 +1513,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 957 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 961 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1653,8 +1654,14 @@ Under the verdict, the whole chain at a glance — the way a handheld tester
 shows it:
 
 ```
-  link PASS   address PASS   gateway PASS   internet PASS   dns FAIL   mtu -   ports -
+  clients -   link PASS   address PASS   gateway PASS   internet PASS   dns FAIL   mtu -   ports -
 ```
+
+It reads in the order the traffic does: the way in, then this box, then the
+way out. `clients` is the inbound leg - it reads `-` on a box nothing connects
+to, which is most of them, and it exists so a fault on the traffic *arriving*
+has somewhere of its own to land. Without it those findings marked `internet`,
+which is a leg of the way out, and the strip contradicted the verdict above it.
 
 A stage that wasn't measured reads `-`, never `PASS`. Claiming a check passed
 when it never ran is the one thing a summary like this must not do.
@@ -2892,7 +2899,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-957 tests, no dependencies, no network, a few seconds — so they run
+961 tests, no dependencies, no network, a few seconds — so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

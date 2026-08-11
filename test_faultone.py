@@ -477,6 +477,63 @@ class TestMtrDisplayHeuristics(unittest.TestCase):
         self.assertIn("partial reply loss", nd.render_text_report(report, color=False, width=90))
 
 
+class TestStageStripFits(unittest.TestCase):
+    """The strip is the line that gets pasted into a ticket, and it ran out to
+    whatever length the chain happened to be while every other part of the
+    report wrapped. At seven stages it was 92 columns; the inbound leg took it
+    to 107, so on an eighty-column console - the kind this tool is read on -
+    it broke wherever the terminal chose."""
+
+    STRIP = re.compile(r"\b(PASS|WARN|FAIL)\b")
+    ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+    def strip_lines(self, text):
+        """Matched on the de-escaped line: tinted, the word arrives as
+        "\\x1b[32mPASS", where there is no word boundary before the P."""
+        out = []
+        for line in text.splitlines():
+            bare = self.ANSI.sub("", line)
+            if self.STRIP.search(bare) and "owner:" not in bare and "->" not in bare:
+                out.append(line)
+        return out
+
+    def report(self):
+        setup, kw = S["tcp_flow_loss_clients"]
+        m = fresh(); setup(m)
+        return m, m.diagnose(quick=False, **scenario_kwargs(kw))
+
+    def test_the_strip_stays_inside_the_terminal(self):
+        m, rep = self.report()
+        for width in (120, 100, 80, 72, 60, 40):
+            text = m.render_text_report(rep, color=False, width=width)
+            for line in self.strip_lines(text):
+                self.assertLessEqual(
+                    len(line), max(width, 40),
+                    f"the stage strip runs to {len(line)} columns at width={width}")
+
+    def test_every_stage_survives_the_wrap(self):
+        """Wrapping must not be a way to lose one. All eight are still there,
+        in order, however many lines it took."""
+        m, rep = self.report()
+        want = [s["stage"] for s in rep["stages"]]
+        for width in (120, 80, 40):
+            text = m.render_text_report(rep, color=False, width=width)
+            shown = []
+            for line in self.strip_lines(text):
+                shown += [w for w in line.split() if w in want]
+            self.assertEqual(shown, want, f"stages lost or reordered at width={width}")
+
+    def test_colour_does_not_change_where_it_wraps(self):
+        """An escape sequence takes no space on screen. Measured on the tinted
+        string instead of the plain one, the strip would wrap a line that fits
+        - and only ever on the terminals that asked for colour."""
+        m, rep = self.report()
+        plain = self.strip_lines(m.render_text_report(rep, color=False, width=80))
+        tinted = self.strip_lines(m.render_text_report(rep, color=True, width=80))
+        visible = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in tinted]
+        self.assertEqual(visible, plain)
+
+
 class TestBarRendering(unittest.TestCase):
     """The magnitude bar, and the path drawn with it."""
 
@@ -4350,9 +4407,49 @@ class TestCompactExport(unittest.TestCase):
                              and not any(k.startswith(p) for p, _ in nd.RAW_STAGE_PREFIXES))
             self.assertEqual(unknown, [], f"{code}: raw keys with no stage: {unknown}")
 
+    # Stages that are legs of a direction rather than properties of this box.
+    # link, address and ports are not here on purpose: they describe the box
+    # itself, and a finding facing either way can legitimately move them.
+    OUTBOUND_STAGES = {"gateway", "internet", "dns", "mtu"}
+    INBOUND_STAGE = "clients"
+
+    def test_no_stage_is_moved_by_a_finding_facing_the_other_way(self):
+        """The strip walks outward from the box. Client-side faults had no leg
+        of that chain to land on, so nine of them landed on "internet" - and a
+        report would announce that the internet had failed directly above a
+        verdict saying the loss was on what talks to this box and everything it
+        depends on is clean. Both halves were the tool's own words.
+
+        The strip now has an inbound leg. This is what stops the next finding
+        from being filed by which stage sounds closest rather than by which
+        direction the evidence faces, which is how the first nine got there."""
+        for stage, fails, warns in nd.STAGE_RULES:
+            for code in sorted(fails | warns):
+                side = nd.FINDING_SIDE.get(code)
+                with self.subTest(stage=stage, code=code):
+                    if stage in self.OUTBOUND_STAGES:
+                        self.assertNotEqual(
+                            side, "downstream",
+                            f"{code} faces the way in but moves the {stage} stage, "
+                            f"which is a leg of the way out. A report would fail "
+                            f"{stage} while its verdict says the way out is clean.")
+                    if stage == self.INBOUND_STAGE:
+                        self.assertNotEqual(
+                            side, "upstream",
+                            f"{code} faces the way out but moves the {stage} stage, "
+                            f"which is the way in.")
+
     def test_every_stage_named_in_the_map_is_a_real_stage(self):
+        """A capture may answer for more than one stage, so a value is a name
+        or a tuple of them. The prefixes name stages too and were never
+        checked, which is the same typo waiting in a place nothing looked."""
         stages = {s for s, _f, _w in nd.STAGE_RULES}
-        named = {v for v in nd.RAW_STAGE.values() if v is not None}
+        named = set()
+        for value in nd.RAW_STAGE.values():
+            if value is None:
+                continue
+            named |= set(value) if isinstance(value, tuple) else {value}
+        named |= {s for _prefix, s in nd.RAW_STAGE_PREFIXES}
         self.assertEqual(sorted(named - stages), [])
 
     def test_it_is_smaller(self):
@@ -11833,7 +11930,9 @@ class TestEveryFindingFires(unittest.TestCase):
         "accept_overflow_live",                      # an application here, not the chain
         "accept_overflow_historical",
         "clock_skewed", "clock_unsynced",            # breaks services, not the wire
-
+        "no_clients_connected",                      # the absence of the inbound
+                                                     # leg, which the clients
+                                                     # stage reports as "-"
     }
 
     def test_findings_that_move_no_stage_are_a_decision_not_an_oversight(self):

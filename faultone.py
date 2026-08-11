@@ -5416,6 +5416,20 @@ PORT_RELEVANT_CODES = {
 
 # stage -> (codes that fail it, codes that only warn)
 STAGE_RULES = [
+    # The way in. Everything after this walks outward from the box, so a fault
+    # on the traffic arriving at it has no stage of that chain to land on - and
+    # it used to land on "internet", which reads as the way out. A report could
+    # then say the loss was on what talks to this box, over a strip announcing
+    # that the internet had failed, and both halves were the tool's own words.
+    # This stage is the inbound leg the strip was missing; it reads "-" on a box
+    # nothing is connected to, where there is no such leg to judge.
+    # "no clients connected" is deliberately absent: it fires exactly when
+    # there is no inbound leg, and the answer to that is "-", not a warning
+    # about a direction this box does not have.
+    ("clients", set(),
+     {"tcp_flow_loss_clients", "path_jitter_clients", "queuing_delay_clients",
+      "syncookies_live", "syncookies_historical", "syn_recv_backlog",
+      "reqq_full_drops", "fd_pressure"}),
     # Optics belong to the link stage for the same reason the error counters
     # do: a fibre outside its rated range is the physical link failing, and
     # leaving the strip all-green during an optical alarm is exactly the
@@ -5444,9 +5458,9 @@ STAGE_RULES = [
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
-      "tcp_flow_loss_backends", "tcp_flow_loss_clients",
-      "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
-      "path_jitter_backends", "path_jitter_clients",
+      "tcp_flow_loss_backends",
+      "queuing_delay", "queuing_delay_backends",
+      "path_jitter_backends",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
       "resets_sent_high", "connections_reset_by_peer",
       "udp_recv_buffer_full", "udp_datagrams_corrupt", "fragments_lost",
@@ -5456,11 +5470,10 @@ STAGE_RULES = [
       # "degraded" warns the stage and "unusable" fails it without a second rule.
       "call_quality_degraded", "call_quality_bad",
       "conntrack_near_limit", "conntrack_drops_historical",
-      # Local ceilings that stop this box accepting or opening connections.
-      "no_clients_connected", "no_traffic_at_all",
-      "syncookies_live", "syncookies_historical", "ephemeral_ports_low",
-      "fd_pressure", "syn_recv_backlog", "aborts_on_memory", "reqq_full_drops",
-      "aborts_on_timeout"}),
+      # Ceilings that stop this box opening connections of its own. The ones
+      # that stop it *accepting* face the other way and belong to "clients".
+      "no_traffic_at_all", "ephemeral_ports_low",
+      "aborts_on_memory", "aborts_on_timeout"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -5491,7 +5504,12 @@ RAW_STAGE = {
     "neigh_table": "address",
     "ping_gateway": "gateway",
     "ping_internet": "internet", "path_trace": "internet",
-    "tcp_flows": "internet", "tcp_health": "internet",
+    # One capture, two stages: the same `ss` output carries loss to backends
+    # and loss to clients, and they now sit on opposite ends of the strip. It
+    # is evidence for both, so it survives while either is unwell - keyed to
+    # one of them, a client-side fault would drop the very output it was read
+    # from out of a compact export.
+    "tcp_flows": ("internet", "clients"), "tcp_health": "internet",
     # The fallback when ping is filtered: reaching the target the way an
     # application would, before calling a site's uplink down.
     "reachability_tcp": "internet",
@@ -5500,7 +5518,9 @@ RAW_STAGE = {
     "path_trace_icmp": "internet",
     "path_mtu": "mtu",
     "dns_lookup": "dns", "dns_health": "dns",
-    "sockets": "ports", "ports": "ports",
+    # Same again: socket states answer the ports stage, while the accept queue,
+    # SYN cookies and the descriptor ceiling read from them answer "clients".
+    "sockets": ("ports", "clients"), "ports": "ports",
     # This box's own service and the certificate it serves, both read from the
     # outside in. They belong to the ports stage for the same reason the port
     # checks do: they answer whether what is listening here actually works.
@@ -5518,14 +5538,24 @@ RAW_STAGE_PREFIXES = (("port_", "ports"), ("tls_", "ports"))
 
 
 def raw_stage(key):
-    """Which stage a captured command belongs to, or None if it belongs to no
-    stage and must therefore always be kept."""
+    """Which stages a captured command belongs to, as a tuple, or None if it
+    belongs to none and must therefore always be kept.
+
+    A tuple because one capture can answer for two stages: `ss` output is read
+    for loss to backends and loss to clients alike, and those are now opposite
+    ends of the strip.
+    """
+    stage = None
     if key in RAW_STAGE:
-        return RAW_STAGE[key]
-    for prefix, stage in RAW_STAGE_PREFIXES:
-        if key.startswith(prefix):
-            return stage
-    return None
+        stage = RAW_STAGE[key]
+    else:
+        for prefix, mapped in RAW_STAGE_PREFIXES:
+            if key.startswith(prefix):
+                stage = mapped
+                break
+    if stage is None:
+        return None
+    return stage if isinstance(stage, tuple) else (stage,)
 
 
 def compact_report(report):
@@ -5543,17 +5573,18 @@ def compact_report(report):
     the same one - the hops, the colours, the layers - with the raw material
     behind the parts that were fine left on the box.
 
-    Evidence is kept when its stage is not passing, and when a check could not
-    run at all: a gap in coverage is a thing the reader has to be able to see,
-    and a missing panel would look like a check that passed.
+    Evidence is kept when any stage it answers for is not passing, and when a
+    check could not run at all: a gap in coverage is a thing the reader has to
+    be able to see, and a missing panel would look like a check that passed.
     """
     slim = {k: v for k, v in report.items() if k not in ("raw", "panel_help")}
     state = {s["stage"]: s["state"] for s in report.get("stages") or []}
     keep = {}
     for key, value in (report.get("raw") or {}).items():
-        stage = raw_stage(key)
+        stages = raw_stage(key)
         ran = not isinstance(value, dict) or value.get("ok", True)
-        if stage is None or state.get(stage) in ("fail", "warn") or not ran:
+        unwell = stages and any(state.get(s) in ("fail", "warn") for s in stages)
+        if stages is None or unwell or not ran:
             keep[key] = value
     slim["raw"] = keep
     help_text = report.get("panel_help") or {}
@@ -5604,6 +5635,17 @@ def build_stages(findings, raw=None, checked_ports=False, quick=False):
         if (name == "ports" and not checked_ports
                 and not (raw.get("own_tls") or {}).get("listeners")
                 and not (raw.get("own_service") or {}).get("listeners")):
+            state = "skip"
+        # A box nothing connects to has no inbound leg, and "-" is the answer
+        # for a stage nobody measured. Reading PASS there would claim the way
+        # in is healthy on a box where it was never looked at.
+        #
+        # A finding overrides that, because it is itself proof there was
+        # something to measure: a box whose accept queue is overflowing is
+        # being connected to, whatever the open-socket count came to while the
+        # kernel was busy refusing them.
+        elif (name == "clients" and not _serves_traffic(raw)
+                and not codes & (fail_codes | warn_codes)):
             state = "skip"
         elif name == "mtu" and not raw.get("path_mtu"):
             state = "skip"          # not measured (quick mode, or target silent)
@@ -12136,7 +12178,7 @@ def render_text_report(report, color=False, width=None):
     #
     # Shown on every box, including one that nothing connects to. It was
     # hidden there at first, on the grounds that two boxes and an arrow
-    # restate a seven-stage strip that says the same thing more precisely.
+    # restate an eight-stage strip that says the same thing more precisely.
     # That optimises for a reader who can already read the strip. Boxes that
     # only talk outward are the common case, so hiding it there meant the
     # panel written for someone who cannot read the strip was the one they
@@ -12161,8 +12203,27 @@ def render_text_report(report, color=False, width=None):
     if stages:
         symbols = {"pass": "PASS", "warn": "WARN", "fail": "FAIL", "skip": "-"}
         sev = {"pass": "ok", "warn": "warning", "fail": "critical", "skip": "ok"}
-        cells = [f"{st['stage']} {tint(symbols[st['state']], sev[st['state']])}" for st in stages]
-        out.append("  " + "   ".join(cells))
+        # Wrapped to the terminal rather than run out to whatever length the
+        # chain happens to be. This is the line that gets pasted into a ticket,
+        # and the inbound leg pushed it past eighty columns - where it broke
+        # across two lines at whatever column the terminal chose, which on a
+        # console narrow enough to care was mid-word.
+        #
+        # Measured on the plain text: an escape sequence occupies no space on
+        # screen, so counting the tinted string would wrap a line that fits.
+        rows, row, used = [], [], 0
+        for st in stages:
+            plain = f"{st['stage']} {symbols[st['state']]}"
+            gap = 3 if row else 0
+            if row and used + gap + len(plain) > max(width, 40) - 2:
+                rows.append(row)
+                row, used, gap = [], 0, 0
+            row.append(f"{st['stage']} {tint(symbols[st['state']], sev[st['state']])}")
+            used += gap + len(plain)
+        if row:
+            rows.append(row)
+        for r in rows:
+            out.append("  " + "   ".join(r))
         out.append("")
 
     out.append("FINDINGS")

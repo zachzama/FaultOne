@@ -1,0 +1,100 @@
+name: tests
+
+# The README promises Python 3.7 or newer, on Linux, macOS and Windows. Until
+# this existed, the suite had only ever run on one interpreter on one machine,
+# so both halves of that sentence were an intention rather than a fact.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:      # so it can be run by hand while the repo is private
+
+permissions:
+  contents: read
+
+concurrency:              # a superseded run is wasted minutes on a private repo
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: ${{ matrix.os }} · python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false    # one version failing must not hide the others
+      matrix:
+        include:
+          # The floor the README promises. 3.7 is not on ubuntu-latest, which
+          # is 24.04 now and dropped it - so this entry names its own runner
+          # rather than failing with a version-not-found nobody can read.
+          - {os: ubuntu-22.04, python: "3.7"}
+          # The ceiling: nothing here is version-pinned, so new is as
+          # interesting as old.
+          - {os: ubuntu-latest, python: "3.13"}
+          # The claim with the least evidence behind it. The tool has twenty
+          # mentions of Windows - ipconfig, tracert, and parsers for both - and
+          # the suite has three. This is the first time any of it runs there.
+          - {os: windows-latest, python: "3.13"}
+          # macOS is deliberately absent for now: it is the runner that costs
+          # ten times Linux on a private repo, and it is the machine the suite
+          # already runs on every day. Add it when the repo goes public and
+          # minutes stop being metered.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # No install step. That is the point of the tool, and if one were ever
+      # needed here it would mean the promise on the front page had stopped
+      # being true.
+      - name: the suite
+        run: python test_faultone.py
+
+      - name: it starts
+        shell: bash
+        run: |
+          python faultone.py --version
+          python faultone.py --help > /dev/null
+
+      # A stubbed suite proves the logic and not the plumbing: it never runs
+      # ipconfig, and on Windows that plumbing has never run at all. This does
+      # a real run against the runner's own network.
+      #
+      # It asserts the tool produced a report, not that the network was
+      # healthy. 0, 1 and 2 all mean it reached a verdict - that is the exit
+      # code carrying severity, which is a feature. 3 means it could not. A
+      # traceback also exits 1, which is why the banner is checked too: the
+      # failure this is here to catch printed nothing and exited non-zero.
+      - name: it runs
+        shell: bash
+        run: |
+          set +e
+          python faultone.py --report --quick --no-color > report.txt 2> stderr.txt
+          code=$?
+          set -e
+          head -20 report.txt || true
+          if [ -s stderr.txt ]; then echo "--- stderr ---"; cat stderr.txt; fi
+          case "$code" in
+            0|1|2) ;;
+            *) echo "::error::exited $code - no verdict was reached"; exit 1 ;;
+          esac
+          grep -q '^FaultOne ' report.txt \
+            || { echo "::error::exited $code but printed no report"; exit 1; }
+
+  harnesses:
+    # The questions a test suite does not answer: every finding through the
+    # whole pipeline, and the rules that only exist between findings. Offline
+    # and dependency-free like everything else, so they cost one Linux job.
+    name: dev harnesses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python dev/deep_e2e.py
+      - run: python dev/audit.py

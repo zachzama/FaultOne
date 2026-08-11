@@ -55,12 +55,13 @@ than whether it can reach `8.8.8.8`. A box with no clients connected falls back
 to `8.8.8.8`. Either way the report names what it chose and why, and
 `--target host` overrides it.
 
-**Can't copy files onto the box?** Pipe it in — it runs from memory and leaves
-nothing behind:
-
-```bash
-ssh -C -J jump user@box "python3 - --report" < faultone.py
-```
+> [!TIP]
+> **Can't copy files onto the box?** Pipe it in — it runs from memory and
+> leaves nothing behind:
+>
+> ```bash
+> ssh -C -J jump user@box "python3 - --report" < faultone.py
+> ```
 
 `-C` because OpenSSH doesn't compress by default, and the file is 597 KB of
 repetitive text: it goes over the wire at 178 KB with compression on, for the
@@ -317,12 +318,13 @@ address". A false diagnosis is worse than a gap.
 It never opens a port and never listens for anything — there's no server to
 secure. It does run real commands with your privileges.
 
-A report is a **map of the network it was taken on** — internal addressing, MAC
-addresses, switch names, VLANs, resolvers, listening ports. Exports are written
-`0600` for that reason. Treat one like a network diagram: fine in a ticket, fine
-with the people who own that network, **not** committed to a repository or
-pasted somewhere public. `.gitignore` here covers `report.json` and
-`report.html`, but it can't know what you named yours.
+> [!WARNING]
+> A report is a **map of the network it was taken on** — internal addressing,
+> MAC addresses, switch names, VLANs, resolvers, listening ports. Exports are
+> written `0600` for that reason. Treat one like a network diagram: fine in a
+> ticket, fine with the people who own that network, **not** committed to a
+> repository or pasted somewhere public. `.gitignore` here covers
+> `report.json` and `report.html`, but it can't know what you named yours.
 
 [Full security notes.](REFERENCE.md#security)
 

@@ -1,52 +1,11 @@
 # Open threads
 
-Not a harness and not documentation. Two things that are unfinished and one
-that is finished but easy to undo by accident, written down because the
-reasoning behind them is not in the code and would otherwise have to be
-rediscovered.
+Not a harness and not documentation. One thing that is unfinished and one that
+is finished but easy to undo by accident, written down because the reasoning
+behind them is not in the code and would otherwise have to be rediscovered.
 
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
-
-## Open: phase timing has no scenario behind it
-
-`cmd_own_http` measures a request to this box's own service in three parts —
-connect, TLS handshake, wait — and `_own_service_timing` turns them into an
-`own_service_timing` finding. Four tests cover the measurement directly, by
-standing up a real socket:
-
-    test_the_answer_is_split_into_its_phases
-    test_the_phases_account_for_the_total
-    test_it_names_the_phase_that_dominated
-    test_a_check_that_never_connected_reports_no_phases
-
-No scenario produces them:
-
-```bash
-python3 - <<'PY'
-import sys; sys.argv=["x"]
-import test_faultone as T
-n = 0
-for code, (setup, kw) in sorted(T.S.items()):
-    m = T.fresh(); setup(m)
-    r = m.diagnose(quick=False, **T.scenario_kwargs(kw))
-    if ((r.get("raw") or {}).get("own_service") or {}).get("phases"): n += 1
-print("%d of %d" % (n, len(T.S)))
-PY
-```
-
-At the time of writing that prints `0 of 152`. So the phases are measured and
-asserted, and then never travel: no verdict has been built from them, no stage
-strip, no export, no viewer. The measurement and the pipeline are tested in
-different places and never together.
-
-What would close it is a scenario that serves a slow response, the way the
-socket tests do, but through `diagnose()` — after which the finding, its
-severity, and what the report does with it are all exercised on the way past.
-
-This is also why the path ribbon was not extended to draw those phases, which
-would otherwise be the obvious thing to do with them: drawing data no scenario
-produces means the picture and the pipeline stay strangers.
 
 ## Open: a flaky test, diagnosed by mechanism rather than caught
 

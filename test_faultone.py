@@ -7196,7 +7196,7 @@ class TestNeighbourInventory(unittest.TestCase):
         self.assertEqual(slim.get("inventory"), report.get("inventory"))
         page = m.render_report_html(report)
         self.assertIn("192.168.1.1", page)
-        self.assertIn("neighbours (passive)", m.VIEWER_TEMPLATE)
+        self.assertIn("neighbours (not a scan)", m.VIEWER_TEMPLATE)
 
 
 class TestDocsMatchReality(unittest.TestCase):
@@ -7827,11 +7827,24 @@ class TestDocsMatchReality(unittest.TestCase):
         dupes = sorted({f for f in listed if listed.count(f) > 1})
         self.assertFalse(dupes, f"listed more than once: {dupes}")
 
-    def test_the_docs_quote_one_runtime_not_three(self):
+    def test_the_docs_quote_no_runtime_the_tool_does_not_have(self):
         """Parallelising the probes cut the full run from ~15s to ~7s, and two
         places kept the old figure - so the reference said "~2s instead of ~15s"
-        a few hundred lines above "a full --report is ~7s"."""
+        a few hundred lines above "a full --report is ~7s".
+
+        Two runs are measured: quick, and full where the trace answers. A third
+        figure is the traceroute timeout, which a full run costs instead when
+        the path answers nothing. That one is not measured, it is a constant in
+        the source, so it is excused here by matching the source rather than by
+        being allowed to be any number at all - quote a timeout the code no
+        longer uses and it counts as the stale third figure again."""
         import re
+        src = open(nd.__file__).read()
+        m = re.search(r'\["traceroute".*?timeout=(\d+)\)', src, re.S)
+        self.assertIsNotNone(m, "the traceroute timeout moved; this guard reads it "
+                                "from the source to tell a documented timeout "
+                                "apart from a stale runtime")
+        trace_timeout = int(m.group(1))
         # Scoped to the tool's own runtime. The suite's runtime is a different
         # measurement that legitimately deserves its own figure, and counting
         # it here made an accurate sentence about the tests look like a third
@@ -7843,9 +7856,11 @@ class TestDocsMatchReality(unittest.TestCase):
                     continue
                 figures |= {int(m.group(1))
                             for m in re.finditer(r"~(\d+)\s*(?:s\b|seconds)", line)}
-        self.assertLessEqual(len(figures), 2,
-                             f"docs quote {sorted(figures)} as runtimes; only the quick "
-                             f"run and the full run are timed, so a third number is stale")
+        runtimes = figures - {trace_timeout}
+        self.assertLessEqual(len(runtimes), 2,
+                             f"docs quote {sorted(figures)} as runtimes and the traceroute "
+                             f"timeout is {trace_timeout}s; only the quick run and the full "
+                             f"run are measured, so a third number is stale")
 
     def test_no_document_states_a_version_that_is_not_the_current_one(self):
         """The titles used to carry the major.minor, pinned here. That was

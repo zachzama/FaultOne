@@ -3968,8 +3968,8 @@ PANEL_HELP = {
     "inventory": {
         "label": "neighbours", "layer": 2,
         "desc": "Devices this box has already exchanged traffic with, from its own neighbour "
-                "table. Passive: nothing was probed or scanned, so it says what this device "
-                "has talked to rather than what exists on the segment.",
+                "table. Nothing is scanned or probed, so it says what this device has talked "
+                "to rather than what exists on the segment. Names come from reverse DNS.",
     },
     "sockets": {
         "label": "socket states", "layer": 4,
@@ -11250,7 +11250,7 @@ function renderDiagnosis(data, opts){
       dns_health: 'dns resolvers',
       ports: 'listening ports',
       sockets: 'socket states',
-      inventory: 'neighbours (passive)',
+      inventory: 'neighbours (not a scan)',
       link_stats: 'interface error counters',
       tcp_health: 'tcp retransmissions',
       arp: 'arp / neighbour table',
@@ -12268,8 +12268,9 @@ def build_parser():
                           "regenerating the copy kept in the repo")
     ap.add_argument("--inventory", action="store_true",
                      help="list the neighbours this device already knows about, from its own "
-                          "ARP/neighbour table. Passive - nothing is probed or scanned, so it "
-                          "is safe on a network you don't own")
+                          "ARP/neighbour table. Nothing is scanned or probed - the only traffic "
+                          "it adds is a reverse-DNS lookup per neighbour, to a resolver already "
+                          "configured here")
     ap.add_argument("--no-color", action="store_true",
                      help="never colour the output. Colour is already off when the output "
                           "is redirected, when NO_COLOR is set, and on a dumb terminal - "

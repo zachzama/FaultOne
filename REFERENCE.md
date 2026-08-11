@@ -1398,12 +1398,14 @@ utilization, and the comparison against a `--baseline`.
 
 ```
 --report                 print the findings to this terminal and exit
---inventory              list neighbours already known to this device (passive)
+--inventory              list neighbours already known to this device (ARP table;
+                         adds only a reverse-DNS lookup per neighbour)
 --quiet                  hide the progress line while the checks run
 --no-color               never colour the output (already off when redirected,
                          when NO_COLOR is set, and on a dumb terminal)
 --version                print the version and exit
---quick                  skip the traceroute and path MTU (~2s instead of ~7s)
+--quick                  skip the traceroute and path MTU (~2s instead of ~7s, or
+                         instead of ~60s where the path answers no traceroute)
 --soak SECONDS           sample over a window instead of taking a snapshot
 --uplink-mbps MBPS       the site's WAN line rate, so utilisation is measured
                          against the link that actually fills rather than the
@@ -2808,11 +2810,13 @@ the tool picks the right command per OS (`ip`/`ifconfig` vs `ipconfig`,
 `traceroute` vs `tracert`). Commands run with `LC_ALL=C` so a localized system
 doesn't silently break output parsing.
 
-A full `--report` is ~7s on a healthy network: the gateway ping, the target
-ping and the trace are independent, so they run together and the run costs
-about as long as the trace alone. On a badly broken network it can still reach
-a minute, because a traceroute into a black hole runs its full timeout — that's
-what `--quick` is for.
+A full `--report` is ~7s where the path answers the trace: the gateway ping,
+the target ping and the trace are independent, so they run together and the run
+costs about as long as the trace alone. Where it doesn't answer, the trace runs
+its full 60s timeout and the whole run costs that instead — that's what
+`--quick` is for. Being broken is not the only way to get there: a network in
+perfect health that filters traceroute reaches the same timeout, so this is a
+normal cost on a locked-down path rather than a symptom of anything.
 
 `--soak` runs those probes one at a time instead. When you have deliberately
 asked to sample for a minute, probes perturbing each other's latency matters

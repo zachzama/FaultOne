@@ -3,7 +3,7 @@
 **153 findings it can reach. One line saying which one to fix first.**
 
 ```bash
-python3 faultone.py --report           # full check, ~7 seconds
+python3 faultone.py --report           # full check, ~7 seconds when the path answers
 python3 faultone.py --report --quick   # the essentials, ~2 seconds
 ```
 
@@ -82,8 +82,8 @@ ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 127 KB on t
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
 Stripped and compressed together it's 127 KB instead of 597 — 79% less, which
-is nine minutes down to under two on a 9600-baud console, and nothing you'd
-notice on anything faster.
+is eleven minutes down to just over two on a 9600-baud console (8N1, so 960
+bytes a second), and nothing you'd notice on anything faster.
 
 **Want the visual version?** Two ways, both offline:
 
@@ -132,13 +132,13 @@ machine.
 
 | | |
 |---|---|
-| `--quick` | Skips the slow parts. Use it when someone's on the phone. |
+| `--quick` | Skips the traceroute and path MTU — the slow parts. Use it when someone's on the phone, or where the path answers no traceroute at all and the full check waits out a 60-second timeout. |
 | `--soak 120` | Watches for two minutes instead of taking a snapshot. Use it for faults that come and go. |
 | `--target auto` | The default. On a box that accepts connections, aims at the backend it depends on most rather than at 8.8.8.8 — and re-owns the verdicts accordingly. |
 | `--uplink-mbps 50` | The site's line rate, off the ticket. Without it the tool measures against the NIC's speed and can blame the carrier for a line the site is filling itself. |
 | `--baseline old.json` | Compares against a previous visit and tells you what changed. |
 | `--check-ports common` | Checks 22, 53, 80, 443, 8080 without typing them out. |
-| `--inventory` | Lists the neighbours this device already knows. Passive — nothing is probed. |
+| `--inventory` | Lists the neighbours this device already knows, off its own ARP table. Nothing is scanned or probed; the only traffic it adds is a reverse-DNS lookup per neighbour, to a resolver already configured here. |
 | `--export-compact` | An export without the evidence behind the checks that passed. Around a twentieth of the size, same picture. |
 
 [Every flag is listed here.](REFERENCE.md#every-flag)

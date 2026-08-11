@@ -374,8 +374,44 @@
     display:flex; flex-wrap:wrap; align-items:stretch; gap:8px 0;
     padding:0; margin:0 0 24px;
   }
+  /* One unbroken bar for the whole path, cut into a segment per hop and
+     sized by what that hop added. It cannot wrap and the segments touch, so
+     neither of the two things that make a path hard to read - a break the eye
+     has to follow, and a gap where nothing happened - is a shape it can take.
+     A hop that added almost nothing is a sliver, which is its honest size;
+     every name and number is still in the boxes underneath. */
+  .hop-ribbon{
+    display:flex; width:100%; height:30px; border-radius:5px; overflow:hidden;
+    margin:0 0 6px; background:var(--panel-2);
+  }
+  .hop-ribbon .seg{
+    min-width:4px; display:flex; align-items:center; justify-content:center;
+    gap:6px; font-family:var(--mono); font-size:10px; color:var(--bg);
+    background:var(--accent-dim); border-right:1px solid var(--bg);
+    overflow:hidden; white-space:nowrap;
+  }
+  .hop-ribbon .seg:last-child{border-right:0;}
+  .hop-ribbon .seg.warn{background:var(--warn);}
+  .hop-ribbon .seg.crit{background:var(--crit);}
+  .ribbon-scale{
+    display:flex; justify-content:space-between; font-family:var(--mono);
+    font-size:10px; color:var(--text-dim); margin-bottom:14px;
+  }
+  /* The same bar from the last visit, on the same scale, directly under. Two
+     of them answer "slower than before, and in the same place" without a
+     number being read. */
+  .ribbon-was{height:12px; margin:-8px 0 2px; opacity:0.55;}
+  .ribbon-was-label{
+    font-family:var(--mono); font-size:10px; color:var(--text-dim);
+    margin-bottom:14px;
+  }
   .hop-node{
-    flex:0 1 auto; min-width:110px; max-width:230px;
+    /* Width follows what the hop added. The proportion is applied above the
+       room the text needs rather than instead of it: sizing from the time
+       alone put a forty-two character backbone name that added a
+       millisecond into a box too narrow to read it. So the box is an
+       indication and the ribbon above is the measurement. */
+    flex:0 1 auto; min-width:118px; max-width:none;
     background:var(--panel); border:1px solid var(--border);
     border-left:3px solid var(--node-edge); border-radius:6px; padding:12px 11px;
   }
@@ -508,6 +544,12 @@
       --cause:#a3372a; --cause-edge:#a3372a;
       --hardware:#7a5c10; --hardware-edge:#7a5c10;
       --node-edge:#c7cdd4;
+    }
+    /* A browser drops background colours when it prints unless it is told
+       not to, and the ribbon is nothing but background colour - without
+       this it comes out as an empty outline. */
+    .hop-ribbon, .hop-ribbon .seg{
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
     }
     .topbar, .sidebar, #reportControls, .file-input{display:none !important;}
     .layout{display:block; min-height:0;}
@@ -762,6 +804,54 @@ function avgMs(times){
   return times.reduce((a,b)=>a+b,0) / times.length;
 }
 
+
+// The path as one bar, and the same bar from the last visit under it.
+//
+// A segment per hop, sized by what that hop added rather than by how long its
+// name is - the boxes below carry the names and are sized to stay readable,
+// so this is the measurement and they are the reading. The dominant segment
+// carries its severity in a word as well as a colour, for the same reason the
+// hops below do: red against green is the pair a reader is most likely not to
+// be able to separate, and here it would be the only thing said.
+function hopRibbon(nodes, totalMs){
+  if(!totalMs) return '';
+  const timed = nodes.filter(n => n.dMs != null);
+  if(timed.length < 2) return '';
+  const worst = timed.reduce((a, n) => (!a || n.dMs > a.dMs) ? n : a, null);
+  const segs = timed.map(n => {
+    const wide = n.dMs / totalMs > 0.08;
+    const word = (n === worst && HOP_WORD[n.sev]) ? HOP_WORD[n.sev] : '';
+    return `<span class="seg ${n.sev || ''}" style="flex-grow:${Math.max(0.4, n.dMs).toFixed(2)}"`
+         + ` title="${escapeHtml(n.label)} · ${n.dMs.toFixed(1)}ms">`
+         + `${wide ? n.dMs.toFixed(0) + 'ms' : ''}${wide && word ? ' ' + word : ''}</span>`;
+  }).join('');
+  return `<div class="hop-ribbon">${segs}</div>`
+       + `<div class="ribbon-scale"><span>0</span>`
+       + `<span>${totalMs.toFixed(0)}ms to the target</span></div>`;
+}
+
+// Only drawn when --baseline gave a path to draw. A previous visit that did
+// not record one, or a --quick run that never traced, leaves the row out
+// rather than inventing a comparison.
+function ribbonBaseline(path, totalMs){
+  if(!path || path.length < 2 || !totalMs) return '';
+  let run = 0;
+  const segs = path.map(h => {
+    const d = Math.max(0, (h.avg_ms || 0) - run);
+    run = h.avg_ms || run;
+    return `<span class="seg" style="flex-grow:${Math.max(0.4, d).toFixed(2)}"></span>`;
+  }).join('');
+  const then = run;
+  const how = then > totalMs ? 'slower then' : (then < totalMs ? 'faster then' : 'the same');
+  return `<div class="hop-ribbon ribbon-was">${segs}</div>`
+       + `<div class="ribbon-was-label">last visit: ${then.toFixed(0)}ms · ${how}</div>`;
+}
+
+function hopFlex(deltaMs, totalMs){
+  if(!totalMs || deltaMs == null) return '';
+  return ` style="flex-grow:${Math.max(0.15, deltaMs / totalMs * 10).toFixed(2)}"`;
+}
+
 function renderHopChain(data){
   const hops = data.hops || [];
   const pathTitle = document.getElementById('pathTitle');
@@ -794,6 +884,9 @@ function renderHopChain(data){
   // summary is escaped at render; nets/hops come from the report file
   const summary = summaryParts.join(' · ');
 
+  // The end of the path, and how much of it each hop is answerable for.
+  const TOT = Math.max(0, ...hops.map(h => h.avg_ms || 0));
+  let RUN = 0;
   const nodes = [{label:'source', sub:'this device',
                   sev: sideSeverity(data, 'local')}];
 
@@ -824,6 +917,8 @@ function renderHopChain(data){
       sub: h.timed_out ? 'timeout' : `${h.display}${avg != null ? ' · ' + Number(avg).toFixed(1) + 'ms' : ''}`,
       meta: meta.join(' · '),
       sev: hopSeverity(h, probes),
+      dMs: (function(){ const d = Math.max(0, (h.avg_ms || 0) - RUN);
+             if(h.avg_ms != null) RUN = h.avg_ms; return d; })(),
       demarcBefore: data.demarc_hop != null && h.hop === data.demarc_hop,
       entersNetwork: h.enters_network || null,
       cgnat: !!h.cgnat,
@@ -884,10 +979,11 @@ function renderHopChain(data){
   document.getElementById('hopChainWrap').innerHTML = inboundHtml +
     `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
       escapeHtml(cin ? 'path out — ' + summary : summary)}</div>` +
-    '<div class="hop-chain">' + nodes.map((n,i) => `
+    hopRibbon(nodes, TOT) + ribbonBaseline(data.baseline_path, TOT)
+    + '<div class="hop-chain">' + nodes.map((n,i) => `
       ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'
         : (n.entersNetwork ? `<div class="hop-arrow handoff">→<span>${escapeHtml(n.entersNetwork)}</span></div>` : '')}
-      <div class="hop-node ${n.sev}">
+      <div class="hop-node ${n.sev}"${hopFlex(n.dMs, TOT)}>
         <div class="hop-label">${escapeHtml(n.label)}${hopWord(n.sev)}</div>
         <div class="hop-sub">${escapeHtml(n.sub)}</div>
         ${n.meta ? `<div class="hop-meta">${n.meta}</div>` : ''}

@@ -7746,6 +7746,146 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
                          "this device is drawn clean whatever the report says")
         self.assertIn("sideSeverity(data, 'local')", node)
 
+    def _ribbon_js(self, *names):
+        """Run the viewer's own ribbon functions, rather than assert on their
+        source. A bar built from percentages and flex is the first thing here
+        that a browser can render as nothing while the markup reads correctly,
+        so what it returns is worth more than what it says."""
+        import json as _json
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+        out = ["const escapeHtml = s => String(s);",
+               "const HOP_WORD = {warn:'DEGRADED', crit:'FAULT'};"]
+        for name in names:
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        return node, "\n".join(out)
+
+    def _run_js(self, prelude, body):
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        node, src = prelude
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(src + "\n" + body)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path], capture_output=True, text=True, timeout=30)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            _os.unlink(path)
+
+    def test_the_ribbon_is_sized_by_time_not_by_name(self):
+        """The bar is the measurement and the boxes below are the reading. A
+        segment takes its width from what its hop added; the boxes take theirs
+        from the time too, but above the room their text needs, because sizing
+        a box from the time alone put a forty-two character backbone name into
+        something too narrow to read."""
+        pre = self._ribbon_js("hopRibbon")
+        got = self._run_js(pre, """
+const nodes = [{label:'short', sev:'ok', dMs:1.4},
+               {label:'a-very-long-backbone-name.example.net', sev:'crit', dMs:70.5},
+               {label:'x', sev:'ok', dMs:2.0}];
+const html = hopRibbon(nodes, 73.9);
+process.stdout.write(JSON.stringify({
+  segments: (html.match(/class="seg/g) || []).length,
+  flex: (html.match(/flex-grow:([0-9.]+)/g) || []),
+}));
+""")
+        self.assertEqual(got["segments"], 3)
+        # The long name added 70.5 of 73.9ms and gets the width to match; the
+        # name itself is nowhere in the sizing.
+        self.assertEqual(got["flex"],
+                         ["flex-grow:1.40", "flex-grow:70.50", "flex-grow:2.00"])
+
+    def test_the_ribbon_says_the_severity_it_colours(self):
+        """Same reason the hops below carry a word: the dominant segment is the
+        one the reader is being sent to, and colour alone is what excludes the
+        readers who cannot separate red from green."""
+        pre = self._ribbon_js("hopRibbon")
+        # Two marked segments, both wide enough to carry a label. With one, a
+        # word on every segment and a word on the dominant one produce the
+        # same output, and the test agrees with either.
+        # Four marked-or-not segments arranged so that "the widest", "the first
+        # marked", "the last marked" and "the last of all" are four different
+        # positions. Any two of them coinciding lets a rule that picks the
+        # wrong one pass - which it did, twice, while this was being written.
+        got = self._run_js(pre, """
+const nodes = [{label:'a', sev:'crit', dMs:20}, {label:'b', sev:'crit', dMs:40},
+               {label:'c', sev:'crit', dMs:30}, {label:'d', sev:'ok', dMs:4}];
+const html = hopRibbon(nodes, 94);
+const segs = html.split('<span class="seg').slice(1);
+process.stdout.write(JSON.stringify({
+  count: (html.match(/FAULT/g) || []).length,
+  carriesWord: segs.findIndex(s => s.indexOf('FAULT') !== -1),
+  widest: segs.map(s => parseFloat(s.match(/flex-grow:([0-9.]+)/)[1]))
+              .reduce((best, v, i, all) => v > all[best] ? i : best, 0),
+}));
+""")
+        self.assertEqual(got["count"], 1,
+                         "the word is on every segment it could apply to")
+        self.assertEqual(got["carriesWord"], got["widest"],
+                         "the word is not on the segment that dominates")
+
+    def test_a_path_too_short_to_have_a_shape_draws_no_ribbon(self):
+        """One timed hop is a number, not a distribution. A bar with a single
+        full-width segment says something is 100% of itself."""
+        pre = self._ribbon_js("hopRibbon")
+        got = self._run_js(pre, """
+process.stdout.write(JSON.stringify({
+  one: hopRibbon([{label:'a', sev:'ok', dMs:5}], 5),
+  none: hopRibbon([], 0),
+  untimed: hopRibbon([{label:'a', sev:'ok'}, {label:'b', sev:'ok'}], 10),
+}));
+""")
+        for case, html in got.items():
+            with self.subTest(case=case):
+                self.assertEqual(html, "")
+
+    def test_the_last_visit_is_drawn_only_when_there_was_one(self):
+        """A previous report that never traced, or a --quick one, leaves the
+        row out rather than inventing a comparison to draw."""
+        pre = self._ribbon_js("ribbonBaseline")
+        got = self._run_js(pre, """
+process.stdout.write(JSON.stringify({
+  absent: ribbonBaseline(null, 74),
+  tooShort: ribbonBaseline([{hop:1, avg_ms:1}], 74),
+  noTotal: ribbonBaseline([{hop:1, avg_ms:1}, {hop:2, avg_ms:9}], 0),
+  real: ribbonBaseline([{hop:1, avg_ms:1}, {hop:2, avg_ms:9}, {hop:3, avg_ms:11}], 74),
+}));
+""")
+        for empty in ("absent", "tooShort", "noTotal"):
+            with self.subTest(case=empty):
+                self.assertEqual(got[empty], "")
+        self.assertIn("last visit: 11ms", got["real"])
+        self.assertIn("faster then", got["real"])
+
+    def test_the_ribbon_survives_being_printed(self):
+        """A browser drops background colours when it prints unless told not
+        to, and the ribbon is nothing but background colour. Without this it
+        comes out as an empty outline - the one element here whose whole
+        content is the thing print throws away."""
+        rules = nd.VIEWER_TEMPLATE.split("@media print{", 1)[1]
+        self.assertIn("print-color-adjust:exact", rules)
+        block = rules.split("print-color-adjust:exact", 1)[0]
+        self.assertIn(".hop-ribbon", block[-200:],
+                      "the exemption does not name the ribbon")
+
     def test_a_marked_hop_does_not_rely_on_colour_alone(self):
         """Red and green are the commonest pair a reader cannot tell apart, and
         the chain was the one place a severity arrived as hue and nothing else.

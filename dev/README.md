@@ -104,6 +104,16 @@ successful release look like a failed one.
 It never pushes without `--push`. That decision is the user's and this file
 should not be able to make it by accident.
 
+Cutting and shipping are separable, and finishing a cut works: run it once to
+bump, test, commit and tag, then again with `--push` to send it. That second
+run is the command the first one prints, and for a while it could not be
+followed — by then the bump had happened, so the version matched and the guard
+at the top rejected the very command above it. It now re-runs the suite as a
+last gate, skips the bump and the tag it already made, and pushes. A version
+that matches with no tag behind it is still refused, because that is a
+half-finished cut or a hand edit and guessing between them is worse than
+stopping.
+
 ## `audit.py` — do the rules between findings hold, one fault or six?
 
 ```bash

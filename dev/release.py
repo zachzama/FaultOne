@@ -83,16 +83,34 @@ def main():
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
         sys.exit(f"'{args.version}' is not a three-part version")
     old = current_version()
-    if args.version == old:
-        sys.exit(f"already at {old}")
+    tag = f"v{args.version}"
+    already_tagged = tag in run(["git", "tag", "--list", tag], capture=True).split()
+    # Cut locally, then come back and ship it. That is what this script tells
+    # you to do when it finishes without --push, and until now the advice could
+    # not be followed: by then the bump has happened, so the version matches
+    # and the guard below rejected the very command that was printed. The two
+    # halves are separable on purpose - the point of the split is that pushing
+    # is a decision taken later - so completing the second half has to work.
+    finishing = args.version == old and already_tagged
+    if args.version == old and not already_tagged:
+        # Bumped by hand, or a half-finished cut that lost its tag. Cutting
+        # again would commit nothing and tag whatever is at the tip.
+        sys.exit(f"already at {old}, and {tag} does not exist - bump by hand or "
+                 f"tag it yourself; this will not guess which you meant")
+    if finishing and not args.push:
+        sys.exit(f"{tag} is already cut. Re-run with --push to ship it, or "
+                 f"pick a later version to cut a new one")
 
     dirty = run(["git", "status", "--porcelain"], capture=True).strip()
     if dirty and not args.dry_run:
         sys.exit(f"the working tree is not clean:\n{dirty}\n"
                  f"commit the work first - this cuts a release, it does not write one")
 
-    print(f"{old} -> {args.version}")
-    bump(args.version, old, dry=args.dry_run)
+    if finishing:
+        print(f"{tag} is cut already - pushing and publishing it")
+    else:
+        print(f"{old} -> {args.version}")
+        bump(args.version, old, dry=args.dry_run)
 
     # Before the commit, not after. A release that fails its own suite should
     # never reach a tag, and a tag is the one thing here that must not move.
@@ -103,8 +121,14 @@ def main():
         proc = subprocess.run([sys.executable, "test_faultone.py"], cwd=ROOT,
                               capture_output=True, text=True)
         if proc.returncode != 0:
-            run(["git", "checkout", "--", "faultone.py", "REFERENCE.md"])
-            sys.exit("the suite failed - the bump has been reverted:\n"
+            # Nothing to revert when the bump happened in an earlier run - the
+            # commit and the tag are already made. Stopping short of the push
+            # is the whole of what can still be withheld, and it is the part
+            # that matters: a tag that never left this machine can be deleted.
+            if not finishing:
+                run(["git", "checkout", "--", "faultone.py", "REFERENCE.md"])
+            sys.exit("the suite failed"
+                     + ("" if finishing else " - the bump has been reverted") + ":\n"
                      + proc.stderr.strip()[-3000:])
         print(f"  {proc.stderr.strip().splitlines()[-1]}")
 
@@ -123,7 +147,9 @@ def main():
                 break
         body = re.sub(r"[*`]", "", first)
     message = f"FaultOne {args.version}\n\n{body}".rstrip() + "\n"
-    if args.dry_run:
+    if finishing:
+        pass                      # committed and tagged by the run that cut it
+    elif args.dry_run:
         print(f"  would commit and tag v{args.version} with:\n")
         for line in message.splitlines():
             print(f"      {line}")

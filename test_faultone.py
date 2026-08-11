@@ -10686,9 +10686,28 @@ class TestEveryFindingFires(unittest.TestCase):
         check opened an AF_INET socket unconditionally - so a perfectly good
         IPv6 address came back as "hostname resolution failed", which sends
         someone to look at DNS."""
-        res = nd.cmd_check_port("2606:4700:4700::1111", 443, timeout=3)
+        # The claim is about which family gets dialled, so the dialling is
+        # stubbed and the address is a documentation one. Opening a real
+        # socket made the test's cost, and its timing, depend on whether the
+        # machine running the suite has IPv6 at all - and the suite states
+        # that it touches no network.
+        real_connect, dialled = nd._connect_once, []
+
+        def record(host, port_num, family, socktype, proto, sockaddr,
+                   ip_version, timeout):
+            dialled.append(ip_version)
+            return {"ok": True, "cmd": f"tcp connect {host}:{port_num}",
+                    "stdout": "open", "stderr": "", "code": 0,
+                    "ip_version": ip_version}
+
+        nd._connect_once = record
+        try:
+            res = nd.cmd_check_port("2001:db8::1", 443, timeout=3)
+        finally:
+            nd._connect_once = real_connect
         self.assertNotIn("resolution failed", str(res.get("error", "")))
         self.assertEqual(res.get("ip_version"), 6)
+        self.assertEqual(dialled, [6])   # AF_INET6 itself, not a v4 attempt that worked
 
     def test_both_families_are_tried_before_calling_a_port_shut(self):
         """Taking only the resolver's first answer would have been worse than
@@ -10745,8 +10764,22 @@ class TestEveryFindingFires(unittest.TestCase):
     def test_a_single_family_name_reports_no_mismatch(self):
         """Only one family in the answer means nothing to compare - and a name
         with no AAAA record has not published a broken one."""
-        res = nd.cmd_check_port("1.1.1.1", 443, timeout=4)
+        # Stubbed for the same reason as the two above: what is being asserted
+        # is the bookkeeping when there is only one candidate, and reaching a
+        # real host to find that out made it a network test.
+        real_connect = nd._connect_once
+        nd._connect_once = (lambda host, port_num, family, socktype, proto,
+                            sockaddr, ip_version, timeout: {
+                                "ok": True, "cmd": f"tcp connect {host}:{port_num}",
+                                "stdout": "open", "stderr": "", "code": 0,
+                                "ip_version": ip_version})
+        try:
+            res = nd.cmd_check_port("192.0.2.1", 443, timeout=4)
+        finally:
+            nd._connect_once = real_connect
         self.assertIsNone(res.get("family_mismatch"))
+        # And says nothing about families either, rather than a list of one.
+        self.assertIsNone(res.get("families_tried"))
 
     def test_a_slow_handshake_is_charged_to_the_server_not_the_path(self):
         """We already did the connect and the handshake and threw the clock

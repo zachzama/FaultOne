@@ -9351,6 +9351,119 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
             pass
 
 
+class TestNoCollectorPicksOnExistenceAlone(unittest.TestCase):
+    """The rule the fall-through work established, applied to every collector
+    rather than to the four it started with.
+
+    A collector that asks which() and takes the answer is choosing on existence:
+    the binary is there, the subcommand or the flag is not, and the check is
+    lost to a utility that was never going to work. Four were fixed one at a
+    time; this is what stops the next one being written the old way."""
+
+    BROKEN_FIRST = {"dig", "ss", "traceroute", "chronyc"}
+
+    def box(self, broken):
+        """Every utility installed, the named ones failing the way a trimmed
+        build does: present, executed, non-zero, nothing on stdout."""
+        nd.OS_NAME = "Linux"
+        nd.which = lambda c: "/bin/" + c
+
+        def fake(cmd, **kw):
+            if cmd[0] in broken:
+                return {"ok": True, "cmd": " ".join(cmd), "code": 1, "stdout": "",
+                        "stderr": "%s: invalid option" % cmd[0]}
+            return {"ok": True, "cmd": " ".join(cmd), "code": 0, "stderr": "",
+                    "stdout": "answer from %s" % cmd[0]}
+        nd.run = fake
+
+    def setUp(self):
+        self.saved = (nd.OS_NAME, nd.which, nd.run)
+
+    def tearDown(self):
+        nd.OS_NAME, nd.which, nd.run = self.saved
+
+    def test_dns_falls_through_to_the_next_lookup_tool(self):
+        """The one that mattered most. Resolution lost to a dig that rejects a
+        flag, on a box with two other working lookup tools installed."""
+        self.box(self.BROKEN_FIRST)
+        self.assertEqual(nd.cmd_dns("example.com")["cmd"], "nslookup example.com")
+
+    def test_dns_tries_a_third_tool_when_two_are_broken(self):
+        self.box({"dig", "nslookup"})
+        self.assertEqual(nd.cmd_dns("example.com")["cmd"], "host example.com")
+
+    def test_traceroute_falls_through_to_tracepath(self):
+        self.box(self.BROKEN_FIRST)
+        self.assertEqual(nd.cmd_traceroute("8.8.8.8")["cmd"], "tracepath 8.8.8.8")
+
+    def test_the_socket_table_falls_through_to_netstat(self):
+        """Every client and serving finding is built on this table, so an ss
+        that exists and fails used to take all of them with it."""
+        self.box(self.BROKEN_FIRST)
+        self.assertEqual(nd.cmd_socket_states()["cmd"], "netstat -an")
+
+    def test_the_clock_chain_asks_the_next_daemon(self):
+        """Each daemon needs its own parsing, so this is not one command asked
+        twice. The chain still has to end on the first one that answers rather
+        than the first one installed."""
+        self.box(self.BROKEN_FIRST)
+        self.assertEqual(nd.cmd_clock_sync()["source"], "timedatectl")
+
+    def test_per_connection_state_that_cannot_be_read_is_not_zero_connections(self):
+        """Nothing else reads per-connection TCP state, so there is nothing to
+        fall through to. Parsed as an answer it becomes zero flows, which is
+        indistinguishable from a box with no connections - a finding rather
+        than a gap."""
+        self.box({"ss"})
+        res = nd.cmd_tcp_flows()
+        self.assertFalse(res.get("ok"))
+        self.assertIsNone(res.get("flows_seen"))
+
+    def test_the_chain_keeps_the_timeout_the_collector_asked_for(self):
+        """traceroute is given sixty seconds because a path that does not answer
+        takes most of that to say so. Routed through the chain on the default,
+        it gets cut off early and a slow path reads as a broken one - the same
+        wrong answer, arrived at from the other direction."""
+        seen = []
+        nd.OS_NAME = "Linux"
+        nd.which = lambda c: "/bin/" + c
+        nd.run = lambda cmd, **kw: (seen.append((cmd[0], kw.get("timeout"))),
+                                    {"ok": True, "cmd": " ".join(cmd), "code": 0,
+                                     "stderr": "", "stdout": " 1  10.0.0.1  0.4 ms\n"})[1]
+        nd.cmd_traceroute("8.8.8.8")
+        self.assertEqual(seen, [("traceroute", 60)])
+        del seen[:]
+        nd.cmd_socket_states()
+        self.assertEqual(seen[0][1], 15)
+
+    def test_no_collector_chooses_on_existence_alone(self):
+        """The rule itself, read off the source. Written as a check on the code
+        rather than a list of collectors, because a list is a record of what
+        existed the day it was written and the point is to catch the next one.
+
+        A collector satisfies this by going through one of the two helpers, or
+        by reading the exit code itself - both are ways of asking whether the
+        command answered rather than whether it exists."""
+        import ast
+        src = open(nd.__file__, encoding="utf-8").read()
+        lines = src.splitlines()
+        offenders = []
+        for node in ast.walk(ast.parse(src)):
+            if not (isinstance(node, ast.FunctionDef) and node.name.startswith("cmd_")):
+                continue
+            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if "which(" not in body:
+                continue
+            handled = any(k in body for k in (
+                "run_first_usable", "run_first_understood", "_answered",
+                'res.get("code")', 'result.get("code")', 'res.get("ok") and'))
+            if not handled:
+                offenders.append(node.name)
+        self.assertEqual(offenders, [],
+                         "these ask which() and never ask whether the command "
+                         "answered: %s" % offenders)
+
+
 class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
     """The case past the fall-through chain: not one command missing, but every
     command foreign. A vendor OS, a scratch container, an appliance with its own
@@ -9544,7 +9657,13 @@ class TestNothingRunsUnasked(unittest.TestCase):
         ran = []
         try:
             nd.which = lambda cmd: True
-            nd.run = lambda cmd, **kw: ran.append(cmd[0]) or {"ok": True, "stdout": ""}
+            # A result shaped like one run() really returns. The stub used to
+            # answer with no exit code and no output, which nothing does, and
+            # once traceroute gained a fall-through that reads as "this command
+            # said nothing" and the chain moved on to tracepath - correctly.
+            nd.run = lambda cmd, **kw: ran.append(cmd[0]) or {
+                "ok": True, "code": 0, "stderr": "",
+                "stdout": " 1  10.0.0.1  0.4 ms\n 2  203.0.113.1  8.1 ms\n"}
             for os_name, expected in (("Linux", "traceroute"),
                                       ("Darwin", "traceroute"),
                                       ("Windows", "tracert")):

@@ -261,7 +261,20 @@ def bad_target():
 # Command builders, per OS. Each returns a run() result dict.
 # ---------------------------------------------------------------------------
 
-def run_first_usable(variants, fallback=None):
+def _answered(result):
+    """Did this command actually say something?
+
+    run() reports ok for anything it managed to execute, so a daemon that is
+    installed and failing looked identical to one that answered. In a chain of
+    utilities that each need their own parsing, that ended the chain on the
+    first one present rather than the first one working, and the two behind it
+    were never asked.
+    """
+    return bool(result.get("ok")) and not result.get("code") \
+        and bool((result.get("stdout") or "").strip())
+
+
+def run_first_usable(variants, fallback=None, timeout=None):
     """Run candidates that read the same thing until one answers usefully.
 
     Different from run_first_understood, and the difference is what counts as
@@ -292,7 +305,7 @@ def run_first_usable(variants, fallback=None):
     for cmd in variants:
         if not which(cmd[0]):
             continue
-        result = run(cmd)
+        result = run(cmd, timeout=timeout) if timeout else run(cmd)
         if result.get("code") == 0 and (result.get("stdout") or "").strip():
             return result
     if fallback is not None:
@@ -561,25 +574,36 @@ def cmd_traceroute(target):
     if OS_NAME == "Windows":
         if which("tracert"):
             return run(["tracert", "-h", "20", target], timeout=60)
-    elif which("traceroute"):
-        return run(["traceroute", "-m", "20", "-w", "2"] + src + [target], timeout=60)
-    elif which("tracepath"):
-        # tracepath has no source option. Left unbound rather than failed: the
-        # hop list is still the hop list, and the checks that must be bound are
-        # bound elsewhere.
-        return run(["tracepath", target], timeout=60)
-    return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
+        return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
+    # traceroute first, tracepath behind it, and behind rather than instead:
+    # choosing on which() alone meant a traceroute that exists and fails took
+    # the whole path with it while tracepath sat unread. tracepath has no
+    # source option, so a bound run falls back to an unbound hop list rather
+    # than to no hop list, which is the better of the two.
+    res = run_first_usable([["traceroute", "-m", "20", "-w", "2"] + src + [target],
+                            ["tracepath", target]], timeout=60)
+    if not res.get("ok") and "is installed" in (res.get("error") or ""):
+        return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
+    return res
 
 
 def cmd_dns(target):
     if not valid_target(target):
         return bad_target()
-    if which("dig"):
-        return run(["dig", "+noall", "+answer"]
-                   + (["-b", SOURCE_ADDRESS] if SOURCE_ADDRESS else []) + [target])
-    if which("nslookup"):
-        return run(["nslookup", target])
-    return {"ok": False, "error": "no DNS lookup utility (dig/nslookup) found on this system"}
+    # Three utilities that answer the same question, tried in order of how much
+    # they say. On a box with a dig that exists and rejects a flag, choosing on
+    # which() alone lost resolution entirely and the run reported DNS as
+    # unreadable - on a machine with two other working lookup tools installed.
+    res = run_first_usable([
+        ["dig", "+noall", "+answer"]
+        + (["-b", SOURCE_ADDRESS] if SOURCE_ADDRESS else []) + [target],
+        ["nslookup", target],
+        ["host", target],
+    ])
+    if not res.get("ok") and "is installed" in (res.get("error") or ""):
+        return {"ok": False,
+                "error": "no DNS lookup utility (dig/nslookup/host) found on this system"}
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1914,10 +1938,11 @@ def cmd_socket_states():
     """This device's own TCP sockets, by state."""
     if OS_NAME == "Windows":
         res = run(["netstat", "-an", "-p", "TCP"], timeout=15)
-    elif which("ss"):
-        res = run(["ss", "-tan"], timeout=15)
     else:
-        res = run(["netstat", "-an"], timeout=15)
+        # netstat behind ss rather than instead of it. This is the socket table
+        # every client and serving finding is built from, so an ss that exists
+        # and fails used to take all of them with it.
+        res = run_first_usable([["ss", "-tan"], ["netstat", "-an"]], timeout=15)
     if not res.get("ok"):
         return res
     parsed = parse_socket_states(res.get("stdout", ""))
@@ -2745,13 +2770,13 @@ def cmd_clock_sync():
     """
     if which("chronyc"):
         res = run(["chronyc", "tracking"], timeout=5)
-        if res.get("ok"):
+        if _answered(res):
             offset, synced = parse_chrony_tracking(res.get("stdout", ""))
             res.update({"offset_ms": offset, "synced": synced, "source": "chronyc"})
             return res
     if which("timedatectl"):
         res = run(["timedatectl", "show"], timeout=5)
-        if res.get("ok"):
+        if _answered(res):
             out = res.get("stdout", "")
             m = re.search(r"NTPSynchronized=(yes|no)", out)
             # timedatectl reports whether the clock is disciplined, never by
@@ -2763,7 +2788,7 @@ def cmd_clock_sync():
             return res
     if which("ntpq"):
         res = run(["ntpq", "-p"], timeout=5)
-        if res.get("ok"):
+        if _answered(res):
             offset, synced = parse_ntpq_peers(res.get("stdout", ""))
             res.update({"offset_ms": offset, "synced": synced, "source": "ntpq"})
             return res
@@ -3398,6 +3423,15 @@ def cmd_tcp_flows(listen_ports=None):
     res = run(["ss", "-tin"], timeout=15, limit=FLOW_READ_BYTES)
     if not res.get("ok"):
         return res
+    if res.get("code"):
+        # Only one utility reads per-connection TCP state, so there is nothing
+        # to fall through to. What matters is that a trimmed ss which rejects
+        # -i is reported as a failed read: parsed as an answer it becomes zero
+        # flows, and zero flows is indistinguishable from a box with no
+        # connections, which is a finding rather than a gap.
+        return {"ok": False, "cmd": res.get("cmd", "ss -tin"),
+                "error": "ss exited %s - per-connection TCP state could not be read"
+                         % res.get("code")}
     text = res.get("stdout") or ""
     truncated = "more characters not stored" in text
     flows = parse_tcp_flows(text)

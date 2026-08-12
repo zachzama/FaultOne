@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1056 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1063 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 160 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1702,6 +1702,33 @@ nearly all of them.
 anything. A box nobody is talking to is idle, not broken, and the finding is
 about traffic that is arriving and choosing another address.
 
+### The way you got in is not traffic
+
+Every connection this tool counts to decide whether a box is doing its job is a
+connection somebody made, and some of them are yours. A box being worked on
+usually has more than one window open on it, and three admin sessions were
+enough to satisfy every "is anyone using this" threshold here. On an idle box
+that was enough to report a service address as up and taking nothing while
+traffic arrived elsewhere, and to make that the verdict. The traffic arriving
+elsewhere was the diagnostic's own presence.
+
+Sessions matching the way in are no longer counted as traffic served. The match
+needs both halves, the peer and the port arrived on, and neither alone is
+enough: on the peer alone it would discard real traffic from a host that is
+both a way in and a client, and on the port alone it would discard every
+session on a box whose actual job is SSH.
+
+A jump host is why the peer is read from the connection rather than assumed.
+Arriving through one, the box sees the jump host as the client, so every
+operator working through it lands on the same address, and all of those
+sessions are set aside together. Piping the tool in over `ssh -J` needs nothing
+else: it runs on the box, so the paths it measures are the box's paths, and the
+jump host is not in any of them.
+
+With no session to read, from a console or from cron, nothing is excluded.
+Guessing which connections were somebody's way in would be worse than counting
+all of them.
+
 Counts are per address and no peer is ever listed. Who is connected to this box
 is not something a report pasted into a ticket should carry; which of its own
 addresses they arrived on is a property of the box, and its addresses are in
@@ -1914,7 +1941,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1056 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1063 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3300,7 +3327,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1056 tests, no dependencies, no network, a few seconds, so they run
+1063 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

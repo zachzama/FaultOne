@@ -1841,11 +1841,21 @@ def peer_port(addr):
     return m.group(1) if m else None
 
 
-def parse_socket_states(text):
+def parse_socket_states(text, own_access=(None, None)):
     """Count sockets by state, and note who the pending ones are talking to.
 
     Handles `ss -tan` (state first) and `netstat -an` (state last), which is
     why the peer is picked out by position rather than by column name.
+
+    `own_access` is the way the operator got in, as (peer, local port), and
+    sessions matching it are not counted as traffic this box is serving. They
+    are real connections and they are not the box doing its job: a run over
+    three admin windows used to read as three clients connected, which was
+    enough to satisfy every "is anyone using this" threshold in the tool and
+    invent a fault out of the diagnostic's own presence.
+
+    Passed in rather than read from the environment here, so this stays a
+    parser that can be handed a fixture and asked what it makes of it.
     """
     states = {}
     pending = {}
@@ -1891,6 +1901,8 @@ def parse_socket_states(text):
                 # single public address does not, and that is not a fault.
                 bound.append((peer_host(local) or "", port))
         elif key == "ESTABLISHED" and local:
+            if (peer_host(peer), peer_port(local)) == own_access:
+                continue                # our own way in, not this box working
             established.append(peer_port(local))
             local_ends.append((peer_host(local), peer_port(local)))
             peers.append((peer_host(peer), peer_port(local)))
@@ -1945,7 +1957,7 @@ def cmd_socket_states():
         res = run_first_usable([["ss", "-tan"], ["netstat", "-an"]], timeout=15)
     if not res.get("ok"):
         return res
-    parsed = parse_socket_states(res.get("stdout", ""))
+    parsed = parse_socket_states(res.get("stdout", ""), _own_access_service())
     res.update(parsed)
     order = ["ESTABLISHED", "LISTEN", "SYN_SENT", "CLOSE_WAIT", "TIME_WAIT", "FIN_WAIT_1",
              "FIN_WAIT_2", "LAST_ACK", "CLOSING", "SYN_RECV"]
@@ -3135,6 +3147,28 @@ def _own_ssh_peer():
     """
     parts = os.environ.get("SSH_CONNECTION", "").split()
     return (parts[0], parts[1]) if len(parts) >= 2 else (None, None)
+
+
+def _own_access_service():
+    """(where we came from, which port of ours we came in on), or (None, None).
+
+    Not the same question as _own_ssh_peer, which identifies one flow so that
+    flow's loss can be set aside. This identifies the *service* the operator
+    arrived on, so every session like it can be set aside: usually several,
+    because a box being worked on has more than one window open on it.
+
+    Both halves are needed and neither is enough. Matching the peer alone would
+    discard real traffic from a host that is both a way in and a client.
+    Matching the port alone would discard every session on a box whose actual
+    job is SSH. Together they mean "administrative sessions from the place the
+    administrator came from", which is what this is for.
+
+    A jump host is why this reads the peer from the connection rather than
+    assuming anything: arriving through one, the box sees the jump host as the
+    client, and every operator working through it lands on the same address.
+    """
+    parts = os.environ.get("SSH_CONNECTION", "").split()
+    return (parts[0], parts[3]) if len(parts) >= 4 else (None, None)
 
 
 def parse_tcp_flows(text, max_flows=FLOW_MAX):

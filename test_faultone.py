@@ -9351,6 +9351,117 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
             pass
 
 
+class TestTheWayInIsNotTrafficThisBoxIsServing(unittest.TestCase):
+    """Arriving over a jump host is what surfaced this, and the jump host is not
+    really the point: any way in produces connections, and this tool counts
+    connections to decide whether a box is doing its job.
+
+    Three admin windows satisfied every "is anyone using this" threshold in the
+    tool. On an idle box that was enough to report a service address as up and
+    taking nothing while traffic arrived elsewhere, and to make that the
+    verdict. The traffic arriving elsewhere was the diagnostic's own presence."""
+
+    VIP = {"ok": True, "cmd": "ip addr", "stdout":
+           "2: eth0: <BROADCAST,UP> mtu 1500\n"
+           "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+           "    inet 10.0.0.200/32 scope global eth0\n"}
+
+    def setUp(self):
+        self.saved = os.environ.get("SSH_CONNECTION")
+        # Arrived through a jump host: the box sees the jump host as the client,
+        # which is exactly why the peer is read from the connection rather than
+        # assumed to be the operator's own workstation.
+        os.environ["SSH_CONNECTION"] = "10.9.9.9 51000 10.0.0.5 22"
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("SSH_CONNECTION", None)
+        else:
+            os.environ["SSH_CONNECTION"] = self.saved
+
+    def admin(self, n):
+        return "".join("ESTAB 0 0 10.0.0.5:22 10.9.9.9:51%03d\n" % i
+                       for i in range(1, n + 1))
+
+    def parsed(self, ss):
+        return nd.parse_socket_states(ss, nd._own_access_service())
+
+    def test_admin_sessions_are_not_counted_as_clients(self):
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + self.admin(3))
+        out = self.parsed(ss)
+        self.assertEqual(out["inbound"], 0)
+        self.assertEqual(out["served_on"], {})
+
+    def test_real_clients_are_still_counted_beside_them(self):
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+              "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.admin(3)
+              + "".join("ESTAB 0 0 10.0.0.200:443 198.51.100.%d:52%02d\n" % (i, i)
+                        for i in range(1, 5)))
+        out = self.parsed(ss)
+        self.assertEqual(out["inbound"], 4)
+        self.assertEqual(out["served_on"], {"10.0.0.200": 4})
+
+    def test_traffic_from_the_jump_host_on_another_port_still_counts(self):
+        """Matching the peer alone would discard real traffic from a host that
+        is both a way in and a client. Both halves are needed."""
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+              "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.admin(2)
+              + "ESTAB 0 0 10.0.0.200:443 10.9.9.9:60001\n")
+        out = self.parsed(ss)
+        self.assertEqual(out["served_on"], {"10.0.0.200": 1})
+
+    def test_sessions_on_the_access_port_from_elsewhere_still_count(self):
+        """Matching the port alone would discard every session on a box whose
+        actual job is SSH."""
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + self.admin(2)
+              + "ESTAB 0 0 10.0.0.5:22 198.51.100.7:53000\n")
+        out = self.parsed(ss)
+        self.assertEqual(out["inbound"], 1)
+
+    def test_an_idle_box_worked_on_over_three_windows_invents_no_fault(self):
+        """End to end, and the reason this exists. Every one of these findings
+        was built from the diagnostic's own way in."""
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        mod.cmd_interfaces = lambda: self.VIP
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+              "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.admin(3))
+        mod.cmd_socket_states = lambda: dict(
+            {"ok": True, "cmd": "ss -tan", "stdout": ss},
+            **mod.parse_socket_states(ss, mod._own_access_service()))
+        codes = {f["code"] for f in mod.diagnose(quick=True,
+                                                 **scenario_kwargs(kw))["findings"]}
+        for invented in ("service_address_idle", "no_upstream_sessions"):
+            self.assertNotIn(invented, codes)
+
+    def test_no_ssh_connection_means_nothing_is_excluded(self):
+        """Run from a console, or from cron, there is no session to set aside
+        and nothing may be discarded on a guess."""
+        os.environ.pop("SSH_CONNECTION", None)
+        self.assertEqual(nd._own_access_service(), (None, None))
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + self.admin(3))
+        self.assertEqual(self.parsed(ss)["inbound"], 3)
+
+    def test_the_counters_the_findings_read_all_exclude_it(self):
+        """served_on and served_endpoints feed the per-instance table and the
+        service-address findings; inbound and outbound feed the rest. Any one of
+        them left counting the way in puts the fault back."""
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + self.admin(3))
+        out = self.parsed(ss)
+        self.assertEqual(out["served_on"], {})
+        self.assertEqual(out["served_endpoints"], {})
+        self.assertEqual(out["inbound"], 0)
+        self.assertEqual(out["outbound"], 0)
+
+
 class TestNoCollectorPicksOnExistenceAlone(unittest.TestCase):
     """The rule the fall-through work established, applied to every collector
     rather than to the four it started with.

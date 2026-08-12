@@ -10775,6 +10775,11 @@ def _(nd): mtr(nd, [
 def _(nd): nd.cmd_path_mtu = lambda t, m=None: {"ok": True, "cmd": "df", "stdout": "", "target": t,
     "iface_mtu": 1500, "path_mtu": 1400, "attempts": [{"mtu": 1500, "payload": 1472, "ok": False, "cmd": "x"}]}
 
+@scenario("pmtu_reduced")
+def _(nd): nd.cmd_path_mtu = lambda t, m=None: {"ok": True, "cmd": "df", "stdout": "", "target": t,
+    "iface_mtu": 1500, "path_mtu": 1492, "signalled_mtu": 1492,
+    "attempts": [{"mtu": 1500, "payload": 1472, "ok": False, "signalled": 1492, "cmd": "x"}]}
+
 @scenario("pmtu_unmeasurable")
 def _(nd): nd.cmd_path_mtu = lambda t, m=None: {"ok": True, "cmd": "df", "stdout": "", "target": t,
     "iface_mtu": 1500, "path_mtu": None, "attempts": [{"mtu": 1500, "payload": 1472, "ok": False, "cmd": "x"}]}
@@ -11955,12 +11960,76 @@ class TestEveryFindingFires(unittest.TestCase):
         self.assertTrue(fired)
         self.assertIn("in bursts the average cannot show", fired[0]["message"])
 
+    def test_the_probe_reads_the_reply_the_router_sent_back(self):
+        """The decision above rests on signalled_mtu, and a test that hands it
+        in never runs the code that works it out. Mutating the reader to always
+        return None left that test perfectly green while the tool went back to
+        calling every DSL line broken, so this drives the real probe through
+        each platform's wording.
+        """
+        # The real probe, not the harness copy: fresh() stubs cmd_path_mtu, so
+        # calling it there measures the stub and never reaches the parser.
+        replies = {
+            "linux": "From 10.0.0.1 icmp_seq=1 Frag needed and DF set (mtu = 1492)",
+            "bsd": "frag needed and DF set (MTU 1400)",
+            "windows": "Packet needs to be fragmented but DF set.",
+            "silent": "1 packets transmitted, 0 packets received, 100% packet loss",
+        }
+        expected = {"linux": 1492, "bsd": 1400, "windows": True, "silent": None}
+        saved = nd.run
+        try:
+            for name, text in replies.items():
+                with self.subTest(reply=name):
+                    # every size fails, so the probe records what came back
+                    nd.run = lambda cmd, timeout=None, limit=None, _t=text: {
+                        "ok": True, "code": 1, "cmd": " ".join(cmd),
+                        "stdout": _t, "stderr": ""}
+                    out = nd.cmd_path_mtu("8.8.8.8", 1500)
+                    self.assertEqual(out["signalled_mtu"], expected[name],
+                                     f"{name} reply was read as {out['signalled_mtu']}")
+        finally:
+            nd.run = saved
+
+    def test_a_smaller_path_mtu_is_only_a_fault_when_nothing_reported_it(self):
+        """A path MTU below the interface is ordinary. PPPoE is 1492 and a
+        tunnel is less, and when the router replies "fragmentation needed" the
+        sender adapts, so transfers complete and nothing is wrong.
+
+        The blackhole is the same measurement with that reply missing, and only
+        that one hangs a transfer. Measuring the size alone cannot tell them
+        apart, so a working machine on a DSL line was told it was critically
+        broken. This pins both halves, because a fix that stopped reporting the
+        blackhole would satisfy the first half perfectly."""
+        def with_signal(signalled):
+            mod = fresh()
+            mod.cmd_path_mtu = lambda t, m=None, s=signalled: {
+                "ok": True, "cmd": "df", "stdout": "", "target": t,
+                "iface_mtu": 1500, "path_mtu": 1492, "signalled_mtu": s,
+                "attempts": [{"mtu": 1500, "payload": 1472, "ok": False,
+                              "signalled": s, "cmd": "x"}]}
+            rep = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
+            codes = {f["code"]: f["severity"] for f in rep["findings"]}
+            return mod, rep, codes
+
+        mod, rep, codes = with_signal(1492)
+        self.assertIn("pmtu_reduced", codes, "a signalled MTU went unreported")
+        self.assertNotIn("pmtu_blackhole", codes,
+                         "a path that reported its own limit was called a blackhole")
+        self.assertEqual(codes["pmtu_reduced"], "ok")
+        self.assertEqual(mod.exit_status(rep), 0,
+                         "a working DSL line exited non-zero")
+
+        mod, rep, codes = with_signal(None)
+        self.assertIn("pmtu_blackhole", codes, "a silent drop stopped being a fault")
+        self.assertEqual(codes["pmtu_blackhole"], "critical")
+        self.assertEqual(mod.exit_status(rep), 2)
+
     def test_the_mtu_finding_says_which_direction_it_measured(self):
         """One target, outbound only. Routing is often asymmetric, so the
         return path is not tested and another service may see a different
         limit."""
         source = open(nd.__file__, encoding="utf-8").read()
-        pmtu = source.split('"code": "pmtu_blackhole"', 1)[1][:900]
+        pmtu = source.split('"code": "pmtu_blackhole"', 1)[1][:1400]
         self.assertIn("outbound direction only", pmtu)
         self.assertIn("asymmetric", pmtu)
 
@@ -12258,6 +12327,9 @@ class TestEveryFindingFires(unittest.TestCase):
         "accept_overflow_live",                      # an application here, not the chain
         "accept_overflow_historical",
         "clock_skewed", "clock_unsynced",            # breaks services, not the wire
+        "pmtu_reduced",                              # a smaller path MTU that the
+                                                     # path itself reported: context,
+                                                     # not a stage of the chain
         "no_clients_connected",                      # the absence of the inbound
                                                      # leg, which the clients
                                                      # stage reports as "-"

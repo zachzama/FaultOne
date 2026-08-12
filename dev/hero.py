@@ -38,8 +38,10 @@ sys.path.insert(0, ROOT)
 
 SCENARIO = "tcp_flow_loss_clients"   # a fault on the way in, which is the one
                                      # the picture is meant to explain
-LINES = 16                           # through the stage strip; the findings
-                                     # below it are detail, not the pitch
+LINES = 18                           # through the stage strip; the findings
+                                     # below it are detail, not the pitch.
+                                     # 16 stopped short once the header gained
+                                     # a line, cutting the strip in half.
 WIDTH_COLS = 76
 
 # Pinned so the image is reproducible. The date is the release this was drawn

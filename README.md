@@ -1,6 +1,6 @@
 # FaultOne
 
-**153 findings it can reach. One line saying which one to fix first.**
+**154 findings it can reach. One line saying which one to fix first.**
 
 ```bash
 python3 faultone.py --report           # full check, ~7 seconds when the path answers
@@ -249,8 +249,8 @@ directions.
 
 ### What it actually checks
 
-**33 things are inspected**, and **153 distinct conclusions** can come out of
-them: 131 are faults, 22 are context.
+**33 things are inspected**, and **154 distinct conclusions** can come out of
+them: 131 are faults, 23 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -342,7 +342,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 967 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 969 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

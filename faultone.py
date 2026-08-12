@@ -3687,6 +3687,30 @@ def cmd_link_modes():
             "code": 0, "interfaces": interfaces}
 
 
+# "Frag needed and DF set (mtu = 1492)" on Linux, "frag needed and DF set
+# (MTU 1492)" on macOS, "Packet needs to be fragmented but DF set" on Windows -
+# which names no size, so the presence of the message is the signal there.
+_FRAG_NEEDED = re.compile(
+    r"frag(?:mentation)?\s+needed"          # Linux and the BSDs
+    r"|needs?\s+to\s+be\s+fragmented",     # Windows says it the other way round
+    re.I)
+_FRAG_MTU = re.compile(r"\bmtu[ =]+(\d{3,5})", re.I)
+
+
+def _pmtu_signalled(res):
+    """The MTU a router reported back, True if it complained without a number,
+    or None when the packet simply vanished.
+
+    This is the whole difference between a path that is merely smaller and one
+    that is broken.
+    """
+    text = (res.get("stdout") or "") + "\n" + (res.get("stderr") or "")
+    if not _FRAG_NEEDED.search(text):
+        return None
+    found = _FRAG_MTU.search(text)
+    return int(found.group(1)) if found else True
+
+
 def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     """Find the largest packet that actually reaches the target unfragmented.
 
@@ -3713,11 +3737,20 @@ def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
         res = run(cmd, timeout=6)
         got = bool(res.get("ok")) and res.get("code") == 0
         attempts.append({"mtu": mtu, "payload": payload, "ok": got,
+                         "signalled": None if got else _pmtu_signalled(res),
                          "cmd": res.get("cmd", " ".join(cmd))})
         if got:
             break
 
     working = next((a["mtu"] for a in attempts if a["ok"]), None)
+    # Did anything on the path say so? A smaller path MTU is ordinary - PPPoE
+    # is 1492, a tunnel is less - and it costs nothing when the router replies
+    # "fragmentation needed" with the size, because the sender then adapts and
+    # transfers are fine. A blackhole is the same measurement with that reply
+    # missing, and only that one hangs a transfer. Measuring the size alone
+    # cannot tell them apart, so this reads the reply.
+    signalled = next((a["signalled"] for a in attempts
+                      if not a["ok"] and a.get("signalled")), None)
     lines = [f"probing path MTU to {target} (interface MTU {ceiling})", ""]
     for a in attempts:
         lines.append(f"  {a['mtu']:>5} bytes  {'passes' if a['ok'] else 'blocked'}")
@@ -3726,7 +3759,7 @@ def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     return {"ok": True, "cmd": f"ping -c1 (do-not-fragment) x{len(attempts)} -> {target}",
             "stdout": "\n".join(lines), "stderr": "", "code": 0,
             "target": target, "iface_mtu": ceiling, "path_mtu": working,
-            "attempts": attempts}
+            "signalled_mtu": signalled, "attempts": attempts}
 
 
 def cmd_check_port(host, port, timeout=5):
@@ -5103,6 +5136,7 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # about whether anything is broken - only that the checks and
                   # the traffic may not take the same route.
                   "proxy_configured",
+    "pmtu_reduced",
                   # What kind of adapter this is. Context that reframes every
                   # physical-layer reading below it, never a fault itself.
                   "virtual_nic"}
@@ -5360,6 +5394,7 @@ FINDING_SIDE.update({
     "cgnat": "upstream",
     "double_nat": "upstream",
     "pmtu_blackhole": "upstream",
+    "pmtu_reduced": "upstream",
     "pmtu_unmeasurable": "upstream",
     "latency_high": "upstream",
     "resets_sent_high": "local",
@@ -8871,6 +8906,26 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                            f"dropping DF-flagged packets, so path MTU can't be measured from "
                            f"here - not necessarily a fault in itself.",
             })
+        elif (pm.get("path_mtu") < pm.get("iface_mtu", STANDARD_MTU)
+                and pm.get("signalled_mtu")):
+            # Smaller, and the path said so. PPPoE is 1492 and a tunnel is
+            # less; when the router replies "fragmentation needed" the sender
+            # adapts and nothing stalls. Reporting that as a fault told a
+            # working machine it was broken.
+            told = pm["signalled_mtu"]
+            named = f" and reported it as {told}" if told is not True else ""
+            findings.append({
+                "severity": "ok",
+                "code": "pmtu_reduced",
+                "layer": 3,
+                "message": f"Path MTU to {target} is {pm['path_mtu']} bytes against an "
+                           f"interface set to {pm['iface_mtu']}, and the path signalled "
+                           f"that{named}. That is what a tunnel or a PPPoE line looks "
+                           f"like, and it is not a fault: the sender is told the limit "
+                           f"and adapts, so transfers complete. It is here because it "
+                           f"explains a smaller effective packet size, and because the "
+                           f"same measurement without the signal is a blackhole.",
+            })
         elif pm.get("path_mtu") < pm.get("iface_mtu", STANDARD_MTU):
             findings.append({
                 "severity": "critical",
@@ -8880,8 +8935,9 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                            f"interface is set to {pm['iface_mtu']}. Full-size packets are being "
                            f"dropped silently somewhere along the path while small ones get "
                            f"through - so ping and SSH look fine while large transfers, file "
-                           f"copies, TLS handshakes or VPN traffic stall. Classic PMTU "
-                           f"blackhole: something in the path drops oversized packets without "
+                           f"copies, TLS handshakes or VPN traffic stall. Nothing on the path "
+                           f"reported the smaller limit, which is what separates this from an "
+                           f"ordinary tunnel: something drops oversized packets without "
                            f"sending the ICMP message that would let the sender adapt. This "
                            f"measures the path to {target} in the outbound direction only - "
                            f"routing is often asymmetric, so a service elsewhere may see a "
@@ -12140,8 +12196,19 @@ def render_text_report(report, color=False, width=None):
     elif report.get("soak_seconds"):
         mode = f"    [soak: {report['soak_seconds']}s window]"
     src = report.get("path_source")
+    # Say so when the target is the fallback rather than something this box
+    # actually talks to. Everything below measures the path to it, and a
+    # reader who does not notice which host that was will take a verdict
+    # about the route to a public resolver as a verdict about their own
+    # service. The finding that explains it is further down the report,
+    # which is too late to change how the next line is read.
     out.append(f"target: {report.get('target', '?')}    gateway: {gw}" + mode
                + (f"    path via {src}" if src else ""))
+    if (report.get("target") == DEFAULT_TARGET
+            and (report.get("raw") or {}).get("target_kind") != "backend"):
+        # Its own line: appended, this ran past a hundred columns.
+        out.append("        nothing here depends on that host - pass --target for a "
+                   "path you rely on")
     out.append("")
 
     v = report.get("verdict")

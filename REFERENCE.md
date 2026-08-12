@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 154
+difference is which one it puts at the top, and that is the whole product: 157
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1342,11 +1342,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **154** | Distinct conclusions it can reach and state in plain language. 131 are faults; 23 are context, like which switch port you're on. |
-| **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 989 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **157** | Distinct conclusions it can reach and state in plain language. 132 are faults; 25 are context, like which switch port you're on. |
+| **Ranked causes** | **132** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1005 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 154 findings are the useful figure** if you want to know what the tool can
+**The 157 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1575,6 +1575,70 @@ protecting itself rather than a network fault. And they measure the path
 outward only, which is why a finding about them names the outbound direction
 and says the return path was not tested.
 
+## Choosing what it sends from
+
+`--target` decides where the probes go. On a box holding more than one address,
+`--source` decides where they leave from, and on a proxy that is the more
+important of the two.
+
+A box terminating a service address holds at least two: its own, which is how
+you reached it, and the address clients arrive on. They are not
+interchangeable. The kernel picks the interface's primary address unless told
+otherwise, so every measurement in a default run is about the management path,
+and the path your users take is never touched.
+
+The faults this separates out are the ones that discriminate by source
+address, which is most of the interesting ones:
+
+| | |
+|---|---|
+| policy routing | a rule matching on source sends the two addresses out different interfaces or different uplinks |
+| asymmetric return | the reply to the service address comes back a different way, or does not come back |
+| filtering or NAT keyed on source | an upstream ACL, or a translation that exists for one address and not the other |
+| reverse-path filtering | a router drops what arrives from an address it would not route back to |
+
+Every one of them works from the box's own address and fails from the service
+address. A run that lets the kernel choose measures the first, finds nothing,
+and reports a healthy box.
+
+```bash
+python3 faultone.py --report --source 203.0.113.10 --target 10.0.0.20
+```
+
+**A box that does not hold the address is the finding, not an error.** The
+kernel refuses to bind, before a packet is sent, and that is reported as
+critical and outranks everything else in the run. It is what a standby node
+looks like: the address lives on its partner, and a run that let the kernel
+choose would have measured this node's own address and called the box healthy
+while it served nothing.
+
+The address has to be an address. A hostname or an interface name is refused
+at the front rather than half-honoured, because Linux `ping -I` would accept an
+interface and nothing else in the tool would, which is a flag meaning one thing
+on one platform and something else everywhere.
+
+**Without `--source`, a service address is still reported**, as context rather
+than a fault. A host route sitting on an interface that also carries a real
+subnet, a `/32` beside a `/24`, is the shape keepalived and the load balancers
+in front of one leave behind: the box's own address comes with the prefix of
+the network it is on, because that is what tells it who is local, and a service
+address does not need one. The report names it and says plainly that nothing
+was measured from it.
+
+The shape is context and not a certainty, deliberately. Point-to-point links
+and several cloud instances present the box's own address as a `/32`, which is
+why the second address on the interface is what makes it mean anything: alone,
+a `/32` is just how that network is built.
+
+**What this does not do** is sweep a subnet. A range cannot be shown
+serviceable by probing it: a silent address in the range is the normal case,
+not a fault, so the sweep returns a list to interpret rather than a verdict,
+and from an internet-facing box it is noisy and slow besides. What makes a
+subnet serviceable through a service address is a short list, all of it
+checkable against the addresses the box genuinely holds: that it holds the
+address, that the prefix and routes cover the instances, that the gateway
+answers for it, and that a probe bound to it completes and returns.
+
 ## Every flag
 
 ```
@@ -1602,6 +1666,8 @@ and says the return path was not tested.
                          or 'common' for 22, 53, 80, 443, 8080.
                          Preset results are informational: naming a port asserts
                          you expect it open, a preset asserts nothing
+--source ADDR            send from this address, on a box that holds more than
+                         one. Critical if the box does not hold it
 --export FILE            write a report; a .html name gives a single
                          self-contained page, any other name gives JSON.
                          Use - for stdout
@@ -1698,7 +1764,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 989 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1005 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3084,7 +3150,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-989 tests, no dependencies, no network, a few seconds, so they run
+1005 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3163,7 +3229,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 154 findings with readable rules instead of
+> way out - and who owns it. Ranks 157 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

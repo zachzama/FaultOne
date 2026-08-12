@@ -94,6 +94,23 @@ if sys.version_info < MIN_PYTHON:
 
 OS_NAME = platform.system()  # 'Linux', 'Darwin' (macOS), or 'Windows'
 
+# The address every probe leaves from, when one was asked for. None means the
+# kernel chooses, which is right for a box with one address and wrong for the
+# box this exists for.
+#
+# A proxy holding a service address alongside its own has two different paths
+# off it, and the faults worth finding are exactly the ones that tell them
+# apart: policy routing, a return path that differs by source, an upstream
+# filter or NAT keyed on the source address, reverse-path filtering. Every one
+# of those works from the box's primary address and fails from the service
+# address, so a run that lets the kernel choose measures the wrong path and
+# reports it clean.
+#
+# A global rather than an argument threaded through thirty call sites, for the
+# same reason OS_NAME is one: it is a property of the run, fixed before any
+# check starts, and read in places too far apart to pass it between.
+SOURCE_ADDRESS = None
+
 # platform.system() answers with the kernel's name, so a Mac calls itself
 # "Darwin". That is accurate and means nothing to most people reading a report;
 # the other two already read the way anyone would say them. The raw value stays
@@ -490,9 +507,31 @@ def run_first_understood(variants, timeout=15):
     return result
 
 
+def _source_flag(tool):
+    """The flag this tool takes for "leave from this address", as a list.
+
+    Three spellings for one idea, and they are not interchangeable. Linux ping
+    takes -I, which also accepts an interface name; BSD and macOS ping take -S
+    and mean only an address; both traceroutes take -s. Windows ping has no
+    equivalent at all, so a bound run there is carried by the socket probes
+    alone, which do support it.
+
+    Empty when no source was asked for, so the command built is byte for byte
+    the one that was built before this existed.
+    """
+    if not SOURCE_ADDRESS:
+        return []
+    if tool == "ping":
+        if OS_NAME == "Windows":
+            return []
+        return ["-S" if OS_NAME == "Darwin" else "-I", SOURCE_ADDRESS]
+    return ["-s", SOURCE_ADDRESS]
+
+
 def cmd_ping(target, count=4, wait=2):
     if not valid_target(target):
         return bad_target()
+    src = _source_flag("ping")
     if OS_NAME == "Windows":
         return run(["ping", "-n", str(count), target])
     # -W is seconds on Linux but milliseconds on BSD/macOS - passing "2" there
@@ -500,9 +539,14 @@ def cmd_ping(target, count=4, wait=2):
     wait_arg = str(wait * 1000) if OS_NAME == "Darwin" else str(wait)
     # Without -W a ping that gets no reply waits on its own default, so the
     # timeout on run() is what stops it, not the missing flag.
+    #
+    # The source flag rides on both forms rather than being dropped with -W.
+    # Dropping it would silently answer a different question than the one
+    # asked, and a wrong answer to "can this address reach the target" is worse
+    # than no answer.
     return run_first_understood([
-        ["ping", "-c", str(count), "-W", wait_arg, target],
-        ["ping", "-c", str(count), target],
+        ["ping", "-c", str(count), "-W", wait_arg] + src + [target],
+        ["ping", "-c", str(count)] + src + [target],
     ])
 
 
@@ -513,12 +557,16 @@ def cmd_traceroute(target):
     # did not, and tracert is the one that costs a minute when the path does
     # not answer: on a Server Core box without it, that was an exception where
     # every other system returns "no utility found" and carries on.
+    src = _source_flag("traceroute")
     if OS_NAME == "Windows":
         if which("tracert"):
             return run(["tracert", "-h", "20", target], timeout=60)
     elif which("traceroute"):
-        return run(["traceroute", "-m", "20", "-w", "2", target], timeout=60)
+        return run(["traceroute", "-m", "20", "-w", "2"] + src + [target], timeout=60)
     elif which("tracepath"):
+        # tracepath has no source option. Left unbound rather than failed: the
+        # hop list is still the hop list, and the checks that must be bound are
+        # bound elsewhere.
         return run(["tracepath", target], timeout=60)
     return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
 
@@ -1286,6 +1334,48 @@ def _listener_address(bind_addr):
     return bind_addr.strip("[]")
 
 
+class SourceAddressUnavailable(OSError):
+    """The address this run was told to leave from is not on this box.
+
+    Its own type because it is a diagnosis, not a failure to probe. Everything
+    else that raises here means the far end did something; this means the near
+    end never had the address, and the two must not be reported alike.
+    """
+
+
+def connect_from(address, port, timeout):
+    """A TCP connection, leaving from SOURCE_ADDRESS when one was asked for.
+
+    The bind is the cheapest real check in the tool. An address this box does
+    not hold fails here with EADDRNOTAVAIL, in the kernel, before a packet is
+    sent: no timeout, no waiting on a far end, and no ambiguity about whose
+    fault it is.
+
+    That case is worth the separate exception because of what it means on a
+    redundant pair. A backup node does not hold the service address, so a run
+    on it that lets the kernel choose measures the node's own address, finds
+    the path healthy and says so, while the node serves nothing. "You are not
+    holding this address" is the finding, and it is the one a clean report on
+    the wrong box hides.
+    """
+    src = (SOURCE_ADDRESS, 0) if SOURCE_ADDRESS else None
+    try:
+        return socket.create_connection((address, port), timeout=timeout,
+                                        source_address=src)
+    except OSError as exc:
+        if src and getattr(exc, "errno", None) in _NO_SUCH_ADDRESS:
+            raise SourceAddressUnavailable(
+                "%s is not an address on this box" % SOURCE_ADDRESS)
+        raise
+
+
+# EADDRNOTAVAIL is what every platform returns for "bind to an address that is
+# not here". EINVAL joins it because Windows reports a bind to an address of
+# the wrong family that way, which is the same mistake and reads identically to
+# whoever typed it.
+_NO_SUCH_ADDRESS = {errno.EADDRNOTAVAIL, errno.EINVAL}
+
+
 def der_validity(der):
     """(notBefore, notAfter) as dates, read out of the certificate's own bytes.
 
@@ -1344,7 +1434,7 @@ def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
     # nothing - which makes the split unusually easy to read.
     try:
         started = time.monotonic()
-        raw = socket.create_connection((address, port), timeout=timeout)
+        raw = connect_from(address, port, timeout)
         connected = time.monotonic()
     except (OSError, ValueError) as e:
         result["unreachable_locally"] = str(e)
@@ -1419,7 +1509,7 @@ def cmd_own_tls(port, timeout=5, address="127.0.0.1"):
     # connection followed by a failed handshake is the service's TLS.
     try:
         started = time.monotonic()
-        raw = socket.create_connection((address, port), timeout=timeout)
+        raw = connect_from(address, port, timeout)
     except (OSError, ValueError) as e:
         result["unreachable_locally"] = str(e)
         return result
@@ -1468,7 +1558,7 @@ def cmd_tls_check_local(port, server_name, timeout=5, address="127.0.0.1"):
     out = {}
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((address, port), timeout=timeout) as raw:
+        with connect_from(address, port, timeout) as raw:
             with ctx.wrap_socket(raw, server_hostname=server_name) as sock:
                 cert = sock.getpeercert() or {}
         out["verified"] = True
@@ -1559,7 +1649,7 @@ def cmd_tls_check(host, port=443, timeout=5):
         # is one round trip and belongs to the path; the handshake is key
         # exchange and certificate work, and belongs to the server.
         started = time.monotonic()
-        with socket.create_connection((host, port), timeout=timeout) as raw:
+        with connect_from(host, port, timeout) as raw:
             connected = time.monotonic()
             with ctx.wrap_socket(raw, server_hostname=host) as sock:
                 cert = sock.getpeercert()
@@ -1577,7 +1667,7 @@ def cmd_tls_check(host, port=443, timeout=5):
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-            with socket.create_connection((host, port), timeout=timeout) as raw:
+            with connect_from(host, port, timeout) as raw:
                 with ctx.wrap_socket(raw, server_hostname=host) as sock:
                     der = sock.getpeercert(binary_form=True)
                     result.update({"ok": True, "verified": False,
@@ -2928,14 +3018,32 @@ def _flow_subnet(peer):
     return ".".join(octets[:3]) + ".0/24" if len(octets) == 4 else peer
 
 
+def _is_loopback(addr):
+    """The box talking to itself.
+
+    Split out from _flow_is_local because scope needs the two apart: loopback
+    is host scope and link-local is link scope, and a check that lumps them
+    together cannot tell "this address never leaves the box" from "this address
+    never leaves the segment". Everything that only needs "not the network
+    under test" still asks _flow_is_local and gets both.
+    """
+    lower = (addr or "").lower().strip("[]")
+    return lower.startswith("127.") or lower in ("::1", "localhost")
+
+
+def _is_link_local(addr):
+    """Self-assigned, or scoped to one segment. An IPv4 box on 169.254 never
+    heard from DHCP; an IPv6 fe80 address is on every interface regardless."""
+    lower = (addr or "").lower().strip("[]")
+    return lower.startswith("169.254.") or lower.startswith("fe80:")
+
+
 def _flow_is_local(peer):
     """Loopback and link-local peers are not the network under test. Loss on
     loopback is memory pressure, and must never read as a path fault."""
     if not peer:
         return True
-    lower = peer.lower().strip("[]")
-    return (lower.startswith("127.") or lower in ("::1", "localhost")
-            or lower.startswith("169.254.") or lower.startswith("fe80:"))
+    return _is_loopback(peer) or _is_link_local(peer)
 
 
 def _own_ssh_peer():
@@ -4674,6 +4782,173 @@ def has_ipv4(iface_result):
     return bool(re.search(r"\binet \d{1,3}(\.\d{1,3}){3}", out) or "IPv4 Address" in out)
 
 
+# ---------------------------------------------------------------------------
+# The addresses this box holds.
+#
+# has_ipv4 answers "is this box on the network", which is the right question
+# for a laptop and far too coarse for a proxy. A box terminating a service
+# address alongside its own management address has several, they behave
+# differently, and until now a report could not name one of them.
+# ---------------------------------------------------------------------------
+
+# An interface header, in the three shapes the three commands write it:
+#   ip addr:            "2: eth0: <BROADCAST,MULTICAST,UP>"
+#   ifconfig (both):    "eth0: flags=4163<UP,BROADCAST>"
+#   ipconfig /all:      "Ethernet adapter Ethernet:"
+_IFACE_HEADER = re.compile(
+    r"^(?:\d+:\s*(?P<numbered>[^:@\s]+)[:@]"
+    r"|(?P<bsd>[A-Za-z][\w.-]*):\s*flags="
+    r"|(?:\w[\w ]*adapter\s+(?P<win>[^:]+):))")
+
+_ADDR_LINE = re.compile(
+    r"\b(?P<family>inet6?)\s+(?P<addr>[0-9a-fA-F:.]+)"
+    r"(?:%[\w.-]+)?(?:/(?P<prefix>\d{1,3}))?", re.I)
+_NETMASK = re.compile(r"\bnetmask\s+(0x[0-9a-fA-F]{8}|\d{1,3}(?:\.\d{1,3}){3})")
+_PREFIXLEN = re.compile(r"\bprefixlen\s+(\d{1,3})")
+_SCOPE = re.compile(r"\bscope\s+(global|link|host|site)\b")
+
+# Windows names the parts on their own lines instead of one address line.
+_WIN_ADDR = re.compile(r"IP(?:v4|v6)? Address[.\s]*:\s*([0-9a-fA-F:.]+)", re.I)
+_WIN_MASK = re.compile(r"Subnet Mask[.\s]*:\s*(\d{1,3}(?:\.\d{1,3}){3})", re.I)
+
+
+def _mask_to_prefix(text):
+    """A netmask in any of the three notations, as a prefix length.
+
+    BSD writes it hex (0xffffff00), Linux ifconfig and Windows write it dotted
+    (255.255.255.0), and `ip` writes the prefix directly. Counting set bits
+    rather than looking the value up in a table means a non-contiguous mask -
+    legal to write, meaningless in practice - is counted rather than rejected,
+    which is the reading that cannot throw on a box someone has misconfigured.
+    """
+    if not text:
+        return None
+    try:
+        if text.startswith("0x"):
+            value = int(text, 16)
+        else:
+            parts = [int(p) for p in text.split(".")]
+            if len(parts) != 4 or any(p > 255 for p in parts):
+                return None
+            value = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+    except (TypeError, ValueError):
+        return None
+    return bin(value).count("1")
+
+
+def _scope_of(addr, stated):
+    """Where an address is usable, taken from the text or read off the address.
+
+    Only `ip` states it. For everything else it comes from the address itself,
+    which is not a guess: the ranges are what define the scope.
+    """
+    if stated:
+        return stated
+    if _is_loopback(addr) or (addr or "").strip() == "::":
+        return "host"
+    if _is_link_local(addr):
+        return "link"
+    return "global"
+
+
+def parse_own_addresses(iface_result):
+    """Every address on this box as {address, prefix, family, interface, scope}.
+
+    One parser over all four command dialects rather than one each, because
+    they differ in punctuation and not in content: an interface header, then
+    indented address lines beneath it. Windows is the exception that spends a
+    line per field, so its mask is carried down to the address above it.
+
+    Addresses are kept in the order the commands print them, which is the order
+    they were configured. On an interface holding a primary and a service
+    address, that ordering is itself information: the first is the one the
+    kernel will choose when nobody says otherwise.
+    """
+    if not iface_result.get("ok"):
+        return []
+    out = iface_result.get("stdout") or ""
+    found, iface, pending = [], None, None
+
+    for line in out.splitlines():
+        header = _IFACE_HEADER.match(line.strip()) or _IFACE_HEADER.match(line)
+        if header:
+            iface = (header.group("numbered") or header.group("bsd")
+                     or (header.group("win") or "").strip())
+            pending = None
+            continue
+
+        win = _WIN_ADDR.search(line)
+        if win:
+            pending = {"address": win.group(1), "prefix": None,
+                       "family": "inet6" if ":" in win.group(1) else "inet",
+                       "interface": iface,
+                       "scope": _scope_of(win.group(1), None)}
+            found.append(pending)
+            continue
+        mask = _WIN_MASK.search(line)
+        if mask and pending is not None:
+            pending["prefix"] = _mask_to_prefix(mask.group(1))
+            pending = None
+            continue
+
+        m = _ADDR_LINE.search(line)
+        if not m:
+            continue
+        addr = m.group("addr")
+        # "inet" is also a word inside flag lists and encapsulation names; an
+        # address has to look like one.
+        if "." not in addr and ":" not in addr:
+            continue
+        prefix = m.group("prefix")
+        if prefix is not None:
+            prefix = int(prefix)
+        else:
+            plen = _PREFIXLEN.search(line)
+            netmask = _NETMASK.search(line)
+            prefix = (int(plen.group(1)) if plen
+                      else _mask_to_prefix(netmask.group(1)) if netmask else None)
+        scope = _SCOPE.search(line)
+        found.append({"address": addr, "prefix": prefix,
+                      "family": m.group("family").lower(), "interface": iface,
+                      "scope": _scope_of(addr, scope.group(1) if scope else None)})
+    return found
+
+
+def service_addresses(addresses):
+    """The addresses that look configured onto this box to be served, not to be
+    the box - keepalived, VRRP, a load balancer's front end.
+
+    The signature is a host route sitting on an interface that also carries a
+    real subnet: /32 for IPv4 or /128 for IPv6 beside a /24. A box's own
+    address comes with the prefix of the network it is on, because that is what
+    tells it who is local. A service address does not need that and is
+    conventionally given none, so the pair on one interface is the shape worth
+    reporting.
+
+    Deliberately a shape and not a certainty. A point-to-point link and some
+    cloud instances present a /32 for the box's own address, which is why this
+    is context in a report rather than a fault, and why it requires the second
+    address to be there: alone, a /32 is just how that network is built.
+    """
+    host_route = {"inet": 32, "inet6": 128}
+    by_iface = {}
+    for entry in addresses:
+        if entry.get("scope") != "global":
+            continue
+        by_iface.setdefault(entry.get("interface"), []).append(entry)
+
+    out = []
+    for entries in by_iface.values():
+        for entry in entries:
+            if entry.get("prefix") != host_route.get(entry.get("family")):
+                continue
+            if any(o is not entry and o["family"] == entry["family"]
+                   and o.get("prefix") not in (None, host_route[o["family"]])
+                   for o in entries):
+                out.append(entry)
+    return out
+
+
 def _global_ipv6(out):
     """A routable IPv6 address, ignoring link-local and loopback."""
     for m in re.finditer(r"\binet6\s+([0-9a-f:]+)", out or "", re.I):
@@ -4701,6 +4976,11 @@ def _global_ipv6(out):
 
 # code -> (owner, headline, what to do next)
 VERDICT_RULES = [
+    ("source_address_not_held", "this device, or whatever should have failed over to it",
+     "The address this run was told to measure from is not on this box",
+     "Either the address moved to its partner and this is now the standby, or it "
+     "was never configured here. Check the failover state before reading anything "
+     "else in this report: none of it was measured from the address you asked for."),
     ("no_ipv4", "this device",
      "No IP address on any interface - this device never got onto the network",
      "Check the cable is seated and the link light is on, then whether DHCP is "
@@ -5328,6 +5608,10 @@ VERDICT_RULES = [
 # Findings that are context or housekeeping, never a root cause. Kept explicit
 # so the coverage test can tell "deliberately unranked" from "forgotten".
 VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_port",
+                  # Which address the run left from, and which addresses this box
+                  # serves rather than owns. Both reframe how every measurement
+                  # below should be read, and neither is a fault.
+                  "service_address_present", "bound_to_source_address",
                   "baseline_changes", "icmp_filtered", "tcp_flow_sample_partial",
                   # Both say "this looked like an outage and is not" - context
                   # that stops something else being misread, never a fault.
@@ -5542,6 +5826,10 @@ _LOCAL_FAULTS = (
     "neigh_table_full", "neigh_table_near_limit",
     "no_ipv4", "duplicate_ip", "virtual_router_conflict", "mtu_nonstandard",
     "no_route_to_target",
+    # An address that should be here and is not. Local even when the reason is
+    # a failover that happened elsewhere: the box being asked is the box that
+    # does not have it.
+    "source_address_not_held",
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
     "nic_ring_overruns", "frame_length_errors",
@@ -5708,7 +5996,8 @@ STAGE_RULES = [
       "link_busy",
       "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical",
       "cpu_throttled_historical"}),
-    ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict"},
+    ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict",
+                 "source_address_not_held"},
      {"interfaces_unreadable", "routes_unreadable",
       "neigh_table_full", "neigh_table_near_limit"}),
     ("gateway", {"gw_unreachable"},
@@ -5769,6 +6058,10 @@ RAW_STAGE = {
     # to the address stage rather than the link one: it says the box has an
     # address, not which interface carries it.
     "kernel_source_address": "address",
+    # Which addresses this box holds, which of them it serves rather than
+    # owns, and which one this run left from.
+    "own_addresses": "address", "service_addresses": "address",
+    "source_address": "address", "source_address_held": "address",
     "neigh_table": "address",
     "ping_gateway": "gateway",
     "ping_internet": "internet", "path_trace": "internet",
@@ -9422,6 +9715,104 @@ def _all_clear(raw, findings, check_ports, dns_failed):
             "message": msg,
         })
 
+def source_address_is_held(address):
+    """Is this address on this box? Ask the kernel to bind to it.
+
+    Definitive where reading a command's output is not: it is the same question
+    the kernel answers when a probe actually leaves, so it cannot disagree with
+    the measurement it is vouching for. It also works when nothing could list
+    the interfaces, which on an appliance is the case that matters.
+
+    Costs nothing and sends nothing. A bind reserves a local address; no packet
+    leaves, no name is resolved, and the socket is closed immediately.
+
+    A stream socket rather than a datagram one, deliberately. This never calls
+    listen(), and a TCP socket that has not listened cannot accept a connection
+    even in principle, so the check cannot be read as this program opening a
+    port. A bound UDP socket would answer the same question and would be able
+    to receive while it was open, which is a thing this program does not do.
+    """
+    family = socket.AF_INET6 if ":" in (address or "") else socket.AF_INET
+    sock = None
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.bind((address, 0))
+        return True
+    except (OSError, socket.error):
+        return False
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except (OSError, socket.error):
+                pass
+
+
+def _check_source_address(raw, findings):
+    """What this box holds, and whether it holds what the run was told to use.
+
+    Two findings out of one reading. Without --source, a service address is
+    named as context: it changes how every measurement below should be read,
+    because the kernel will not choose it and so none of them are about it.
+
+    With --source, this is the finding that outranks the rest of the run. If
+    the address is not here, nothing measured afterwards is about the path
+    anyone asked about, and the danger is that it all looks fine: on a
+    redundant pair the backup node holds its own address, reaches everything
+    from it, and reports a healthy box that is serving nothing.
+    """
+    addresses = raw.get("own_addresses") or []
+    service = service_addresses(addresses)
+    raw["service_addresses"] = service
+
+    if service and not SOURCE_ADDRESS:
+        named = ", ".join("%s on %s" % (s["address"], s["interface"] or "?")
+                          for s in service[:4])
+        findings.append({
+            "severity": "ok",
+            "code": "service_address_present",
+            "layer": 3,
+            "message": f"This box holds {len(service)} address(es) configured as a service "
+                       f"address rather than as the box's own ({named}). Nothing in this "
+                       f"report was measured from them: the kernel sends from the "
+                       f"interface's primary address unless told otherwise. Re-run with "
+                       f"--source to measure the path a client of that address actually "
+                       f"gets.",
+        })
+
+    if not SOURCE_ADDRESS:
+        return
+
+    raw["source_address"] = SOURCE_ADDRESS
+    held = source_address_is_held(SOURCE_ADDRESS)
+    raw["source_address_held"] = held
+    if held:
+        match = [a for a in addresses if a["address"] == SOURCE_ADDRESS]
+        where = (" (%s on %s)" % ("/%s" % match[0]["prefix"] if match[0]["prefix"]
+                                  else "no prefix", match[0]["interface"] or "?")
+                 ) if match else ""
+        findings.append({
+            "severity": "ok",
+            "code": "bound_to_source_address",
+            "layer": 3,
+            "message": f"Every check that leaves this box left from {SOURCE_ADDRESS}"
+                       f"{where}, so the path measured is the one a client of that "
+                       f"address gets, including its return path.",
+        })
+    else:
+        findings.append({
+            "severity": "critical",
+            "code": "source_address_not_held",
+            "layer": 3,
+            "message": f"{SOURCE_ADDRESS} is not an address on this box, so nothing here "
+                       f"was measured from it. The kernel refused to bind to it, which is "
+                       f"as certain as this gets. On a redundant pair this is what a "
+                       f"standby node looks like: the address lives on its partner, and a "
+                       f"run that let the kernel choose would have measured this node's "
+                       f"own address and called the box healthy.",
+        })
+
+
 def _check_addressing(raw, findings):
     """Does this device have an address at all?
 
@@ -9436,6 +9827,8 @@ def _check_addressing(raw, findings):
     # correctly today because both callers test `is False`, and breaks the
     # first time anyone writes `if raw["ipv4"]`. A key should mean one thing.
     raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
+    raw["own_addresses"] = parse_own_addresses(raw["interfaces"])
+    _check_source_address(raw, findings)
     if not raw["interfaces"].get("ok"):
         # No command could describe the interfaces, so ask the kernel for the
         # one fact this finding turns on. It answers on a box shipping none of
@@ -12726,6 +13119,13 @@ def build_parser():
     ap.add_argument("--check-ports", metavar="PORTS",
                      help="comma-separated ports to check on the target "
                           "(e.g. 53,443,8080), or 'common' for 22, 53, 80, 443, 8080")
+    ap.add_argument("--source", metavar="ADDR",
+                     help="address to send from, for a box holding more than one. A "
+                          "proxy's service address and its own address take different "
+                          "paths off the box, and only this one measures the path a "
+                          "client of that address gets. Reported as critical if this box "
+                          "does not hold the address, which is what a standby node looks "
+                          "like. Default: whichever address the kernel picks")
     return ap
 
 
@@ -12778,6 +13178,17 @@ def main():
         if args.target.strip().lower() != "auto" and not valid_target(args.target):
             print(f"Invalid --target: {args.target!r}", file=sys.stderr)
             raise SystemExit(EXIT_UNKNOWN)
+        if args.source:
+            # An address, not a hostname and not an interface name. Linux ping
+            # would accept an interface for -I and nothing else here would,
+            # which is a flag that means one thing on one platform and another
+            # elsewhere. Rejected at the front rather than half-honoured.
+            if not valid_ip(args.source):
+                print(f"Invalid --source: {args.source!r} - give an address this box "
+                      f"holds, not a hostname or an interface name", file=sys.stderr)
+                raise SystemExit(EXIT_UNKNOWN)
+            global SOURCE_ADDRESS
+            SOURCE_ADDRESS = args.source
         check_ports = []
         ports_speculative = False
         if args.check_ports:

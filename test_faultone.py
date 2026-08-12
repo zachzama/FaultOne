@@ -14,6 +14,7 @@ SPDX-License-Identifier: MIT
 """
 
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -7455,9 +7456,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 597),
-            "compressed": (len(gzip.compress(raw, 9)), 178),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 127),
+            "on disk": (len(raw), 656),
+            "compressed": (len(gzip.compress(raw, 9)), 197),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 142),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -7469,8 +7470,8 @@ class TestDocsMatchReality(unittest.TestCase):
                     f"the readme says {quoted} KB {label}, it is now "
                     f"{measured / 1024:.0f} KB")
         cut = 100 * (1 - len(gzip.compress(stripped, 9)) / len(raw))
-        self.assertIn("79%", readme)
-        self.assertLess(abs(cut - 79), 4, f"the quoted 79% saving is now {cut:.0f}%")
+        self.assertIn("78%", readme)
+        self.assertLess(abs(cut - 78), 4, f"the quoted 78% saving is now {cut:.0f}%")
 
     def test_the_readme_tells_ssh_to_compress(self):
         """OpenSSH does not compress by default, so an example without -C sends
@@ -8510,6 +8511,228 @@ class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
                 "stdout": "4 packets transmitted, 4 packets received, 0% packet loss"}
         _res, seen = self.run_with([good])
         self.assertEqual(len(seen), 1, "a working command was run twice")
+
+
+class TestTheAddressesThisBoxHolds(unittest.TestCase):
+    """A proxy holds more than one address and they do not behave alike. Until
+    this existed the tool could only answer "is there an address at all", which
+    is the right question for a laptop and useless for a box terminating a
+    service address in front of instances."""
+
+    IP_ADDR = ("1: lo: <LOOPBACK,UP> mtu 65536 qdisc noqueue state UNKNOWN\n"
+               "    inet 127.0.0.1/8 scope host lo\n"
+               "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq\n"
+               "    inet 10.20.30.40/24 brd 10.20.30.255 scope global eth0\n"
+               "    inet 203.0.113.10/32 scope global eth0\n"
+               "    inet6 2001:db8::a/64 scope global\n"
+               "    inet6 fe80::5054:ff:fe12:3456/64 scope link\n")
+    BSD = ("lo0: flags=8049<UP,LOOPBACK,RUNNING> mtu 16384\n"
+           "\tinet 127.0.0.1 netmask 0xff000000\n"
+           "en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500\n"
+           "\tinet 10.20.30.40 netmask 0xffffff00 broadcast 10.20.30.255\n"
+           "\tinet6 fe80::1%en0 prefixlen 64 scopeid 0x6\n")
+    LINUX_IFCONFIG = ("eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n"
+                      "        inet 10.20.30.40  netmask 255.255.255.0  "
+                      "broadcast 10.20.30.255\n"
+                      "        inet6 fe80::1  prefixlen 64  scopeid 0x20<link>\n")
+    WINDOWS = ("Ethernet adapter Ethernet0:\n\n"
+               "   IPv4 Address. . . . . . . . . . . : 10.20.30.40(Preferred)\n"
+               "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+               "   Default Gateway . . . . . . . . . : 10.20.30.1\n")
+
+    def rows(self, text):
+        return nd.parse_own_addresses({"ok": True, "stdout": text})
+
+    def test_ip_addr_gives_every_address_with_its_interface(self):
+        rows = self.rows(self.IP_ADDR)
+        self.assertEqual([(r["address"], r["prefix"], r["interface"]) for r in rows],
+                         [("127.0.0.1", 8, "lo"),
+                          ("10.20.30.40", 24, "eth0"),
+                          ("203.0.113.10", 32, "eth0"),
+                          ("2001:db8::a", 64, "eth0"),
+                          ("fe80::5054:ff:fe12:3456", 64, "eth0")])
+
+    def test_the_other_three_dialects_agree_on_the_same_box(self):
+        """One parser over four command outputs, because they differ in
+        punctuation and not in content. A parser each is four things to keep in
+        step and three of them untested on the machine anyone runs this on."""
+        for name, text in (("bsd", self.BSD), ("linux ifconfig", self.LINUX_IFCONFIG),
+                           ("windows", self.WINDOWS)):
+            with self.subTest(dialect=name):
+                rows = [r for r in self.rows(text) if r["address"] == "10.20.30.40"]
+                self.assertEqual(len(rows), 1, "the address was not found")
+                self.assertEqual(rows[0]["prefix"], 24,
+                                 "the netmask notation was not read as /24")
+
+    def test_a_netmask_is_read_in_all_three_notations(self):
+        self.assertEqual(nd._mask_to_prefix("0xffffff00"), 24)
+        self.assertEqual(nd._mask_to_prefix("255.255.255.0"), 24)
+        self.assertEqual(nd._mask_to_prefix("255.255.255.255"), 32)
+        self.assertIsNone(nd._mask_to_prefix("not-a-mask"))
+
+    def test_scope_is_read_off_the_address_when_nothing_states_it(self):
+        """Only `ip` says it. For the rest the ranges define it, so this is not
+        a guess - but loopback and link-local must not be lumped together, or
+        "never leaves the box" and "never leaves the segment" become one thing."""
+        rows = {r["address"]: r["scope"] for r in self.rows(self.BSD)}
+        self.assertEqual(rows["127.0.0.1"], "host")
+        self.assertEqual(rows["fe80::1"], "link")
+        self.assertEqual(rows["10.20.30.40"], "global")
+
+    def test_a_host_route_beside_a_subnet_is_a_service_address(self):
+        """The keepalived signature, and every load balancer that sits on one:
+        a /32 on an interface that also carries a real subnet. The box's own
+        address comes with the prefix of the network it is on because that is
+        what tells it who is local; a service address does not need one."""
+        svc = nd.service_addresses(self.rows(self.IP_ADDR))
+        self.assertEqual([s["address"] for s in svc], ["203.0.113.10"])
+
+    def test_a_lone_host_route_is_not_a_service_address(self):
+        """Point-to-point links and several cloud instances present the box's
+        own address as a /32. Alone it is how that network is built, so the
+        second address on the interface is what makes the shape mean anything."""
+        text = ("2: eth0: <BROADCAST,UP> mtu 1500\n"
+                "    inet 10.20.30.40/32 scope global eth0\n")
+        self.assertEqual(nd.service_addresses(self.rows(text)), [])
+
+    def test_nothing_is_claimed_when_the_interfaces_could_not_be_read(self):
+        self.assertEqual(nd.parse_own_addresses({"ok": False, "error": "x"}), [])
+
+
+class TestLeavingFromAChosenAddress(unittest.TestCase):
+    """--source. On a box with one address it changes nothing; on a proxy it is
+    the difference between measuring the path a client of the service address
+    gets and measuring a path nobody uses.
+
+    The faults it exists to find are the ones that discriminate by source:
+    policy routing, a return path that differs per address, an upstream filter
+    or NAT keyed on it, reverse-path filtering. Every one of those is invisible
+    to a run that lets the kernel choose, and reports clean."""
+
+    def setUp(self):
+        self.saved = (nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run)
+
+    def tearDown(self):
+        nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run = self.saved
+
+    def built(self, tool, os_name, source):
+        seen = []
+        nd.SOURCE_ADDRESS, nd.OS_NAME = source, os_name
+        nd.run = lambda cmd, **kw: (seen.append(cmd),
+                                    {"ok": True, "cmd": " ".join(cmd), "code": 0,
+                                     "stdout": "x", "stderr": ""})[1]
+        (nd.cmd_ping if tool == "ping" else nd.cmd_traceroute)("8.8.8.8")
+        return seen
+
+    def test_each_platform_gets_the_flag_it_actually_takes(self):
+        """Three spellings for one idea and they are not interchangeable. Linux
+        ping takes -I, BSD and macOS take -S, both traceroutes take -s."""
+        self.assertIn("-I", self.built("ping", "Linux", "10.0.0.9")[0])
+        self.assertIn("-S", self.built("ping", "Darwin", "10.0.0.9")[0])
+        self.assertIn("-s", self.built("traceroute", "Linux", "10.0.0.9")[0])
+
+    def test_windows_ping_has_no_such_flag_and_is_not_given_one(self):
+        """It has no equivalent, so a bound run there rests on the socket
+        probes, which do support it. Inventing a flag would fail the command
+        and lose reachability entirely."""
+        cmd = self.built("ping", "Windows", "10.0.0.9")[0]
+        self.assertNotIn("-S", cmd)
+        self.assertNotIn("-I", cmd)
+        # The built command is not enough on its own: the Windows branch does
+        # not use the flag list at all, so it stays correct however wrong the
+        # list is. Ask the thing that decides, or this guard is decoration.
+        nd.OS_NAME, nd.SOURCE_ADDRESS = "Windows", "10.0.0.9"
+        self.assertEqual(nd._source_flag("ping"), [],
+                         "a flag was produced for a ping that has none")
+
+    def test_the_source_survives_the_retry_that_drops_the_tuning_flag(self):
+        """cmd_ping asks twice when the first form is rejected. The source must
+        ride both forms: dropping it would answer a different question than the
+        one asked, and a confident wrong answer is worse than none."""
+        nd.SOURCE_ADDRESS, nd.OS_NAME = "10.0.0.9", "Linux"
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(cmd)
+            if "-W" in cmd:
+                return {"ok": True, "cmd": " ".join(cmd), "code": 1, "stdout": "",
+                        "stderr": "ping: invalid option -- 'W'"}
+            return {"ok": True, "cmd": " ".join(cmd), "code": 0,
+                    "stdout": "0% packet loss", "stderr": ""}
+        nd.run = fake
+        nd.cmd_ping("8.8.8.8")
+        self.assertEqual(len(seen), 2, "the retry did not happen")
+        self.assertIn("-I", seen[1], "the source was dropped along with -W")
+
+    def test_without_a_source_the_commands_are_what_they_always_were(self):
+        """The regression that matters most. Nobody passing --source is the
+        common case, and this must not have changed their run at all."""
+        self.assertEqual(self.built("ping", "Linux", None)[0],
+                         ["ping", "-c", "4", "-W", "2", "8.8.8.8"])
+        self.assertEqual(self.built("traceroute", "Linux", None)[0],
+                         ["traceroute", "-m", "20", "-w", "2", "8.8.8.8"])
+
+    def test_holding_an_address_is_decided_by_the_kernel_not_by_parsing(self):
+        """Loopback is always here and a documentation address never is, on any
+        machine this runs on, so this needs no network and no fixture."""
+        self.assertTrue(nd.source_address_is_held("127.0.0.1"))
+        self.assertFalse(nd.source_address_is_held("203.0.113.10"))
+
+    def test_the_check_never_opens_a_port(self):
+        """It binds, which reserves an address, and never listens. A bound TCP
+        socket that has not listened cannot accept a connection even in
+        principle - the property this program is not allowed to lose."""
+        import ast
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(nd.source_address_is_held)))
+        # The calls it makes, not the words it contains. Its own docstring
+        # explains why it never listens, and a text search finds that sentence
+        # and calls it a violation.
+        called = {n.func.attr for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        self.assertIn("bind", called)
+        self.assertNotIn("listen", called)
+        self.assertNotIn("accept", called)
+        self.assertIn("SOCK_STREAM", names,
+                      "a datagram socket could receive while it was open")
+
+    def test_an_unheld_source_fails_at_bind_as_its_own_kind_of_error(self):
+        """It is a diagnosis, not a failed probe. Everything else raised here
+        means the far end did something; this means the near end never had the
+        address, and the report must not blame the far end for it."""
+        nd.SOURCE_ADDRESS = "203.0.113.10"
+        with self.assertRaises(nd.SourceAddressUnavailable):
+            nd.connect_from("192.0.2.1", 80, 2)
+
+    def test_an_address_this_box_does_not_hold_is_critical_and_is_the_verdict(self):
+        """Severity is the whole point of this finding. As a warning it sits in
+        a list under a green verdict, which is the exact reading it exists to
+        prevent: a standby node measuring its own address and looking healthy
+        while the service address lives on its partner."""
+        setup, kw = S["source_address_not_held"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(quick=False, **scenario_kwargs(kw))
+        found = [f for f in report["findings"]
+                 if f["code"] == "source_address_not_held"]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["severity"], "critical")
+        self.assertIn("source_address_not_held", report["verdict"]["based_on"],
+                      "it did not become the root cause, so the run still "
+                      "reads as being about a path nobody asked for")
+
+    def test_without_a_source_that_error_cannot_be_raised(self):
+        """The kernel picks an address it holds, so the case does not arise -
+        and a probe that fails for an ordinary reason must not be reported as
+        an address this box does not have."""
+        nd.SOURCE_ADDRESS = None
+        try:
+            nd.connect_from("192.0.2.1", 9, 0.2)
+        except nd.SourceAddressUnavailable:
+            self.fail("an unbound probe was blamed on the source address")
+        except OSError:
+            pass
 
 
 class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
@@ -10559,6 +10782,36 @@ def _(nd): nd.cmd_routes = lambda: {"ok": False, "cmd": "netstat", "error": "com
 
 @scenario("no_gateway")
 def _(nd): nd.cmd_routes = lambda: {"ok": True, "cmd": "ip route", "stdout": "10.0.0.0/24 dev eth0\n"}
+
+# A proxy holding a service address beside its own: the /32 next to the /24 is
+# the shape keepalived and every load balancer in front of one leaves behind.
+_VIP_IFACES = {"ok": True, "cmd": "ip addr", "stdout":
+               "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n"
+               "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+               "    inet 10.0.0.200/32 scope global eth0\n"}
+
+
+@scenario("service_address_present")
+def _(nd): nd.cmd_interfaces = lambda: _VIP_IFACES
+
+
+@scenario("bound_to_source_address")
+def _(nd):
+    nd.cmd_interfaces = lambda: _VIP_IFACES
+    nd.SOURCE_ADDRESS = "10.0.0.200"
+    # The bind is stubbed because the scenario is about the finding, not about
+    # the kernel: no test machine holds this address. What the bind really does
+    # is pinned separately, against addresses the running box does and does not
+    # have.
+    nd.source_address_is_held = lambda a: True
+
+
+@scenario("source_address_not_held")
+def _(nd):
+    nd.cmd_interfaces = lambda: _VIP_IFACES
+    nd.SOURCE_ADDRESS = "10.0.0.201"
+    nd.source_address_is_held = lambda a: False
+
 
 @scenario("gw_unreachable")
 def _(nd):

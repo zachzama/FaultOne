@@ -1,6 +1,6 @@
 # FaultOne
 
-**154 findings it can reach. One line saying which one to fix first.**
+**157 findings it can reach. One line saying which one to fix first.**
 
 ```bash
 python3 faultone.py --report                    # what's wrong, in this terminal
@@ -81,8 +81,8 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 597 KB of
-repetitive text: it goes over the wire at 178 KB with compression on, for the
+`-C` because OpenSSH doesn't compress by default, and the file is 656 KB of
+repetitive text: it goes over the wire at 197 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -91,13 +91,14 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 127 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 142 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
-Stripped and compressed together it's 127 KB instead of 597. That is 79%
-less, which is eleven minutes down to just over two on a 9600-baud console
-(8N1, so 960 bytes a second), and nothing you'd notice on anything faster.
+Stripped and compressed together it's 142 KB instead of 656. That is 78%
+less, which is under twelve minutes down to two and a half on a 9600-baud
+console (8N1, so 960 bytes a second), and nothing you'd notice on anything
+faster.
 
 **Where the report goes** is a separate choice from what it looks at. Two
 flags, and they compose:
@@ -279,8 +280,8 @@ directions.
 
 ### What it actually checks
 
-**33 things are inspected**, and **154 distinct conclusions** can come out of
-them: 131 are faults, 23 are context.
+**33 things are inspected**, and **157 distinct conclusions** can come out of
+them: 132 are faults, 25 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -372,7 +373,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 989 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1005 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

@@ -1414,17 +1414,19 @@ license server, the destination a user is complaining about. That is the path
 whose loss matters to you, and the one whose owner you can call.
 
 If you need a neutral public host - proving the line itself works, or comparing
-two sites - these answer ICMP and are stable:
+two sites - these answer ICMP, which means every check has something to measure:
 
 | Host | Notes |
 |---|---|
 | `8.8.8.8`, `8.8.4.4` | Google Public DNS. Anycast, so this reaches the nearest edge |
 | `9.9.9.9` | Quad9. Anycast, same caveat |
 
-**Anycast is the caveat that matters.** All of the above answer from whichever
-edge is closest, often inside your own ISP, so a clean result proves the first
-few hops and nothing about a long path. To measure a path with distance in it,
-aim at a fixed regional endpoint instead:
+**Anycast is the first caveat.** Both answer from whichever edge is closest,
+often inside your own ISP, so a clean result proves the first few hops and
+little about a long path.
+
+**Most cloud endpoints do not answer ICMP at all**, which is the second. A
+regional endpoint looks like the right way to put distance in the path:
 
 | Region | Endpoint |
 |---|---|
@@ -1434,9 +1436,28 @@ aim at a fixed regional endpoint instead:
 | Asia Pacific | `ec2.ap-southeast-1.amazonaws.com` (Singapore), `ec2.ap-northeast-1.amazonaws.com` (Tokyo) |
 | South America | `ec2.sa-east-1.amazonaws.com` |
 
-Those are regional rather than anycast, so a trace to one crosses real
-distance. They are also large, well-connected and unlikely to disappear, which
-is what makes a comparison over months worth anything.
+Those resolve and accept TCP on 443, and they are regional rather than anycast,
+so the path to one has real distance in it. They drop ping. Aimed at one of
+them this tool falls back to reaching the target the way an application would,
+so reachability and the verdict are sound - a healthy box against
+`ec2.us-east-1.amazonaws.com` reports no fault and exits 0.
+
+What you lose is the part that needs ICMP, and it is worth knowing exactly
+what that looks like. The do-not-fragment probes a full run sends sometimes get
+through to these endpoints and sometimes do not - measured here, roughly one
+run in three came back with `pmtu_unmeasurable`. When it fires on an otherwise
+clean box it becomes the headline, so the report leads with a sentence about
+filtered probes rather than about your network, and the run exits 1 rather
+than 0 because it is a warning about coverage.
+
+Nothing is wrong when that happens, and the message says so. But a target that
+intermittently turns a clean report into a warning is a poor default for a
+scheduled check. Pair these with `--quick`, which skips path MTU entirely, or
+keep them for the questions they answer well: reachability and the shape of a
+long path.
+
+If path MTU is what you are chasing, aim at something that answers ICMP: a host
+you run, your own gateway, or one of the resolvers above.
 
 Two things to know before reading too much into any of them. A public host is
 under no obligation to answer you: ICMP is commonly rate-limited or

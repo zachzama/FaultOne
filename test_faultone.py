@@ -9184,9 +9184,10 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
         # Everything that sends off the box. Delegators are named with what
         # they delegate to, since the binding lives one level down.
         senders = {
-            "cmd_ping": None, "cmd_traceroute": None, "cmd_path_mtu": None,
+            "cmd_ping": None, "cmd_traceroute": None,
             "cmd_traceroute_tcp": None, "cmd_dns": None, "cmd_tls_check": None,
             "cmd_check_port": "_connect_once", "cmd_dns_health": "dns_query",
+            "cmd_path_mtu": "_dont_fragment_ping",
         }
         bodies = {}
         for node in ast.walk(tree):
@@ -9247,6 +9248,23 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
         nd.SOURCE_ADDRESS = "2001:db8::9"
         self.assertIsNone(nd._source_for(nd.socket.AF_INET))
         self.assertEqual(nd._source_for(nd.socket.AF_INET6), ("2001:db8::9", 0))
+
+    def test_the_do_not_fragment_ping_is_one_construction_per_platform(self):
+        """The point of pulling this out of the probe loop. It was built three
+        times inline, so adding the source flag meant editing three lines and
+        getting one wrong would have bound two platforms and silently not the
+        third. Read directly now, rather than inferred from what the loop ran.
+
+        The flags are what set the do-not-fragment bit and the size, and they
+        are not interchangeable: -M do is Linux, -D is BSD, -f is Windows, and
+        Windows sizes with -l where the others use -s."""
+        for os_name, expected in (
+                ("Linux", ["ping", "-M", "do", "-s", "1472", "-c", "1", "-W", "2", "8.8.8.8"]),
+                ("Darwin", ["ping", "-D", "-s", "1472", "-c", "1", "-t", "3", "8.8.8.8"]),
+                ("Windows", ["ping", "-f", "-l", "1472", "-n", "1", "-w", "2000", "8.8.8.8"])):
+            with self.subTest(os=os_name):
+                nd.OS_NAME, nd.SOURCE_ADDRESS = os_name, None
+                self.assertEqual(nd._dont_fragment_ping(1472, "8.8.8.8"), expected)
 
     def test_the_path_mtu_probe_is_bound_on_every_platform(self):
         """It builds its own pings rather than going through cmd_ping, so it

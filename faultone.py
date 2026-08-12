@@ -4162,6 +4162,34 @@ def _pmtu_signalled(res):
     return int(found.group(1)) if found else True
 
 
+def _dont_fragment_ping(payload, target):
+    """One do-not-fragment ping of a given size, in each platform's spelling.
+
+    Three ways to say the same thing. Windows sets the bit with -f and sizes
+    with -l, BSD and macOS use -D and -s, Linux wants -M do. The wait flag
+    differs too, and the source flag differs again, which _source_flag already
+    knows about.
+
+    Built here rather than in the probe loop, where the same construction
+    appeared three times. That is not a tidiness point: adding source binding
+    meant editing all three lines, getting one wrong would have bound two
+    platforms and silently not the third, and a fourth platform would be a
+    fourth place to forget. One place to change is also one place to read when
+    the question is what this actually sent.
+
+    Path MTU is a property of a path, and a box holding two addresses can have
+    two of them: a tunnel on one and not the other is the ordinary way that
+    happens. Measured unbound, the primary address's path MTU was reported as
+    the answer for whichever address was asked about.
+    """
+    src = _source_flag("ping")
+    if OS_NAME == "Windows":
+        return ["ping", "-f", "-l", str(payload), "-n", "1", "-w", "2000"] + src + [target]
+    if OS_NAME == "Darwin":
+        return ["ping", "-D", "-s", str(payload), "-c", "1", "-t", "3"] + src + [target]
+    return ["ping", "-M", "do", "-s", str(payload), "-c", "1", "-W", "2"] + src + [target]
+
+
 def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     """Find the largest packet that actually reaches the target unfragmented.
 
@@ -4176,20 +4204,10 @@ def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     # Probe the configured MTU first, then common tunnel sizes (PPPoE, IPsec,
     # GRE/VXLAN), then a floor that almost anything passes.
     candidates = [c for c in (ceiling, 1492, 1400, 1280, 1000) if c <= ceiling]
-    # Path MTU is a property of a path, and a box holding two addresses can
-    # have two: a tunnel on one and not the other is the ordinary way that
-    # happens. Measured unbound it was the primary address's path MTU reported
-    # as the answer for whichever address was asked about.
-    src = _source_flag("ping")
     attempts = []
     for mtu in candidates:
         payload = mtu - MTU_OVERHEAD
-        if OS_NAME == "Windows":
-            cmd = ["ping", "-f", "-l", str(payload), "-n", "1", "-w", "2000"] + src + [target]
-        elif OS_NAME == "Darwin":
-            cmd = ["ping", "-D", "-s", str(payload), "-c", "1", "-t", "3"] + src + [target]
-        else:
-            cmd = ["ping", "-M", "do", "-s", str(payload), "-c", "1", "-W", "2"] + src + [target]
+        cmd = _dont_fragment_ping(payload, target)
         res = run(cmd, timeout=6)
         got = bool(res.get("ok")) and res.get("code") == 0
         attempts.append({"mtu": mtu, "payload": payload, "ok": got,

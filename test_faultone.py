@@ -8406,6 +8406,60 @@ class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
         finally:
             nd.run, nd.OS_NAME = saved, saved_os
 
+    def probe(self, present, replies):
+        """which() answers from `present`; run() answers from `replies` by name."""
+        seen = []
+
+        def fake_run(cmd, timeout=None, limit=None):
+            seen.append(cmd[0])
+            return dict(replies[cmd[0]], cmd=" ".join(cmd))
+        saved_run, saved_which, saved_os = nd.run, nd.which, nd.OS_NAME
+        nd.run, nd.which, nd.OS_NAME = fake_run, (lambda c: c in present), "Linux"
+        try:
+            return nd.cmd_interfaces(), seen
+        finally:
+            nd.run, nd.which, nd.OS_NAME = saved_run, saved_which, saved_os
+
+    def test_a_command_that_fails_falls_through_to_the_next_one(self):
+        """The chain used to choose on which() alone. A trimmed ip whose
+        subcommand does not exist exits non-zero, ifconfig sat unread beside
+        it, and a working machine was told it had no IP address on any
+        interface - the highest-ranked critical in the tool, on a box with
+        nothing wrong."""
+        res, seen = self.probe(
+            present={"ip", "ifconfig"},
+            replies={"ip": {"ok": True, "code": 1, "stdout": "",
+                            "stderr": 'ip: unknown command "show"'},
+                     "ifconfig": {"ok": True, "code": 0, "stderr": "",
+                                  "stdout": "eth0: flags=4163 mtu 1500\n  inet 10.0.0.5"}})
+        self.assertEqual(seen, ["ip", "ifconfig"], "ifconfig was never tried")
+        self.assertIn("inet 10.0.0.5", res["stdout"])
+
+    def test_output_that_is_empty_is_not_an_answer_either(self):
+        """Exit 0 with nothing on stdout is the other way a trimmed command
+        fails: it accepts the words and prints nothing. The next command in the
+        chain may know the answer."""
+        res, seen = self.probe(
+            present={"ip", "ifconfig"},
+            replies={"ip": {"ok": True, "code": 0, "stdout": "   \n", "stderr": ""},
+                     "ifconfig": {"ok": True, "code": 0, "stderr": "",
+                                  "stdout": "eth0: flags=4163 mtu 1500"}})
+        self.assertEqual(seen, ["ip", "ifconfig"])
+        self.assertIn("eth0", res["stdout"])
+
+    def test_the_first_command_wins_when_it_answers(self):
+        _res, seen = self.probe(
+            present={"ip", "ifconfig"},
+            replies={"ip": {"ok": True, "code": 0, "stderr": "",
+                            "stdout": "1: eth0 inet 10.0.0.5/24"}})
+        self.assertEqual(seen, ["ip"], "a working command was followed by another")
+
+    def test_nothing_installed_says_so_rather_than_inventing_a_fault(self):
+        res, seen = self.probe(present=set(), replies={})
+        self.assertEqual(seen, [], "a command was run that which() said was absent")
+        self.assertFalse(res.get("ok"))
+        self.assertIn("installed", res.get("error", ""))
+
     def test_a_rejected_flag_is_retried_without_it(self):
         busybox = {"ok": True, "code": 1, "stdout": "",
                    "stderr": "ping: invalid option -- 'W'\nBusyBox v1.36 multi-call binary."}

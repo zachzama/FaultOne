@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **154** | Distinct conclusions it can reach and state in plain language. 131 are faults; 23 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 974 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 978 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 154 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1402,9 +1402,9 @@ toybox provide a `ping` that takes `-c` and not `-W`, an `ip` that knows a
 subset of the real one, a `netstat` where `ss` is absent. Two different
 problems come out of that, and they need different answers.
 
-**A command that is absent** is already handled: every check that has more than
-one way to ask asks in order, and says so rather than failing when none of them
-is there.
+**A command that is absent** is handled: every check that has more than one way
+to ask asks in order, and says none of them is installed rather than inventing
+a fault.
 
 | Check | Tried in order |
 |---|---|
@@ -1430,8 +1430,22 @@ and returned a bad result is an answer and is never retried: a host at 100%
 loss is a finding, not a vocabulary problem, and probing it twice would double
 the wait on a slow link to learn the same thing.
 
-The same distinction is why the retry is narrow. It drops tuning, never the
-question being asked.
+**A command that is present and fails** was the same bug wearing different
+clothes, and a worse one. Those chains chose on existence: `which` saw `ip`, so
+`ifconfig` was never tried, and a trimmed `ip` whose subcommand does not exist
+took the whole interface list with it. The result was not a gap. It was `no
+IP address on any interface`, the highest-ranked critical in the tool, on a
+machine with nothing wrong and `ifconfig` sitting unread beside it.
+
+Interfaces, routes, neighbours and listening ports now run the candidates in
+order and take the first that answers. Exit zero with nothing on stdout does
+not count as answering, because that is the other way a trimmed command fails:
+it accepts the words and prints nothing.
+
+The two retries stay separate because an answer means different things. One
+command asked twice: a failure is a result, and only a rejected flag earns a
+second attempt. Several commands describing the same state: nothing is an
+answer until one of them produces output, so any failure moves to the next.
 
 ## Choosing a target
 
@@ -1647,7 +1661,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 974 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 978 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3033,7 +3047,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-974 tests, no dependencies, no network, a few seconds, so they run
+978 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

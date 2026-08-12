@@ -244,36 +244,56 @@ def bad_target():
 # Command builders, per OS. Each returns a run() result dict.
 # ---------------------------------------------------------------------------
 
+def run_first_usable(variants):
+    """Run candidates that read the same thing until one answers usefully.
+
+    Different from run_first_understood, and the difference is what counts as
+    an answer. There, one command was asked twice and a failure was a result to
+    report. Here several unrelated commands describe the same state, so nothing
+    is an answer until one of them produces output: a trimmed `ip` that exits
+    non-zero says nothing about the box, and `ifconfig` beside it may say
+    everything.
+
+    Choosing on which() alone is what made that a critical fault. The binary
+    existed, the subcommand did not, and a working machine was told it had no
+    IP address on any interface while ifconfig sat there unread.
+    """
+    result = None
+    for cmd in variants:
+        if not which(cmd[0]):
+            continue
+        result = run(cmd)
+        if result.get("code") == 0 and (result.get("stdout") or "").strip():
+            return result
+    if result is None:
+        return {"ok": False, "cmd": " ".join(variants[0]) if variants else "",
+                "error": "none of %s is installed"
+                         % ", ".join(sorted({c[0] for c in variants}))}
+    return result
+
+
 def cmd_interfaces():
     if OS_NAME == "Windows":
         return run(["ipconfig", "/all"])
-    if which("ip"):
-        return run(["ip", "addr", "show"])
-    return run(["ifconfig", "-a"])
+    return run_first_usable([["ip", "addr", "show"], ["ifconfig", "-a"]])
 
 
 def cmd_routes():
     if OS_NAME == "Windows":
         return run(["route", "print"])
-    if which("ip"):
-        return run(["ip", "route"])
-    return run(["netstat", "-rn"])
+    return run_first_usable([["ip", "route"], ["netstat", "-rn"]])
 
 
 def cmd_arp():
     if OS_NAME == "Windows":
         return run(["arp", "-a"])
-    if which("ip"):
-        return run(["ip", "neigh"])
-    return run(["arp", "-a"])
+    return run_first_usable([["ip", "neigh"], ["arp", "-a"]])
 
 
 def cmd_listen_ports():
     if OS_NAME == "Windows":
         return run(["netstat", "-an"])
-    if which("ss"):
-        return run(["ss", "-tuln"])
-    return run(["netstat", "-an"])
+    return run_first_usable([["ss", "-tuln"], ["netstat", "-an"]])
 
 
 # A command can be present and still not understand us. Busybox, toybox and the

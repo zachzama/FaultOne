@@ -86,23 +86,34 @@ Stripped and compressed together it's 127 KB instead of 597. That is 79%
 less, which is eleven minutes down to just over two on a 9600-baud console
 (8N1, so 960 bytes a second), and nothing you'd notice on anything faster.
 
-**Want the visual version?** Two ways, both offline:
+**Where the report goes** is a separate choice from what it looks at. Two
+flags, and they compose:
 
 ```bash
-python3 faultone.py --export report.html   # one file - copy it off and open it
-python3 faultone.py --export report.json   # smaller - drop it on static/index.html
+python3 faultone.py --report                       # to this terminal
+python3 faultone.py --export report.html           # to a file, and says where
+python3 faultone.py --report --export report.html  # both, from one run
 ```
 
-The `.html` carries the report inside it: double-click and you're looking at the
+The format follows the extension. `.html` carries the viewer inside it, so it
+opens on any machine with nothing installed: double-click and you have the
 verdict, which direction the fault is on, the hop-by-hop path and the evidence
 behind all of it. It follows your system's light or dark setting, prints to
-paper properly, and opens from the keyboard. The `.json` is smaller and carries
-no viewer, so it's the one to paste through a terminal, and it's what
-`--baseline` reads on the next visit.
+paper properly, and opens from the keyboard. `.json` is the data on its own,
+which is what `--baseline` reads on the next visit and what you paste through
+a terminal.
 
-**Getting it back off a box you can barely reach?** Most of an export is the
+Every other flag applies to all three. A run aimed somewhere specific exports
+exactly like any other:
+
+```bash
+python3 faultone.py --export db.html --target 10.0.0.20   # that path, as a page
+python3 faultone.py --report --export db.json --target 10.0.0.20 --soak 120
+```
+
+**Getting it off a box you can barely reach.** Most of an export is the
 captured output of every command, kept so a conclusion can be audited later.
-`--export-compact` leaves the evidence for everything that *passed* on the box:
+`--export-compact` drops the evidence behind everything that *passed*:
 
 ```bash
 python3 faultone.py --export-compact report.json    # ~5 KB instead of ~120 KB
@@ -113,18 +124,19 @@ derived and none of it is what makes an export big. What's kept is the evidence
 behind the stages that aren't passing, plus any check that couldn't run, because
 a gap in coverage has to stay visible or it reads as a pass.
 
-**Can't copy a file off it at all?** No `scp`, no outbound connection, nothing
-to install. But you can always read the screen. Print the report instead:
+**No way to copy a file off at all?** No `scp`, no outbound connection, nothing
+to install. But you can always read the screen:
 
 ```bash
 python3 faultone.py --export-compact -              # one line, on stdout
 ```
 
-Triple-click it, copy, and paste it into the box in the viewer's sidebar. SSH
-sends characters and your own terminal draws them, so the selection never
-involves the box, which is exactly why this works where a file transfer
-doesn't. It comes out on one line so a single click takes all of it, and the
-viewer copes with the wrapping and with a stray shell prompt either side.
+Triple-click it, copy, and paste it into the box in the viewer's sidebar, or
+drop the `.json` onto `static/index.html`. SSH sends characters and your own
+terminal draws them, so the selection never involves the box, which is exactly
+why this works where a file transfer doesn't. It comes out on one line so a
+single click takes all of it, and the viewer copes with the wrapping and with a
+stray shell prompt either side.
 
 Either way there's no server, no internet, and nothing installed on either
 machine.

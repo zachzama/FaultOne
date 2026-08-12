@@ -1464,7 +1464,10 @@ and says the return path was not tested.
                          against the link that actually fills rather than the
                          NIC's own speed. Needs --soak
 --baseline FILE          compare against a previous report from this site
---target HOST            what to ping/trace (default 8.8.8.8)
+--target HOST            what to ping/trace. Default 'auto': the backend this
+                         box talks to most, falling back to 8.8.8.8 when there
+                         is none. Everything measured off the device is measured
+                         to this host
 --check-ports 53,443     TCP reachability for specific ports (max 32),
                          or 'common' for 22, 53, 80, 443, 8080.
                          Preset results are informational: naming a port asserts

@@ -8387,20 +8387,24 @@ class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
     result is an answer. Only one that did not understand the request earns a
     second attempt with less of it."""
 
-    def run_with(self, replies):
-        """Stub run() with a queue of replies, recording what was attempted."""
+    def run_with(self, replies, os_name="Linux"):
+        """Stub run() with a queue of replies, recording what was attempted.
+
+        The platform is stated rather than inherited. Windows takes its own
+        branch of cmd_ping with no tuning flag to drop, so a test that assumed
+        the machine it was written on passed here and failed in CI."""
         seen = []
         queue = list(replies)
 
         def fake(cmd, timeout=None, limit=None):
             seen.append(cmd)
             return dict(queue.pop(0), cmd=" ".join(cmd))
-        saved = nd.run
-        nd.run = fake
+        saved, saved_os = nd.run, nd.OS_NAME
+        nd.run, nd.OS_NAME = fake, os_name
         try:
             return nd.cmd_ping("8.8.8.8"), seen
         finally:
-            nd.run = saved
+            nd.run, nd.OS_NAME = saved, saved_os
 
     def test_a_rejected_flag_is_retried_without_it(self):
         busybox = {"ok": True, "code": 1, "stdout": "",
@@ -8436,6 +8440,16 @@ class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
         self.assertEqual(len(seen), 1,
                          "a successful command was retried because of its wording")
         self.assertIn("0% packet loss", res["stdout"])
+
+    def test_windows_has_no_tuning_flag_to_drop(self):
+        """Its ping takes -n and nothing this retry would remove, so the branch
+        asks once. Worth pinning: the retry is about the flags we add, and
+        adding one here later would be a way to reintroduce the same bug."""
+        good = {"ok": True, "code": 0, "stderr": "",
+                "stdout": "Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)"}
+        _res, seen = self.run_with([good], os_name="Windows")
+        self.assertEqual(len(seen), 1)
+        self.assertNotIn("-W", seen[0])
 
     def test_the_first_form_is_used_when_it_works(self):
         good = {"ok": True, "code": 0, "stderr": "",

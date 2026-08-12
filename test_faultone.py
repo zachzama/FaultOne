@@ -8377,6 +8377,73 @@ class TestBareBox(unittest.TestCase):
             self.assertIn(code, fired)
 
 
+class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
+    """A command can be present and still reject the flags we hand it. Busybox,
+    toybox and the trimmed userlands on appliances ship a ping that takes -c and
+    not -W, so which() says yes, the flags come back rejected, and reachability,
+    loss and latency are all lost to a tuning argument the box never needed.
+
+    The line that keeps this honest: a command that ran and returned a bad
+    result is an answer. Only one that did not understand the request earns a
+    second attempt with less of it."""
+
+    def run_with(self, replies):
+        """Stub run() with a queue of replies, recording what was attempted."""
+        seen = []
+        queue = list(replies)
+
+        def fake(cmd, timeout=None, limit=None):
+            seen.append(cmd)
+            return dict(queue.pop(0), cmd=" ".join(cmd))
+        saved = nd.run
+        nd.run = fake
+        try:
+            return nd.cmd_ping("8.8.8.8"), seen
+        finally:
+            nd.run = saved
+
+    def test_a_rejected_flag_is_retried_without_it(self):
+        busybox = {"ok": True, "code": 1, "stdout": "",
+                   "stderr": "ping: invalid option -- 'W'\nBusyBox v1.36 multi-call binary."}
+        worked = {"ok": True, "code": 0, "stderr": "",
+                  "stdout": "4 packets transmitted, 4 packets received, 0% packet loss"}
+        res, seen = self.run_with([busybox, worked])
+        self.assertEqual(len(seen), 2, "the tuning flag was never dropped")
+        self.assertIn("-W", seen[0], "the informative form should be tried first")
+        self.assertNotIn("-W", seen[1], "the retry kept the flag that was rejected")
+        self.assertEqual(res["code"], 0)
+        self.assertIn("0% packet loss", res["stdout"])
+
+    def test_a_real_failure_is_an_answer_and_is_not_retried(self):
+        """100% loss is a result. Retrying it would turn one unreachable host
+        into two probes and still report the same thing, and on a slow link
+        would double the wait for no new information."""
+        unreachable = {"ok": True, "code": 1, "stderr": "",
+                       "stdout": "4 packets transmitted, 0 packets received, 100% packet loss"}
+        res, seen = self.run_with([unreachable, unreachable])
+        self.assertEqual(len(seen), 1, "a genuine failure was retried")
+        self.assertIn("100% packet loss", res["stdout"])
+
+    def test_success_wins_over_output_that_looks_like_a_complaint(self):
+        """The two checks are not interchangeable. A command that exits 0 has
+        answered, whatever its output says, and some print a usage banner or the
+        word "usage:" in a summary line while working perfectly. Reading the
+        text first would throw that answer away and run the weaker form."""
+        chatty = {"ok": True, "code": 0, "stderr": "",
+                  "stdout": "usage: ping [-c count]\n"
+                            "4 packets transmitted, 4 packets received, 0% packet loss"}
+        res, seen = self.run_with([chatty])
+        self.assertEqual(len(seen), 1,
+                         "a successful command was retried because of its wording")
+        self.assertIn("0% packet loss", res["stdout"])
+
+    def test_the_first_form_is_used_when_it_works(self):
+        good = {"ok": True, "code": 0, "stderr": "",
+                "stdout": "4 packets transmitted, 4 packets received, 0% packet loss"}
+        _res, seen = self.run_with([good])
+        self.assertEqual(len(seen), 1, "a working command was run twice")
+
+
 class TestNothingRunsUnasked(unittest.TestCase):
     """`which` is how this suite keeps its promise to send no packets: stub it
     to False and no external command should be reachable. Windows was exempt

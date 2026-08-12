@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **154** | Distinct conclusions it can reach and state in plain language. 131 are faults; 23 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 969 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 973 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 154 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1394,6 +1394,44 @@ end.
 **Derived from the above, not separately collected:** call quality (MOS), the
 site edge and network handoffs, latency deltas and jitter per hop, link
 utilization, and the comparison against a `--baseline`.
+
+## When the box has a smaller userland
+
+Appliances, containers and embedded builds ship trimmed commands. Busybox and
+toybox provide a `ping` that takes `-c` and not `-W`, an `ip` that knows a
+subset of the real one, a `netstat` where `ss` is absent. Two different
+problems come out of that, and they need different answers.
+
+**A command that is absent** is already handled: every check that has more than
+one way to ask asks in order, and says so rather than failing when none of them
+is there.
+
+| Check | Tried in order |
+|---|---|
+| interfaces | `ip` then `ifconfig` (`ipconfig` on Windows) |
+| routes | `ip` then `netstat` or `route` |
+| neighbours | `ip` then `arp` |
+| listening ports, sockets | `ss` then `netstat` |
+| traceroute | `traceroute`, then `tracepath` (`tracert` on Windows) |
+| DNS | `dig` then `nslookup` |
+| clock | `chronyc`, then `timedatectl`, then `ntpq` |
+| kernel log | `dmesg` then `journalctl` |
+
+**A command that is present and does not understand us** is the harder one, and
+was losing checks silently. `which` sees `ping`, the tuning flag comes back
+rejected, and reachability, loss and latency are all thrown away over an
+argument the box never needed. Nothing was wrong with the network and nothing
+said so: the report warned that it could not read the gateway.
+
+The ping now asks twice. The informative form first, then the portable one, and
+only when the output says the command did not understand the request - an
+invalid or unknown option, a usage line, a busybox banner. A command that ran
+and returned a bad result is an answer and is never retried: a host at 100%
+loss is a finding, not a vocabulary problem, and probing it twice would double
+the wait on a slow link to learn the same thing.
+
+The same distinction is why the retry is narrow. It drops tuning, never the
+question being asked.
 
 ## Choosing a target
 
@@ -1609,7 +1647,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 969 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 973 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2995,7 +3033,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-969 tests, no dependencies, no network, a few seconds, so they run
+973 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

@@ -276,6 +276,38 @@ def cmd_listen_ports():
     return run(["netstat", "-an"])
 
 
+# A command can be present and still not understand us. Busybox, toybox and the
+# trimmed userlands on appliances ship a ping that takes -c and not -W, an ip
+# that knows a subset of the real one. which() sees the name and says yes, the
+# flags come back rejected, and a check that would have worked without its
+# tuning argument is lost instead.
+#
+# The distinction that keeps this honest: a command that ran and returned a bad
+# result is an answer, and must not be retried. Only a command that did not
+# understand the request earns a second attempt with less of it.
+_DID_NOT_UNDERSTAND = re.compile(
+    r"invalid option|unrecognized option|illegal option|unknown option"
+    r"|invalid argument|bad option|^usage:|^BusyBox ", re.I | re.M)
+
+
+def run_first_understood(variants, timeout=15):
+    """Run the first variant the system understands.
+
+    `variants` goes from most informative to most portable. A non-zero exit is
+    only a reason to try the next one when the output says the command did not
+    know what we asked - otherwise the failure is the answer and gets returned.
+    """
+    result = None
+    for cmd in variants:
+        result = run(cmd, timeout=timeout)
+        if result.get("code") == 0:
+            return result
+        text = (result.get("stdout") or "") + "\n" + (result.get("stderr") or "")
+        if not _DID_NOT_UNDERSTAND.search(text):
+            return result
+    return result
+
+
 def cmd_ping(target, count=4, wait=2):
     if not valid_target(target):
         return bad_target()
@@ -284,7 +316,12 @@ def cmd_ping(target, count=4, wait=2):
     # -W is seconds on Linux but milliseconds on BSD/macOS - passing "2" there
     # means 2ms, which marks every reply "out of wait time".
     wait_arg = str(wait * 1000) if OS_NAME == "Darwin" else str(wait)
-    return run(["ping", "-c", str(count), "-W", wait_arg, target])
+    # Without -W a ping that gets no reply waits on its own default, so the
+    # timeout on run() is what stops it, not the missing flag.
+    return run_first_understood([
+        ["ping", "-c", str(count), "-W", wait_arg, target],
+        ["ping", "-c", str(count), target],
+    ])
 
 
 def cmd_traceroute(target):

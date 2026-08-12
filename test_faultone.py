@@ -9972,6 +9972,142 @@ class TestSelfContainedReport(unittest.TestCase):
             self.assertIsNone(nd.extract_embedded_report(junk))
 
 
+class TestNothingInAReportCanBecomeMarkup(unittest.TestCase):
+    """A report is full of bytes this box did not choose. Hostnames come out of
+    reverse DNS, banners come off whatever answered a port, certificate strings
+    come out of somebody else's certificate. All of it lands in a page that gets
+    opened, and often pasted somewhere and opened again.
+
+    The JSON island already has its own guard: an unescaped `</script>` inside
+    it would end the block early and take the rest of the page with it. This is
+    the other half, the render, where a value that is safe in the island becomes
+    live markup on its way into the document.
+    """
+
+    PAYLOAD = "<img src=x onerror=alert(1)>"
+
+    def test_the_escaper_covers_every_character_that_matters(self):
+        """Five characters, and dropping any one of them is a quiet way to
+        reopen this. The quotes matter as much as the angle brackets, because
+        several of these values are interpolated into attributes."""
+        src = nd.VIEWER_TEMPLATE
+        body = src.split("function escapeHtml(", 1)[1].split("\n}", 1)[0]
+        for char, entity in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"),
+                             ('"', "&quot;"), ("'", "&#39;")):
+            with self.subTest(char=char):
+                self.assertIn(entity, body,
+                              "escapeHtml no longer turns %r into %s" % (char, entity))
+
+    def _viewer_js(self, *names):
+        """The named viewer functions, with the real escapeHtml and a DOM stub.
+
+        The real one, not the identity stub the ribbon tests use: those are
+        about geometry and this is about exactly the thing that stub removes.
+        """
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+        out = ["const WRITES = [];",
+               "const el = () => ({ set innerHTML(v){ WRITES.push(v); },"
+               "  get innerHTML(){ return ''; }, set textContent(v){ WRITES.push(v); },"
+               "  style:{}, classList:{add(){},remove(){},toggle(){}},"
+               "  setAttribute(){}, removeAttribute(){}, remove(){},"
+               "  appendChild(){}, querySelector: () => null, addEventListener(){} });",
+               "const document = { getElementById: el, querySelector: () => null,"
+               "  querySelectorAll: () => [], createElement: el, body: el(),"
+               "  addEventListener(){} };",
+               "const window = { matchMedia: () => ({matches:false, addEventListener(){}}) };"]
+        # The template's own constants, taken from the template rather than
+        # restated here. Copies of a lookup table drift from it, and a test
+        # carrying its own idea of what a severity is called would pass while
+        # the page rendered something else.
+        for m in re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S):
+            out.append(m.group(0))
+        for name in names:
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        return node, "\n".join(out)
+
+    def _writes(self, prelude, body):
+        """Everything the code under test tried to put into the document."""
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        node, src = prelude
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write(src + "\n" + body + "\nconsole.log(JSON.stringify(WRITES));")
+            path = fh.name
+        try:
+            res = subprocess.run([node, path], capture_output=True, text=True,
+                                 timeout=30, encoding="utf-8")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            _os.unlink(path)
+
+    def assertInert(self, writes, where):
+        """The payload may appear, escaped. It may never appear as a live tag."""
+        joined = "".join(writes)
+        self.assertIn("&lt;img", joined,
+                      "%s: the value never arrived at all, so this proves nothing" % where)
+        self.assertNotIn(self.PAYLOAD, joined,
+                         "%s: a report value reached the document as live markup" % where)
+
+    def test_a_hostile_hop_name_cannot_become_a_tag(self):
+        """Hop names come from reverse DNS, which is the clearest case of a
+        string somebody else chooses appearing in your report."""
+        pre = self._viewer_js("escapeHtml", "renderHopChain", "hopWord", "hopFlex",
+                              "hopRibbon", "ribbonBaseline", "sideSeverity", "avgMs",
+                              "hopSeverity", "verdictRow")
+        writes = self._writes(pre, """
+const data = { hops: [{hop:1, display:%s, avg_ms:1.0, roles:[], zone:%s}],
+               target:'10.0.0.1', networks_crossed:[], probes:{} };
+renderHopChain(data, {});
+""" % (json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD)))
+        self.assertInert(writes, "hop chain")
+
+    def test_a_hostile_finding_message_cannot_become_a_tag(self):
+        """Findings quote command output back at the reader, so a banner off a
+        hostile service reaches here more or less intact."""
+        pre = self._viewer_js("escapeHtml", "verdictRow")
+        writes = self._writes(pre, """
+WRITES.push(verdictRow({headline:%s, owner:%s, next_step:%s,
+                        confidence:'high', severity:'critical'}, {}));
+""" % (json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD)))
+        self.assertInert(writes, "verdict row")
+
+    def test_the_check_would_notice_if_the_escaping_went_away(self):
+        """A test that proves nothing is worse than no test. This runs the same
+        renderer with escapeHtml replaced by the identity, and fails if the
+        payload does *not* come through - so the assertions above are known to
+        be looking at something."""
+        import shutil
+        if not shutil.which("node"):
+            self.skipTest("node not available to run the viewer's own JS")
+        node, src = self._viewer_js("escapeHtml", "verdictRow")
+        src = src.replace("function escapeHtml(s){",
+                          "function escapeHtml(s){ return String(s || ''); //")
+        writes = self._writes((node, src), """
+WRITES.push(verdictRow({headline:%s, owner:'o', next_step:'n',
+                        confidence:'high', severity:'critical'}, {}));
+""" % json.dumps(self.PAYLOAD))
+        self.assertIn(self.PAYLOAD, "".join(writes),
+                      "with the escaping removed the payload still did not appear, "
+                      "so these tests are not exercising the path they claim to")
+
+
 class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
     """The path picture scored its nodes on loss and timeouts, which are the
     only things it could work out for itself. A latency wall is neither, so on

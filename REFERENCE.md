@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1063 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1067 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 160 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1941,7 +1941,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1063 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1067 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3273,6 +3273,26 @@ web app:
   They make no network requests of any kind - no CDN, no fonts, no analytics -
   so they work with the internet unplugged, which matters for a tool you reach
   for when the network is what's broken.
+- **Nothing in a report can become markup.** A report is full of bytes this box
+  did not choose: hostnames out of reverse DNS, banners off whatever answered a
+  port, strings out of somebody else's certificate. All of it lands in a page
+  that gets opened, and often pasted somewhere and opened again. Two things
+  keep it inert, and both are tested. The data rides in a JSON island, where
+  `</` is escaped so a closing tag in the data cannot end the script block
+  early and take the rest of the page with it. On the way into the document
+  every value is escaped, and where markup is built deliberately it is built
+  around values that were escaped first.
+
+  The render half is checked by running the viewer's own functions with a
+  payload in the fields and reading what they would put into the document. One
+  of those tests runs the same code with the escaping removed and fails if the
+  payload does *not* get through, because a security test that quietly stops
+  exercising its own path is worse than none.
+
+  There is deliberately no Content-Security-Policy meta tag. The viewer is
+  inline script by necessity, so any workable policy would have to allow inline
+  script, which protects nothing. A policy that looks like care and provides
+  none is worse than its absence.
 - User-supplied targets (for ping/traceroute/DNS) are validated: IPs via
   `inet_pton`, hostnames against a strict regex with a length cap, and
   commands are run as argument lists, never through a shell. So `; rm -rf /`
@@ -3327,7 +3347,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1063 tests, no dependencies, no network, a few seconds, so they run
+1067 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

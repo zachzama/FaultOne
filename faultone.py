@@ -74,7 +74,7 @@ import textwrap
 
 # Reports carry this, so a page opened months later, or a --baseline from a
 # previous visit, can be read in the light of what produced it.
-__version__ = "1.10.0"
+__version__ = "1.10.1"
 
 # Python 3.7 is the floor: subprocess.run's capture_output and text arguments
 # arrived there. The syntax parses on 3.6, so without this check that box gets

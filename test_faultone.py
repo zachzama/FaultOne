@@ -4692,6 +4692,20 @@ class TestNeighbourTable(unittest.TestCase):
         self.assertEqual(nd._read_neigh_table("/nonexistent/path"), {})
         self.assertNotIn("entries", nd._read_neigh_table(self.build(None, 1024)))
 
+    def test_a_row_that_does_not_match_the_header_is_ignored(self):
+        """These tables are read by position, so a row whose width disagrees
+        with the header is not a row this can read. A truncated last line is
+        the way that happens, and taking it would attribute whatever numbers
+        it does carry to whichever columns happen to line up."""
+        header, good = self.CACHE.splitlines()[0], self.CACHE.splitlines()[1]
+        table = header + "\n" + good + "\n" + "00009999 0 0\n"        # short row
+        got = nd._read_neigh_table(self.build(table + "\n", 1024))
+        self.assertEqual(got.get("entries"), 0x200,
+                         "a short row was read as if its columns lined up")
+        rows = nd._proc_stat_rows(os.path.join(self.build(table + "\n", 1024),
+                                               "net/stat/arp_cache"))
+        self.assertEqual(len(rows), 1, "the malformed row was kept")
+
     def test_a_full_table_outranks_a_nearly_full_one(self):
         """Both can be true at once - it is at the ceiling now and has been
         there before. Only the one that has already refused something is worth
@@ -9797,6 +9811,17 @@ class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
 
                 def close(self):
                     pass
+
+                # A real socket is a context manager and closes itself on the
+                # way out. The stub did not model that, so it passed while the
+                # code hand-rolled the close and broke the moment the code
+                # started using the language feature - a fixture failing for
+                # being a poorer socket than the real one.
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_exc):
+                    self.close()
             nd.socket.socket = Sock
             self.assertIsNone(nd.kernel_source_address())
         finally:

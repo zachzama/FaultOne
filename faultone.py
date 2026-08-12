@@ -438,12 +438,14 @@ def kernel_source_address():
     """
     for family, probe in ((socket.AF_INET, "192.0.2.1"),
                           (socket.AF_INET6, "2001:db8::1")):
-        sock = None
         try:
-            sock = socket.socket(family, socket.SOCK_DGRAM)
-            sock.settimeout(1.0)
-            sock.connect((probe, 9))
-            addr = sock.getsockname()[0]
+            # A socket is its own context manager and closes on the way out,
+            # which is what the hand-written try/finally here was doing by
+            # hand, twice, in two functions written on the same afternoon.
+            with socket.socket(family, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(1.0)
+                sock.connect((probe, 9))
+                addr = sock.getsockname()[0]
             # _flow_is_local rather than a loopback test written here, and not
             # only to keep one copy of that list. It rejects link-local too,
             # and a box that self-assigned 169.254 is a box that never got on
@@ -453,12 +455,6 @@ def kernel_source_address():
                 return addr
         except (OSError, socket.error):
             continue
-        finally:
-            if sock is not None:
-                try:
-                    sock.close()
-                except (OSError, socket.error):
-                    pass
     return None
 
 
@@ -2434,6 +2430,62 @@ def _load_context():
             f"limit being hit is a setting rather than a shortage of capacity.")
 
 
+def _proc_stat_rows(path):
+    """A /proc/net/stat table as one dict of {column: value} per CPU row.
+
+    These files are a header of column names and one hex row per CPU, and both
+    readers of them had written out the same header-and-row walk: split the
+    names, skip a row whose width disagrees with the header, decode hex, ignore
+    a column that will not parse.
+
+    What is deliberately *not* folded in is what to do with a column once it is
+    read, because that is where the two differ and where the subtlety lives.
+    Most columns are a per-CPU share and want summing. "entries" repeats the
+    whole table on every row, so summing it reports a table over its own ceiling
+    on any box with more than one core. Returning rows leaves that decision with
+    the caller that knows which column it is asking about.
+
+    Column names come from the header rather than a fixed list, because they
+    vary by kernel version.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    if len(lines) < 2:
+        return []
+    names = lines[0].split()
+    rows = []
+    for row in lines[1:]:
+        cols = row.split()
+        if len(cols) != len(names):
+            continue
+        parsed = {}
+        for name, col in zip(names, cols):
+            try:
+                parsed[name] = int(col, 16)
+            except ValueError:
+                continue
+        rows.append(parsed)
+    return rows
+
+
+def _sysfs_names(base):
+    """Interface names under a sysfs directory, or nothing if it is not there.
+
+    Four readers walk /sys/class/net and each opened with the same four lines.
+    Nothing rather than an error, because a box without sysfs - a Mac, a
+    container built without it - is one these readers have no answer for rather
+    than one that failed, and each of them already returns an empty result on
+    that path.
+    """
+    try:
+        return sorted(os.listdir(base))
+    except OSError:
+        return []
+
+
 def _read_text(path):
     """A small file's contents, or None if it isn't there.
 
@@ -2470,32 +2522,12 @@ def _read_conntrack():
                 break
             except (OSError, ValueError):
                 continue
-    try:
-        with open("/proc/net/stat/nf_conntrack", encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return out
-    if len(lines) < 2:
-        return out
-    # Column names come from the header because they vary by kernel version.
-    # Rows are hex, one per CPU - except "entries", which repeats the table
-    # total on every row and must not be summed. insert_failed and drop are
-    # genuinely per-CPU, and they are the two worth having.
-    names = lines[0].split()
-    wanted = {"insert_failed": 0, "drop": 0}
-    for row in lines[1:]:
-        cols = row.split()
-        if len(cols) != len(names):
-            continue
-        for name in wanted:
-            if name in names:
-                try:
-                    wanted[name] += int(cols[names.index(name)], 16)
-                except ValueError:
-                    pass
-    for name, value in wanted.items():
-        if name in names:
-            out["ct_" + name] = value
+    # insert_failed and drop are genuinely per-CPU and are the two worth having,
+    # so both are summed across rows.
+    rows = _proc_stat_rows("/proc/net/stat/nf_conntrack")
+    for name in ("insert_failed", "drop"):
+        if any(name in row for row in rows):
+            out["ct_" + name] = sum(row.get(name, 0) for row in rows)
     return out
 
 
@@ -2519,37 +2551,20 @@ def _read_neigh_table(base="/proc"):
             out["gc_thresh3"] = int(fh.read().strip())
     except (OSError, ValueError):
         pass
-    try:
-        with open(os.path.join(base, "net/stat/arp_cache"),
-                  encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return out
-    if len(lines) < 2:
-        return out
-    # Same shape as the conntrack table: hex, one row per CPU, and "entries"
-    # repeats the table total on every row rather than being a per-CPU share.
-    names = lines[0].split()
+    rows = _proc_stat_rows(os.path.join(base, "net/stat/arp_cache"))
     fulls = 0
-    for row in lines[1:]:
-        cols = row.split()
-        if len(cols) != len(names):
-            continue
-        if "entries" in names:
-            try:
-                # Assigned, never accumulated: this column repeats the whole
-                # table on every row rather than holding a per-CPU share, so
-                # adding it up would report a table over its own ceiling on any
-                # box with more than one core.
-                out["entries"] = int(cols[names.index("entries")], 16)
-            except ValueError:
-                pass
-        if "table_fulls" in names:
-            try:
-                fulls += int(cols[names.index("table_fulls")], 16)
-            except ValueError:
-                pass
-    if "table_fulls" in names:
+    for row in rows:
+        # Assigned, never accumulated: this column repeats the whole table on
+        # every row rather than holding a per-CPU share, so adding it up would
+        # report a table over its own ceiling on any box with more than one core.
+        if "entries" in row:
+            out["entries"] = row["entries"]
+        # table_fulls is a real per-CPU count and is summed.
+        fulls += row.get("table_fulls", 0)
+    # Only reported when the column was actually there. A kernel that does not
+    # publish it must read as unknown rather than as zero overflows, which is a
+    # claim this cannot make.
+    if any("table_fulls" in row for row in rows):
         out["table_fulls"] = fulls
     return out
 
@@ -2564,10 +2579,7 @@ def _bond_members_linux(base="/sys/class/net"):
     fail takes the box off the network.
     """
     out = {}
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return {}
+    names = _sysfs_names(base)
     for name in names:
         bdir = os.path.join(base, name, "bonding")
         if not os.path.isdir(bdir):
@@ -3631,10 +3643,7 @@ def _link_drivers_linux(base="/sys/class/net"):
     above.
     """
     out = {}
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return {}
+    names = _sysfs_names(base)
     for name in names:
         link = os.path.join(base, name, "device", "driver")
         try:
@@ -3653,10 +3662,7 @@ def _link_stats_linux(base="/sys/class/net"):
     should pass it.
     """
     stats = {}
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return {}
+    names = _sysfs_names(base)
     for name in names:
         sdir = os.path.join(base, name, "statistics")
         if not os.path.isdir(sdir):
@@ -4026,10 +4032,7 @@ def _link_modes_linux(base="/sys/class/net"):
     """
     modes = {}
     drivers = _link_drivers_linux(base)
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return {}
+    names = _sysfs_names(base)
     for name in names:
         idir = os.path.join(base, name)
         if not os.path.isdir(idir):
@@ -10091,19 +10094,12 @@ def source_address_is_held(address):
     to receive while it was open, which is a thing this program does not do.
     """
     family = socket.AF_INET6 if ":" in (address or "") else socket.AF_INET
-    sock = None
     try:
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.bind((address, 0))
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.bind((address, 0))
         return True
     except (OSError, socket.error):
         return False
-    finally:
-        if sock is not None:
-            try:
-                sock.close()
-            except (OSError, socket.error):
-                pass
 
 
 def _check_source_address(raw, findings):

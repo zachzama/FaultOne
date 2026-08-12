@@ -1,0 +1,16 @@
+# The tool has no dependencies and never will - that is the promise on the
+# front page. This watches the only thing here that is somebody else's code:
+# the two actions the test workflow uses.
+#
+# It exists because those are pinned by commit rather than by tag. A pin is the
+# right way to run a third party's code, and it is also a way to sit on a known
+# bug for a year without noticing, so something has to raise the new one.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+    labels: []

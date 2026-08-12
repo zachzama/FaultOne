@@ -1978,9 +1978,26 @@ class TestNoVendorNames(unittest.TestCase):
 
     def test_the_withheld_names_are_absent_from_every_shipped_file(self):
         root = os.path.dirname(os.path.abspath(nd.__file__))
-        names = ["faultone.py", "test_faultone.py", "README.md", "REFERENCE.md",
-                 "static/index.html", "dev/deep_e2e.py", "dev/equivalence.py",
-                 "dev/README.md"]
+        # Walked, not listed. A hand-written list is a list of the files that
+        # existed the day it was written: this one named eight while the
+        # repository had grown a security policy, a workflow, four more dev
+        # scripts and a handover note, none of which anything looked at. The
+        # guard's claim is that a withheld name is nowhere in the repository,
+        # so it has to read the repository.
+        # Tracked files, which is what "in the repository" means. Walking the
+        # directory instead reads whatever else is lying about - an editor's
+        # local settings caught this guard first, holding a name that is
+        # gitignored and ships nowhere.
+        import subprocess
+        listed = subprocess.run(["git", "-C", root, "ls-files"],
+                                capture_output=True, text=True)
+        if listed.returncode != 0:
+            self.skipTest("not a git checkout, so there is no tracked set to read")
+        names = [n for n in listed.stdout.splitlines()
+                 if n.endswith((".py", ".md", ".html", ".json", ".yml", ".yaml",
+                                ".txt", ".cfg", ".toml"))]
+        self.assertGreater(len(names), 8,
+                           "the tracked set came back too small to be real")
         offenders = []
         for name in names:
             path = os.path.join(root, name)

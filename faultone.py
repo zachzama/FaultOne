@@ -1796,6 +1796,12 @@ def parse_socket_states(text):
     # client, and a server with clients connected to it right now has a working
     # network however little it can reach on its own.
     listening, established, bound, peers, outbound_dests = set(), [], [], [], []
+    # Which of this box's own addresses each live connection arrived on. The
+    # port was already kept and the address thrown away, which answered "is
+    # anyone connected" and could never answer "connected to what". On a box
+    # holding a service address those are different questions: the address can
+    # be up, listening and taking nothing, while the partner takes it all.
+    local_ends = []
     for line in (text or "").splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -1828,6 +1834,7 @@ def parse_socket_states(text):
                 bound.append((peer_host(local) or "", port))
         elif key == "ESTABLISHED" and local:
             established.append(peer_port(local))
+            local_ends.append((peer_host(local), peer_port(local)))
             peers.append((peer_host(peer), peer_port(local)))
             outbound_dests.append((peer_host(peer), peer_port(peer)))
         if key in ("SYN_SENT", "CLOSE_WAIT") and peer:
@@ -1846,7 +1853,15 @@ def parse_socket_states(text):
             dest_counts[(host, port)] = dest_counts.get((host, port), 0) + 1
     worst = max(dest_counts.items(), key=lambda kv: (kv[1], kv[0]), default=None)
     inbound = sum(1 for p in established if p and p in listening)
-    return {"states": states, "pending": pending,
+    # Counted per address, never listed per connection. Who is connected is the
+    # peer list, which deliberately does not reach a report; which of this box's
+    # own addresses they arrived on is a property of this box, and its addresses
+    # are already in the report.
+    served_on = {}
+    for host, port in local_ends:
+        if host and port and port in listening:
+            served_on[host] = served_on.get(host, 0) + 1
+    return {"states": states, "pending": pending, "served_on": served_on,
             "listen_ports": sorted(listening), "bound": bound, "peers": peers,
             "outbound_destinations": len(dest_counts),
             "outbound_worst_dest": f"{worst[0][0]}:{worst[0][1]}" if worst else None,
@@ -4981,6 +4996,15 @@ VERDICT_RULES = [
      "Either the address moved to its partner and this is now the standby, or it "
      "was never configured here. Check the failover state before reading anything "
      "else in this report: none of it was measured from the address you asked for."),
+    ("service_address_unserved", "whatever should be accepting on this address",
+     "A service address is configured here and nothing is accepting on it",
+     "Check the service is running and bound as you think. If this box forwards in "
+     "the kernel (IPVS, DNAT, direct return) there is no listener to find and this "
+     "is expected."),
+    ("service_address_idle", "the failover pair, or whatever steers traffic to it",
+     "A service address is up and served here, and no traffic is arriving on it",
+     "Traffic for it is going elsewhere. Check the failover state on both nodes and "
+     "whether a load balancer has taken this one out of rotation."),
     ("no_ipv4", "this device",
      "No IP address on any interface - this device never got onto the network",
      "Check the cable is seated and the link light is on, then whether DHCP is "
@@ -5850,6 +5874,8 @@ FINDING_SIDE.update({
     # --- downstream: the way in ------------------------------------------
     # Clients cannot reach the service, or reach it and are turned away.
     "tcp_flow_loss_clients": "downstream",
+    "service_address_unserved": "downstream",
+    "service_address_idle": "downstream",
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
     "queuing_delay_clients": "downstream",
@@ -5979,7 +6005,8 @@ STAGE_RULES = [
     # there is no inbound leg, and the answer to that is "-", not a warning
     # about a direction this box does not have.
     ("clients", set(),
-     {"tcp_flow_loss_clients", "path_jitter_clients", "queuing_delay_clients",
+     {"service_address_unserved", "service_address_idle",
+      "tcp_flow_loss_clients", "path_jitter_clients", "queuing_delay_clients",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure"}),
     # Optics belong to the link stage for the same reason the error counters
@@ -9813,6 +9840,91 @@ def _check_source_address(raw, findings):
         })
 
 
+_WILDCARD_BINDS = ("", "*", "0.0.0.0", "::", "[::]", "*.*")
+
+
+def _serves(bound, address):
+    """Is anything on this box accepting on `address`?
+
+    A wildcard bind answers for every address the box holds, including one
+    added after the process started, so it counts as serving all of them. That
+    is why this cannot be a set membership test on the address alone: the
+    common case is nginx on 0.0.0.0 and a service address added underneath it
+    by keepalived, and calling that unserved would be wrong about nearly every
+    box this is written for.
+    """
+    for host, _port in bound or []:
+        clean = (host or "").strip("[]")
+        if clean in _WILDCARD_BINDS or clean == address:
+            return True
+    return False
+
+
+def _check_service_addresses(raw, findings):
+    """A service address that is up, and whether anything is actually using it.
+
+    Holding the address is the easy half and the tool now does it. The half
+    that goes wrong quietly is what happens next: the address is configured,
+    it answers ARP, and traffic is going somewhere else. A failover that moved
+    the address without moving the traffic, a partner that never gave it up, a
+    service that died and left the address behind - all of them leave a box
+    that looks configured and serves nobody, and every check in this tool would
+    have passed on it.
+
+    Both findings are warnings rather than faults, and the reason is the same
+    for both: this reads userland sockets, and a box forwarding at the kernel
+    (IPVS, nftables or iptables DNAT, and every direct-return load balancer)
+    serves a service address with nothing bound to it at all. That is the
+    normal shape of the deployment this exists for, so an absent listener has
+    to be reported as something to look at rather than as a broken box.
+    """
+    service = raw.get("service_addresses") or []
+    sockets = raw.get("sockets") or {}
+    if not service or not sockets.get("ok"):
+        return                              # nothing to say, or no way to tell
+
+    bound = sockets.get("bound") or []
+    served_on = sockets.get("served_on") or {}
+
+    for entry in service:
+        address = entry["address"]
+        here = served_on.get(address, 0)
+        if here:
+            continue                        # in use, which is the whole question
+        # Everything arriving anywhere on this box, which past the line above
+        # means everywhere but here. Other service addresses count: a box
+        # holding two and serving one is the clearest case there is of traffic
+        # reaching this machine and choosing somewhere other than this address.
+        arriving_elsewhere = sum(served_on.values())
+        if not _serves(bound, address):
+            findings.append({
+                "severity": "warning",
+                "code": "service_address_unserved",
+                "layer": 4,
+                "message": f"{address} is configured on "
+                           f"{entry.get('interface') or 'this box'} and nothing on this "
+                           f"box is listening on it, or on a wildcard that would cover "
+                           f"it. Clients reaching it get a refused connection while ARP "
+                           f"answers normally, which is why it looks reachable. If this "
+                           f"box forwards in the kernel rather than accepting - IPVS, a "
+                           f"DNAT rule, direct return - then there is nothing here to "
+                           f"see and this is expected.",
+            })
+        elif arriving_elsewhere:
+            findings.append({
+                "severity": "warning",
+                "code": "service_address_idle",
+                "layer": 4,
+                "message": f"{address} is up and something is listening for it, but no "
+                           f"connection is arriving on it, while {arriving_elsewhere} "
+                           f"connection(s) are arriving on this box's other addresses. "
+                           f"Traffic for this address is going somewhere else: a "
+                           f"failover that moved the address without moving the "
+                           f"traffic, a partner still answering for it, or a load "
+                           f"balancer that has taken this box out of rotation.",
+            })
+
+
 def _check_addressing(raw, findings):
     """Does this device have an address at all?
 
@@ -9829,6 +9941,7 @@ def _check_addressing(raw, findings):
     raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
     raw["own_addresses"] = parse_own_addresses(raw["interfaces"])
     _check_source_address(raw, findings)
+    _check_service_addresses(raw, findings)
     if not raw["interfaces"].get("ok"):
         # No command could describe the interfaces, so ask the kernel for the
         # one fact this finding turns on. It answers on a box shipping none of

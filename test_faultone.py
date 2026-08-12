@@ -8599,6 +8599,181 @@ class TestTheAddressesThisBoxHolds(unittest.TestCase):
         self.assertEqual(nd.parse_own_addresses({"ok": False, "error": "x"}), [])
 
 
+class TestIsTheServiceAddressActuallyServing(unittest.TestCase):
+    """Holding the address is the easy half. The half that goes wrong quietly
+    is what happens next: the address is configured, it answers ARP, and the
+    traffic is going somewhere else. Every other check in this tool passes on
+    that box, which is why it needed a finding of its own."""
+
+    VIP = {"ok": True, "cmd": "ip addr", "stdout":
+           "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n"
+           "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+           "    inet 10.0.0.200/32 scope global eth0\n"}
+
+    def report(self, ss_text, interfaces=None):
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        mod.cmd_interfaces = lambda: interfaces or self.VIP
+        serving(mod, ss_text)
+        return mod.diagnose(quick=True, **scenario_kwargs(kw))
+
+    def codes(self, report):
+        return {f["code"] for f in report["findings"]}
+
+    def test_a_live_connection_is_counted_against_the_address_it_arrived_on(self):
+        """The collection change this rests on. The local port was already kept
+        and the local address thrown away, which answers "is anyone connected"
+        and can never answer "connected to what"."""
+        parsed = nd.parse_socket_states(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.8:51001\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.9:51002\n")
+        self.assertEqual(parsed["served_on"], {"10.0.0.200": 2, "10.0.0.5": 1})
+
+    def test_a_connection_this_box_made_is_not_one_it_served(self):
+        """Outbound connections have a local address too. Counting them would
+        make every box look busy on every address it owns."""
+        parsed = nd.parse_socket_states(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:51234 203.0.113.9:443\n")
+        self.assertEqual(parsed["served_on"], {},
+                         "an outbound connection was counted as one served")
+
+    def test_a_wildcard_listener_serves_every_address_the_box_holds(self):
+        """The false positive that would have mattered most. nginx on 0.0.0.0
+        with a service address added underneath it by keepalived is the normal
+        shape of this deployment, and calling it unserved would be wrong about
+        nearly every box this is written for."""
+        self.assertTrue(nd._serves([("0.0.0.0", "443")], "10.0.0.200"))
+        self.assertTrue(nd._serves([("*", "443")], "10.0.0.200"))
+        self.assertTrue(nd._serves([("::", "443")], "10.0.0.200"))
+
+    def test_a_listener_on_one_address_does_not_serve_another(self):
+        self.assertTrue(nd._serves([("10.0.0.200", "443")], "10.0.0.200"))
+        self.assertFalse(nd._serves([("10.0.0.5", "443")], "10.0.0.200"))
+        self.assertFalse(nd._serves([], "10.0.0.200"))
+
+    def test_an_address_nothing_accepts_on_is_reported(self):
+        """Every listener bound to the box's own address, none covering the
+        service address. Clients get a refused connection while ARP answers
+        normally, which is exactly why nobody suspects the box."""
+        codes = self.codes(self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n"))
+        self.assertIn("service_address_unserved", codes)
+        self.assertNotIn("service_address_idle", codes)
+
+    def test_a_wildcard_listener_stops_that_finding(self):
+        """The same box with the same absence of traffic, served by a wildcard.
+        It must not be called unserved, and the guard exists because this is
+        one config line away from the case above."""
+        codes = self.codes(self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n"))
+        self.assertNotIn("service_address_unserved", codes)
+        self.assertIn("service_address_idle", codes)
+
+    def test_an_idle_address_is_only_reported_when_traffic_is_arriving_elsewhere(self):
+        """A box nobody is talking to is idle, not broken. The finding is about
+        traffic that is arriving and choosing another address, which is what a
+        half-finished failover looks like from the node that lost."""
+        codes = self.codes(self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"))
+        self.assertNotIn("service_address_idle", codes)
+        self.assertNotIn("service_address_unserved", codes)
+
+    def test_an_address_in_use_says_nothing_at_all(self):
+        """The healthy proxy. Traffic is arriving on the service address, which
+        is the whole question, so neither finding has anything to add."""
+        codes = self.codes(self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.9:51002\n"))
+        self.assertNotIn("service_address_unserved", codes)
+        self.assertNotIn("service_address_idle", codes)
+
+    def test_nothing_is_claimed_when_the_sockets_could_not_be_read(self):
+        """No socket list means no evidence either way, and a finding built on
+        an absent reading is a diagnosis invented from a gap."""
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        mod.cmd_interfaces = lambda: self.VIP
+        mod.cmd_socket_states = lambda: {"ok": False, "cmd": "ss", "error": "not found"}
+        codes = self.codes(mod.diagnose(quick=True, **scenario_kwargs(kw)))
+        self.assertNotIn("service_address_unserved", codes)
+        self.assertNotIn("service_address_idle", codes)
+
+    def test_a_box_with_one_address_is_untouched(self):
+        """No service address, so none of this applies. The ordinary box is the
+        one that must not change."""
+        plain = {"ok": True, "cmd": "ip addr", "stdout":
+                 "2: eth0: <BROADCAST,UP> mtu 1500\n"
+                 "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"}
+        codes = self.codes(self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n", interfaces=plain))
+        self.assertNotIn("service_address_unserved", codes)
+        self.assertNotIn("service_address_idle", codes)
+        self.assertNotIn("service_address_present", codes)
+
+    def test_a_busy_service_address_makes_an_idle_one_next_to_it_visible(self):
+        """Two service addresses, one taking everything. Traffic reaching this
+        box and choosing the other address is the clearest form of the thing
+        this finding is for, and the first version excluded it by counting only
+        the box's own addresses as "elsewhere"."""
+        two = {"ok": True, "cmd": "ip addr", "stdout":
+               "2: eth0: <BROADCAST,UP> mtu 1500\n"
+               "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+               "    inet 10.0.0.200/32 scope global eth0\n"
+               "    inet 10.0.0.201/32 scope global eth0\n"}
+        report = self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n", interfaces=two)
+        idle = [f for f in report["findings"] if f["code"] == "service_address_idle"]
+        self.assertEqual(len(idle), 1, "the idle one was not reported")
+        self.assertIn("10.0.0.201", idle[0]["message"])
+
+    def test_both_are_warnings_and_neither_is_quiet_context(self):
+        """Severity is what decides whether anyone sees these. As context they
+        sit under a green verdict, which is the reading they exist to prevent:
+        a box that passes every check and serves nobody."""
+        unserved = self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n")
+        idle = self.report(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n")
+        for report, code in ((unserved, "service_address_unserved"),
+                             (idle, "service_address_idle")):
+            with self.subTest(code=code):
+                found = [f for f in report["findings"] if f["code"] == code]
+                self.assertEqual(len(found), 1)
+                self.assertEqual(found[0]["severity"], "warning")
+
+    def test_who_is_connected_still_does_not_reach_the_report(self):
+        """served_on counts per address and never lists a peer. The peer list is
+        every place this box has been talking to, and the export is something
+        people paste into tickets."""
+        parsed = nd.parse_socket_states(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n")
+        self.assertEqual(parsed["served_on"], {"10.0.0.200": 1})
+        self.assertNotIn("198.51.100.7", json.dumps(parsed["served_on"]))
+
+
 class TestLeavingFromAChosenAddress(unittest.TestCase):
     """--source. On a box with one address it changes nothing; on a proxy it is
     the difference between measuring the path a client of the service address
@@ -10811,6 +10986,27 @@ def _(nd):
     nd.cmd_interfaces = lambda: _VIP_IFACES
     nd.SOURCE_ADDRESS = "10.0.0.201"
     nd.source_address_is_held = lambda a: False
+
+
+@scenario("service_address_unserved")
+def _(nd):
+    # The address is up and every listener is bound to the box's own address,
+    # so nothing accepts on the service address and nothing covers it.
+    nd.cmd_interfaces = lambda: _VIP_IFACES
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n")
+
+
+@scenario("service_address_idle")
+def _(nd):
+    # A wildcard listener covers the service address, so it is served - and
+    # every live connection arrived on the box's own address instead.
+    nd.cmd_interfaces = lambda: _VIP_IFACES
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.8:51001\n")
 
 
 @scenario("gw_unreachable")

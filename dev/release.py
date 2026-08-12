@@ -111,6 +111,23 @@ def main():
     else:
         print(f"{old} -> {args.version}")
         bump(args.version, old, dry=args.dry_run)
+        # The hero image on the README carries the version in its banner, so a
+        # bump makes the committed one stale and the suite says so - correctly,
+        # and one step too late to be useful. Redrawing it here is the same
+        # reason this file exists: the parts of a release that are easy to
+        # forget belong in the thing that does the release.
+        print("redrawing the README hero")
+        if args.dry_run:
+            print("  would run: python3 dev/hero.py")
+        else:
+            drawn = subprocess.run([sys.executable, os.path.join("dev", "hero.py")],
+                                   cwd=ROOT, capture_output=True, text=True)
+            if drawn.returncode != 0:
+                bump(old, args.version)
+                sys.exit("could not redraw the hero - the bump has been "
+                         "reverted:\n" + (drawn.stderr or drawn.stdout))
+            for line in drawn.stdout.splitlines():
+                print("  " + line)
 
     # Before the commit, not after. A release that fails its own suite should
     # never reach a tag, and a tag is the one thing here that must not move.

@@ -9072,14 +9072,23 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
     to a run that lets the kernel choose, and reports clean."""
 
     def setUp(self):
-        self.saved = (nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run)
+        self.saved = (nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run, nd.which)
 
     def tearDown(self):
-        nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run = self.saved
+        nd.SOURCE_ADDRESS, nd.OS_NAME, nd.run, nd.which = self.saved
 
-    def built(self, tool, os_name, source):
+    def built(self, tool, os_name, source, present=("traceroute",)):
+        """Which utilities exist is stated, not inherited from the machine.
+
+        cmd_traceroute picks traceroute when it is installed and tracepath when
+        it is not, and those take different flags. Stubbing run() alone left the
+        real which() to decide, so this passed on a laptop with traceroute and
+        failed in CI, where the runners ship tracepath instead. The same lesson
+        the ping retry test learned: name the platform the assertion is about.
+        """
         seen = []
         nd.SOURCE_ADDRESS, nd.OS_NAME = source, os_name
+        nd.which = lambda c: ("/usr/bin/" + c) if c in present else None
         nd.run = lambda cmd, **kw: (seen.append(cmd),
                                     {"ok": True, "cmd": " ".join(cmd), "code": 0,
                                      "stdout": "x", "stderr": ""})[1]
@@ -9106,6 +9115,17 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
         nd.OS_NAME, nd.SOURCE_ADDRESS = "Windows", "10.0.0.9"
         self.assertEqual(nd._source_flag("ping"), [],
                          "a flag was produced for a ping that has none")
+
+    def test_a_box_with_only_tracepath_is_left_unbound_rather_than_broken(self):
+        """tracepath has no source option. Left unbound on purpose: the hop
+        list is still the hop list, and inventing a flag it does not take would
+        fail the command and lose the path entirely.
+
+        Found by CI, which runs on images that ship tracepath and not
+        traceroute, against a test that had quietly assumed otherwise."""
+        cmd = self.built("traceroute", "Linux", "10.0.0.9", present=("tracepath",))[0]
+        self.assertEqual(cmd, ["tracepath", "8.8.8.8"])
+        self.assertNotIn("-s", cmd)
 
     def test_the_source_survives_the_retry_that_drops_the_tuning_flag(self):
         """cmd_ping asks twice when the first form is rejected. The source must

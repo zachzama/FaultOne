@@ -8303,6 +8303,55 @@ class TestBareBox(unittest.TestCase):
             self.assertIn(code, fired)
 
 
+class TestNothingRunsUnasked(unittest.TestCase):
+    """`which` is how this suite keeps its promise to send no packets: stub it
+    to False and no external command should be reachable. Windows was exempt
+    from that by accident - cmd_traceroute ran tracert without asking whether
+    it existed - so on Windows the stub did nothing, real tracert went to
+    8.8.8.8, and thirteen tests waited out its sixty second timeout. That was
+    three quarters of a seventeen minute run, and invisible on any other
+    system.
+
+    It is a fault in the tool before it is a fault in the suite: on a Windows
+    box without tracert, every other platform says "no utility found" and
+    carries on, and that one raised."""
+
+    def test_no_platform_traces_without_asking_for_the_command_first(self):
+        saved_os, saved_which = nd.OS_NAME, nd.which
+        try:
+            nd.which = lambda cmd: False
+            for os_name in ("Linux", "Darwin", "Windows"):
+                with self.subTest(os=os_name):
+                    nd.OS_NAME = os_name
+                    res = nd.cmd_traceroute("8.8.8.8")
+                    self.assertFalse(res.get("ok"),
+                                     "%s ran a trace with nothing to run it with"
+                                     % os_name)
+                    self.assertIn("no traceroute", res.get("error", ""),
+                                  "%s did not say why it could not trace" % os_name)
+        finally:
+            nd.OS_NAME, nd.which = saved_os, saved_which
+
+    def test_each_platform_still_traces_when_the_command_is_there(self):
+        """The guard above is only worth having if the thing it guards still
+        works - a trace that never runs would satisfy it perfectly."""
+        saved_os, saved_which, saved_run = nd.OS_NAME, nd.which, nd.run
+        ran = []
+        try:
+            nd.which = lambda cmd: True
+            nd.run = lambda cmd, **kw: ran.append(cmd[0]) or {"ok": True, "stdout": ""}
+            for os_name, expected in (("Linux", "traceroute"),
+                                      ("Darwin", "traceroute"),
+                                      ("Windows", "tracert")):
+                with self.subTest(os=os_name):
+                    nd.OS_NAME = os_name
+                    del ran[:]
+                    self.assertTrue(nd.cmd_traceroute("8.8.8.8").get("ok"))
+                    self.assertEqual(ran, [expected])
+        finally:
+            nd.OS_NAME, nd.which, nd.run = saved_os, saved_which, saved_run
+
+
 class TestPythonCompatibility(unittest.TestCase):
     """The tool runs on whatever python3 the box happens to have, so the floor
     has to be a decision rather than an accident."""

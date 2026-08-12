@@ -290,11 +290,16 @@ def cmd_ping(target, count=4, wait=2):
 def cmd_traceroute(target):
     if not valid_target(target):
         return bad_target()
+    # Every branch asks whether the command exists before running it. Windows
+    # did not, and tracert is the one that costs a minute when the path does
+    # not answer: on a Server Core box without it, that was an exception where
+    # every other system returns "no utility found" and carries on.
     if OS_NAME == "Windows":
-        return run(["tracert", "-h", "20", target], timeout=60)
-    if which("traceroute"):
+        if which("tracert"):
+            return run(["tracert", "-h", "20", target], timeout=60)
+    elif which("traceroute"):
         return run(["traceroute", "-m", "20", "-w", "2", target], timeout=60)
-    if which("tracepath"):
+    elif which("tracepath"):
         return run(["tracepath", target], timeout=60)
     return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
 

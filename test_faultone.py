@@ -8512,6 +8512,163 @@ class TestACommandThatDoesNotUnderstandUs(unittest.TestCase):
         self.assertEqual(len(seen), 1, "a working command was run twice")
 
 
+class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
+    """The case past the fall-through chain: not one command missing, but every
+    command foreign. A vendor OS, a scratch container, an appliance with its own
+    shell - which() finds names, none of them understand us, and the chain runs
+    out.
+
+    Two separate defects lived here. The chain handed its last failure upward as
+    a success, because run() reports ok for anything it managed to execute, so
+    "exited 127 with nothing to say" arrived as a successful read of a machine
+    with no address and no gateway - two criticals and exit 2 on a healthy box.
+    And nothing tried the one source that cannot be missing: the kernel, which
+    publishes the routing and neighbour tables as files no userland can trim."""
+
+    ROUTE = ("Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n"
+             "eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\n"
+             "eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n")
+    ARP = ("IP address       HW type     Flags       HW address            Mask     Device\n"
+           "192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n"
+           "192.168.1.77     0x1         0x0         00:00:00:00:00:00     *        eth0\n")
+
+    def setUp(self):
+        self.saved = (nd.run, nd.which, nd.OS_NAME, nd.read_proc)
+
+    def tearDown(self):
+        nd.run, nd.which, nd.OS_NAME, nd.read_proc = self.saved
+
+    def foreign_box(self, proc=None):
+        """Every command present, every command refusing. /proc answers `proc`."""
+        nd.OS_NAME = "Linux"
+        nd.which = lambda c: "/bin/" + c
+        nd.run = lambda cmd, timeout=None, limit=None: {
+            "ok": True, "cmd": " ".join(cmd), "code": 127, "stdout": "",
+            "stderr": "%s: not supported on this platform" % cmd[0]}
+        nd.read_proc = lambda path: (proc or {}).get(path)
+
+    def test_a_command_that_ran_and_failed_is_not_an_empty_machine(self):
+        """The whole bug in one assertion. Without this the result is ok, its
+        stdout is empty, and every parser downstream reads that as a box with
+        nothing configured on it."""
+        self.foreign_box()
+        res = nd.cmd_interfaces()
+        self.assertFalse(res.get("ok"),
+                         "a command that exited 127 was reported as a successful read")
+        self.assertIn("127", res.get("error", ""),
+                      "the error should say what actually happened")
+
+    def test_an_empty_answer_from_a_working_command_is_still_an_answer(self):
+        """The other side of that line, and the reason it tests the exit code
+        rather than the output. A box that has spoken to nobody has an empty
+        neighbour table, and exit 0 with no rows is the true reading of it - it
+        must not become 'the neighbour table could not be read'."""
+        nd.OS_NAME = "Linux"
+        nd.which = lambda c: "/bin/" + c
+        nd.run = lambda cmd, timeout=None, limit=None: {
+            "ok": True, "cmd": " ".join(cmd), "code": 0, "stdout": "", "stderr": ""}
+        nd.read_proc = lambda path: None
+        res = nd.cmd_arp()
+        self.assertTrue(res.get("ok"),
+                        "an empty table from a command that worked was called a failure")
+
+    def test_the_kernel_supplies_the_gateway_when_no_command_can(self):
+        self.foreign_box(proc={"/proc/net/route": self.ROUTE})
+        res = nd.cmd_routes()
+        self.assertTrue(res.get("ok"))
+        self.assertEqual(nd.guess_default_gateway(res), "192.168.1.1")
+
+    def test_the_gateway_is_read_in_the_byte_order_proc_writes_it(self):
+        """/proc writes addresses host-endian, so 0101A8C0 is 192.168.1.1. Read
+        the obvious way the quad comes out backwards - still shaped like an
+        address, pointing at nothing, and reported as the gateway."""
+        self.assertEqual(nd._le_hex_ipv4("0101A8C0"), "192.168.1.1")
+        self.assertEqual(nd._le_hex_ipv4("FE01A8C0"), "192.168.1.254")
+
+    def test_only_the_default_route_is_taken_from_the_table(self):
+        """The second row of ROUTE is the on-link subnet, whose gateway column
+        is zero. Taking it would report 0.0.0.0 as the next hop."""
+        self.foreign_box(proc={"/proc/net/route": self.ROUTE})
+        self.assertEqual(nd.cmd_routes()["stdout"].strip().count("\n"), 0,
+                         "a route other than the default was reported")
+
+    def test_the_kernel_supplies_the_neighbour_table_too(self):
+        self.foreign_box(proc={"/proc/net/arp": self.ARP})
+        entries = nd.parse_arp_table(nd.cmd_arp()["stdout"])
+        self.assertEqual([e["ip"] for e in entries], ["192.168.1.1", "192.168.1.77"])
+        self.assertEqual(entries[0]["mac"], "aa:bb:cc:dd:ee:ff")
+
+    def test_an_unanswered_neighbour_is_kept_as_incomplete(self):
+        """Flags 0x0 is an entry the box asked about and never heard back on.
+        Dropping it loses the difference between a gateway that is silent and a
+        gateway nobody has asked about, which is a finding of its own."""
+        self.foreign_box(proc={"/proc/net/arp": self.ARP})
+        entries = nd.parse_arp_table(nd.cmd_arp()["stdout"])
+        self.assertEqual(entries[1]["state"], "incomplete")
+        self.assertIsNone(entries[1]["mac"], "an all-zero MAC was read as a real one")
+
+    def test_a_kernel_that_cannot_answer_leaves_the_real_error_standing(self):
+        """No /proc, which is every non-Linux box. The reader must return None
+        rather than a failure of its own, or the reported reason for the run
+        knowing nothing becomes this file instead of the foreign commands."""
+        self.foreign_box(proc={})
+        self.assertIsNone(nd.kernel_routes())
+        self.assertIn("127", nd.cmd_routes().get("error", ""))
+
+    def test_the_kernel_is_asked_only_after_the_commands_have_failed(self):
+        """It is a last resort, not a shortcut. A working `ip route` must still
+        be what the report is built from, since it says more than /proc does."""
+        asked = []
+        nd.OS_NAME = "Linux"
+        nd.which = lambda c: "/bin/" + c
+        nd.run = lambda cmd, timeout=None, limit=None: {
+            "ok": True, "cmd": " ".join(cmd), "code": 0, "stderr": "",
+            "stdout": "default via 10.9.9.1 dev eth0 proto dhcp metric 100"}
+        nd.read_proc = lambda path: asked.append(path)
+        res = nd.cmd_routes()
+        self.assertEqual(asked, [], "/proc was read while a command was working")
+        self.assertEqual(nd.guess_default_gateway(res), "10.9.9.1")
+
+    def test_a_self_assigned_address_is_not_evidence_of_being_on_the_network(self):
+        """169.254 means DHCP never answered. It is an address, and offering it
+        as proof the box has one would suppress the finding that says so."""
+        saved = nd.socket.socket
+        try:
+            class Sock(object):
+                def __init__(self, *a):
+                    pass
+
+                def settimeout(self, _t):
+                    pass
+
+                def connect(self, _a):
+                    pass
+
+                def getsockname(self):
+                    return ("169.254.9.9", 9)
+
+                def close(self):
+                    pass
+            nd.socket.socket = Sock
+            self.assertIsNone(nd.kernel_source_address())
+        finally:
+            nd.socket.socket = saved
+
+    def test_the_foreign_box_is_told_what_is_unknown_not_what_is_broken(self):
+        """End to end, and the reason all of this exists. Before it, this box
+        reported no address and no gateway, both critical, and exited 2."""
+        self.foreign_box()
+        report = nd.diagnose(quick=True, target="8.8.8.8")
+        codes = {f["code"] for f in report["findings"]}
+        criticals = [f["code"] for f in report["findings"]
+                     if f["severity"] == "critical"]
+        self.assertNotIn("no_ipv4", codes)
+        self.assertNotIn("no_gateway", codes)
+        self.assertIn("interfaces_unreadable", codes)
+        self.assertEqual(criticals, [],
+                         "a box nothing is known about was called broken: %s" % criticals)
+
+
 class TestNothingRunsUnasked(unittest.TestCase):
     """`which` is how this suite keeps its promise to send no packets: stub it
     to False and no external command should be reachable. Windows was exempt

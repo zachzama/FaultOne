@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **154** | Distinct conclusions it can reach and state in plain language. 131 are faults; 23 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 978 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 989 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 154 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1446,6 +1446,43 @@ The two retries stay separate because an answer means different things. One
 command asked twice: a failure is a result, and only a rejected flag earns a
 second attempt. Several commands describing the same state: nothing is an
 answer until one of them produces output, so any failure moves to the next.
+
+**A box where none of the commands are ours** is the end of that road. A vendor
+OS, a container built from scratch, an appliance with its own shell: `which`
+finds names, none of them understand us, and the chain runs out. Two things
+were wrong past that point.
+
+The chain handed its last failure upward as a success. A command that ran and
+exited non-zero with nothing to say arrived downstream as a successful read of
+a machine with no address and no gateway, so the box was told it was broken
+rather than that it could not be read. A non-zero exit is a failed read now.
+Exit zero with no output is not: an empty neighbour table is a real answer, and
+the only honest one on a box that has spoken to nobody.
+
+And nothing asked the one source that cannot be trimmed. The facts are not in
+those programs, they are in the kernel, and on Linux the kernel publishes them
+as files:
+
+| Read | From | Gives |
+|---|---|---|
+| default route | `/proc/net/route` | the gateway, so every gateway check still runs |
+| neighbours | `/proc/net/arp` | who answered, including entries that never did |
+| this box's own address | a UDP `connect`, no packets sent | that it has one, and a way off itself |
+
+These are last resorts, tried only after every command has failed, because a
+working `ip route` says more than `/proc` does. They return nothing rather than
+an error when they cannot answer, so the reported reason for a run knowing
+nothing stays the foreign commands rather than becoming the fallback.
+
+Rendered into the format the richest command prints, so the same parsers and
+the same ranked rules produce the verdict. A box with no userland is diagnosed
+by the rules everything else is, not by a second thinner set.
+
+The address read is the narrow one. It answers "this box has an address and a
+route off itself", which is what the missing-address finding asks, and it
+cannot say which interface holds what. A self-assigned `169.254` is not
+accepted: that is a box that never got on the network, and offering it as proof
+would suppress the finding that says so.
 
 ## Choosing a target
 
@@ -1661,7 +1698,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 978 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 989 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3047,7 +3084,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-978 tests, no dependencies, no network, a few seconds, so they run
+989 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

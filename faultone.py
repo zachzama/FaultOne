@@ -244,7 +244,7 @@ def bad_target():
 # Command builders, per OS. Each returns a run() result dict.
 # ---------------------------------------------------------------------------
 
-def run_first_usable(variants):
+def run_first_usable(variants, fallback=None):
     """Run candidates that read the same thing until one answers usefully.
 
     Different from run_first_understood, and the difference is what counts as
@@ -257,6 +257,19 @@ def run_first_usable(variants):
     Choosing on which() alone is what made that a critical fault. The binary
     existed, the subcommand did not, and a working machine was told it had no
     IP address on any interface while ifconfig sat there unread.
+
+    `fallback` is a reader that needs no userland at all, tried once every
+    command has failed. On a custom OS none of these names may mean anything,
+    and the kernel still knows the answer.
+
+    What a failure returns matters as much as which command wins. run() reports
+    ok for anything it managed to execute, so a command that ran and exited 127
+    with nothing to say arrived downstream as a successful read of an empty
+    machine - which is how a box whose whole userland was foreign got told it
+    had no address and no gateway, both critical, instead of being told its
+    userland could not be read. A non-zero exit is now a failed read. An exit of
+    zero with no output is not: an empty neighbour table is a real answer, and
+    the only honest one on a box that has spoken to nobody.
     """
     result = None
     for cmd in variants:
@@ -265,11 +278,158 @@ def run_first_usable(variants):
         result = run(cmd)
         if result.get("code") == 0 and (result.get("stdout") or "").strip():
             return result
+    if fallback is not None:
+        from_kernel = fallback()
+        if from_kernel is not None:
+            return from_kernel
+    names = ", ".join(sorted({c[0] for c in variants}))
     if result is None:
         return {"ok": False, "cmd": " ".join(variants[0]) if variants else "",
-                "error": "none of %s is installed"
-                         % ", ".join(sorted({c[0] for c in variants}))}
+                "error": "none of %s is installed" % names}
+    if result.get("code") != 0:
+        return {"ok": False, "cmd": result.get("cmd", ""),
+                "error": "%s exited %s - none of %s could read this"
+                         % (result.get("cmd", "").split(" ")[0],
+                            result.get("code"), names)}
     return result
+
+
+# ---------------------------------------------------------------------------
+# Reading the network without a userland.
+#
+# Every command above is a program somebody chose to ship. An appliance, a
+# container built from scratch, a vendor's own OS - any of them may ship none
+# of them, or ship names that mean something else. The facts are not in those
+# programs though, they are in the kernel, and on Linux the kernel publishes
+# them as files. These read those files and hand back exactly what the parsers
+# upstairs already understand, so a box with no userland is diagnosed by the
+# same rules as any other rather than by a second, thinner set.
+#
+# They return None, not a failure, when they cannot answer. None means "this
+# reader had nothing to add" and leaves the command's own failure to be
+# reported; a failure here would overwrite the real reason with this one.
+# ---------------------------------------------------------------------------
+
+def read_proc(path):
+    """A file under /proc as text, or None if it is not there to read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except (IOError, OSError):
+        return None
+
+
+def _le_hex_ipv4(word):
+    """One little-endian hex word from /proc as a dotted quad.
+
+    /proc/net/route prints addresses in host byte order, which on everything
+    this runs on means the quad is reversed: 0101A8C0 is 192.168.1.1, not
+    1.1.168.192. Reading it the obvious way produces a gateway address that
+    looks plausible and is wrong.
+    """
+    try:
+        n = int(word, 16)
+    except (TypeError, ValueError):
+        return None
+    return "%d.%d.%d.%d" % (n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff,
+                            (n >> 24) & 0xff)
+
+
+def kernel_routes():
+    """The default route from /proc/net/route, worded as `ip route` words it.
+
+    Rendered into the format the richest command produces rather than into a
+    format of its own, because the gateway parser has four dialects to handle
+    already and this would have been a fifth for no gain.
+    """
+    text = read_proc("/proc/net/route")
+    if text is None:
+        return None
+    lines = []
+    for line in text.splitlines()[1:]:            # first line is the header
+        parts = line.split()
+        if len(parts) < 3 or parts[1] != "00000000":
+            continue                              # not the default route
+        hop = _le_hex_ipv4(parts[2])
+        if hop and hop != "0.0.0.0":
+            lines.append("default via %s dev %s" % (hop, parts[0]))
+    if not lines:
+        return None
+    return {"ok": True, "cmd": "/proc/net/route", "stdout": "\n".join(lines) + "\n",
+            "stderr": "", "code": 0}
+
+
+def kernel_neighbours():
+    """The neighbour table from /proc/net/arp, worded as `ip neigh` words it.
+
+    Flags is a bitmask and 0x2 is the completed bit. An entry without it is one
+    the box asked about and never heard back on, which is not the same as no
+    entry and is why it is passed up as INCOMPLETE rather than dropped - an
+    unanswered gateway is a finding of its own.
+    """
+    text = read_proc("/proc/net/arp")
+    if text is None:
+        return None
+    lines = []
+    for line in text.splitlines()[1:]:            # first line is the header
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        ip, flags, mac, dev = parts[0], parts[2], parts[3], parts[5]
+        try:
+            complete = int(flags, 16) & 0x2
+        except (TypeError, ValueError):
+            complete = False
+        if complete and mac != "00:00:00:00:00:00":
+            lines.append("%s dev %s lladdr %s REACHABLE" % (ip, dev, mac))
+        else:
+            lines.append("%s dev %s INCOMPLETE" % (ip, dev))
+    if not lines:
+        return None
+    return {"ok": True, "cmd": "/proc/net/arp", "stdout": "\n".join(lines) + "\n",
+            "stderr": "", "code": 0}
+
+
+def kernel_source_address():
+    """The address this box would use to reach off itself, or None.
+
+    No command and no packets. connect() on a UDP socket sends nothing - it
+    fixes a destination - so this is a routing lookup with a socket for a
+    mouth, and it works wherever Python does, Windows and BSD included.
+
+    The destinations are the documentation ranges, so nothing here depends on
+    a host being up, or reachable, or existing.
+
+    What it answers is "this box has an address and a way off itself", which is
+    the question the missing-address finding asks. What it cannot answer is
+    which interface holds what, and it says nothing on a box with an address
+    but no route - that box has no way off itself either, so the finding it
+    would suppress is one worth leaving up.
+    """
+    for family, probe in ((socket.AF_INET, "192.0.2.1"),
+                          (socket.AF_INET6, "2001:db8::1")):
+        sock = None
+        try:
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+            sock.settimeout(1.0)
+            sock.connect((probe, 9))
+            addr = sock.getsockname()[0]
+            # _flow_is_local rather than a loopback test written here, and not
+            # only to keep one copy of that list. It rejects link-local too,
+            # and a box that self-assigned 169.254 is a box that never got on
+            # the network - the address it would leave from is exactly the
+            # evidence this must not offer.
+            if addr and not _flow_is_local(addr):
+                return addr
+        except (OSError, socket.error):
+            continue
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except (OSError, socket.error):
+                    pass
+    return None
 
 
 def cmd_interfaces():
@@ -281,13 +441,15 @@ def cmd_interfaces():
 def cmd_routes():
     if OS_NAME == "Windows":
         return run(["route", "print"])
-    return run_first_usable([["ip", "route"], ["netstat", "-rn"]])
+    return run_first_usable([["ip", "route"], ["netstat", "-rn"]],
+                            fallback=kernel_routes)
 
 
 def cmd_arp():
     if OS_NAME == "Windows":
         return run(["arp", "-a"])
-    return run_first_usable([["ip", "neigh"], ["arp", "-a"]])
+    return run_first_usable([["ip", "neigh"], ["arp", "-a"]],
+                            fallback=kernel_neighbours)
 
 
 def cmd_listen_ports():
@@ -5603,6 +5765,10 @@ RAW_STAGE = {
     "bonds": "link", "kernel_log": "link", "kernel_drops": "link",
     "lldp": "link", "optics": "link",
     "ipv4": "address", "routes": "address", "arp": "address",
+    # Only present when no command could list the interfaces, and it belongs
+    # to the address stage rather than the link one: it says the box has an
+    # address, not which interface carries it.
+    "kernel_source_address": "address",
     "neigh_table": "address",
     "ping_gateway": "gateway",
     "ping_internet": "internet", "path_trace": "internet",
@@ -9271,14 +9437,28 @@ def _check_addressing(raw, findings):
     # first time anyone writes `if raw["ipv4"]`. A key should mean one thing.
     raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
     if not raw["interfaces"].get("ok"):
+        # No command could describe the interfaces, so ask the kernel for the
+        # one fact this finding turns on. It answers on a box shipping none of
+        # the programs above, and when it does the run stops having to assume.
+        source = kernel_source_address()
+        raw["kernel_source_address"] = source
+        if source:
+            message = (f"Couldn't read the interface list "
+                       f"({raw['interfaces'].get('error', 'command failed')}), so which "
+                       f"interface holds what is unknown. The device does have an address "
+                       f"and a route off itself: the kernel says it would leave from "
+                       f"{source}. Everything below rests on that rather than on an "
+                       f"assumption.")
+        else:
+            message = (f"Couldn't read the interface list "
+                       f"({raw['interfaces'].get('error', 'command failed')}), so this run "
+                       f"can't say whether the device has an address. Everything below assumes "
+                       f"it does.")
         findings.append({
             "severity": "warning",
             "code": "interfaces_unreadable",
             "layer": 1,
-            "message": f"Couldn't read the interface list "
-                       f"({raw['interfaces'].get('error', 'command failed')}), so this run "
-                       f"can't say whether the device has an address. Everything below assumes "
-                       f"it does.",
+            "message": message,
         })
     elif not has_ip_address(raw["interfaces"]):
         findings.append({

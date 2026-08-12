@@ -3257,6 +3257,31 @@ normal cost on a locked-down path rather than a symptom of anything.
 asked to sample for a minute, probes perturbing each other's latency matters
 more than the seconds saved.
 
+## Which of two faults the verdict names
+
+Every scenario in the test corpus is single-fault by construction: a fixture is
+written to make one thing go wrong. So the ranking *between* two findings, which
+is the whole product, is the least exercised logic in the tool.
+
+`dev/audit.py` draws random combinations and checks the rules hold: exactly one
+cause, a consequence never also unrelated, nothing sitting below the fault that
+explains it. Those confirm the verdict obeys the layer rule. They cannot say
+whether the layer rule gives the right answer, because the rule is what decides
+it.
+
+`dev/deep_e2e.py` asks the other question. It puts two scenarios on one box and
+declares which of them the verdict should reach for, reasoned before it is run.
+Recording whatever the tool says today would describe current behaviour rather
+than claim a right answer.
+
+The first thing it found was an inversion. `duplicate_ip` and
+`virtual_router_conflict` ranked below the gateway packet loss they explain, so
+a box with two devices on one address was told to look for a marginal cable,
+while both of those findings say in their own next step that the symptoms move
+with no pattern and to fix the addressing before chasing anything else. One
+hundred and sixty single-fault scenarios could not see it, and neither could a
+rule check that starts from the ranking.
+
 ## Security
 
 This app has **no login and no authentication**. It executes real

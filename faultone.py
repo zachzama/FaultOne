@@ -5261,6 +5261,16 @@ VERDICT_RULES = [
     ("no_gateway", "this device",
      "No default gateway configured - this device can only reach its own subnet",
      "Check DHCP or the static route configuration on this device."),
+    ("virtual_router_conflict", "the redundancy configuration on this segment",
+     "Two virtual routers are configured onto one address",
+     "Different groups answering for the same address - commonly a CARP vhid "
+     "and a VRRP vrid colliding, since both live in the same MAC range. Traffic "
+     "lands on whichever the switch learned last, so symptoms move with no "
+     "pattern. Fix the group numbering before chasing anything else here."),
+    ("duplicate_ip", "the site network",
+     "Two devices are using the same IP address",
+     "Find the second device and change one of them. Until then the symptoms "
+     "move around with no pattern, which is why this wastes so much time."),
     ("gw_partial_loss", "the site network",
      "Packet loss to the gateway - the local link is unstable, not down",
      "Look for a marginal cable, a failing switch port, or Wi-Fi interference "
@@ -5283,16 +5293,6 @@ VERDICT_RULES = [
      "Something changed since the last visit, and not for the better",
      "A dated change beats any absolute reading: start with what moved rather "
      "than with what looks unusual."),
-    ("virtual_router_conflict", "the redundancy configuration on this segment",
-     "Two virtual routers are configured onto one address",
-     "Different groups answering for the same address - commonly a CARP vhid "
-     "and a VRRP vrid colliding, since both live in the same MAC range. Traffic "
-     "lands on whichever the switch learned last, so symptoms move with no "
-     "pattern. Fix the group numbering before chasing anything else here."),
-    ("duplicate_ip", "the site network",
-     "Two devices are using the same IP address",
-     "Find the second device and change one of them. Until then the symptoms "
-     "move around with no pattern, which is why this wastes so much time."),
     ("link_saturated", "capacity, not a fault",
      "The link is full - it is being used to capacity, not broken",
      "Nothing here is faulty. Either the link is undersized for the traffic or "

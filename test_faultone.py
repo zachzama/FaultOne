@@ -8652,6 +8652,19 @@ class TestIsTheServiceAddressActuallyServing(unittest.TestCase):
         self.assertTrue(nd._serves([("*", "443")], "10.0.0.200"))
         self.assertTrue(nd._serves([("::", "443")], "10.0.0.200"))
 
+    def test_an_ipv4_wildcard_does_not_serve_an_ipv6_address(self):
+        """0.0.0.0 is the IPv4 wildcard and never accepts an IPv6 connection.
+        Counting it as cover suppressed the finding on a v6 service address
+        that really did have nothing accepting on it."""
+        self.assertFalse(nd._serves([("0.0.0.0", "443")], "2001:db8::a"))
+        self.assertTrue(nd._serves([("0.0.0.0", "443")], "10.0.0.200"))
+
+    def test_the_ipv6_wildcard_still_covers_both(self):
+        """A dual-stack listener on :: takes IPv4 as mapped addresses, which is
+        how most of them are built, so this one has to keep working."""
+        self.assertTrue(nd._serves([("::", "443")], "10.0.0.200"))
+        self.assertTrue(nd._serves([("::", "443")], "2001:db8::a"))
+
     def test_a_listener_on_one_address_does_not_serve_another(self):
         self.assertTrue(nd._serves([("10.0.0.200", "443")], "10.0.0.200"))
         self.assertFalse(nd._serves([("10.0.0.5", "443")], "10.0.0.200"))
@@ -9153,6 +9166,127 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
                          ["ping", "-c", "4", "-W", "2", "8.8.8.8"])
         self.assertEqual(self.built("traceroute", "Linux", None)[0],
                          ["traceroute", "-m", "20", "-w", "2", "8.8.8.8"])
+
+    def test_every_probe_that_can_name_a_source_actually_does(self):
+        """The defect this replaces: the report said every check left from the
+        chosen address while the port check, the path MTU probe, the TCP trace
+        and DNS all left from whatever the kernel picked. A claim in the report
+        that the code does not keep is the worst kind of bug this tool can have,
+        because the whole product is a sentence people act on.
+
+        Read off the source rather than asserted from a list, so a collector
+        added later is held to the same rule instead of quietly escaping it."""
+        import ast
+        import textwrap
+        src = open(nd.__file__, encoding="utf-8").read()
+        tree = ast.parse(src)
+        lines = src.splitlines()
+        # Everything that sends off the box. Delegators are named with what
+        # they delegate to, since the binding lives one level down.
+        senders = {
+            "cmd_ping": None, "cmd_traceroute": None, "cmd_path_mtu": None,
+            "cmd_traceroute_tcp": None, "cmd_dns": None, "cmd_tls_check": None,
+            "cmd_check_port": "_connect_once", "cmd_dns_health": "dns_query",
+        }
+        bodies = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                bodies[node.name] = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        for name, delegate in senders.items():
+            with self.subTest(collector=name):
+                body = bodies[delegate or name]
+                self.assertTrue(
+                    any(k in body for k in ("_source_flag", "connect_from",
+                                            "_source_for", "SOURCE_ADDRESS")),
+                    "%s sends off the box and never names the source" % (delegate or name))
+
+    def test_the_port_check_leaves_from_the_chosen_address(self):
+        """The one most worth binding. A port check asks "can a client of this
+        address reach that service", and answered from the box's own address it
+        is a confident answer to a question nobody asked."""
+        seen = {}
+        real = nd.socket.socket
+
+        class Sock(object):
+            def __init__(self, *a):
+                self._s = real(*a)
+
+            def bind(self, addr):
+                seen["bound"] = addr
+
+            def settimeout(self, t):
+                pass
+
+            def connect_ex(self, addr):
+                return 0
+
+            def recv(self, n):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                self._s.close()
+        nd.socket.socket = Sock
+        try:
+            nd.SOURCE_ADDRESS = "10.0.0.9"
+            nd.cmd_check_port("10.0.0.1", 443)
+        finally:
+            nd.socket.socket = real
+        self.assertEqual(seen.get("bound"), ("10.0.0.9", 0))
+
+    def test_a_source_of_the_wrong_family_is_not_bound_at_all(self):
+        """A run bound to an IPv4 address still has to reach an IPv6-only
+        target. Refusing would turn "measure from this address" into "only
+        measure what this address can reach", which is a different and much
+        less useful instruction."""
+        nd.SOURCE_ADDRESS = "10.0.0.9"
+        self.assertIsNone(nd._source_for(nd.socket.AF_INET6))
+        self.assertEqual(nd._source_for(nd.socket.AF_INET), ("10.0.0.9", 0))
+        nd.SOURCE_ADDRESS = "2001:db8::9"
+        self.assertIsNone(nd._source_for(nd.socket.AF_INET))
+        self.assertEqual(nd._source_for(nd.socket.AF_INET6), ("2001:db8::9", 0))
+
+    def test_the_path_mtu_probe_is_bound_on_every_platform(self):
+        """It builds its own pings rather than going through cmd_ping, so it
+        needed the flag adding to each platform's form. Path MTU is a property
+        of a path, and a box with a tunnel on one address and not the other has
+        two of them."""
+        for os_name, flag in (("Linux", "-I"), ("Darwin", "-S")):
+            with self.subTest(os=os_name):
+                seen = []
+                saved_run, saved_os = nd.run, nd.OS_NAME
+                nd.OS_NAME, nd.SOURCE_ADDRESS = os_name, "10.0.0.9"
+                nd.run = lambda cmd, **kw: (seen.append(cmd),
+                                            {"ok": True, "cmd": " ".join(cmd), "code": 1,
+                                             "stdout": "", "stderr": ""})[1]
+                try:
+                    nd.cmd_path_mtu("8.8.8.8")
+                finally:
+                    nd.run, nd.OS_NAME = saved_run, saved_os
+                self.assertTrue(seen, "the probe never ran")
+                self.assertIn(flag, seen[0])
+                self.assertIn("10.0.0.9", seen[0])
+
+    def test_each_tcp_trace_utility_gets_its_own_source_flag(self):
+        """Three utilities, three spellings, and a presence check on the
+        function body cannot tell them apart: dropping the flag from one of the
+        three leaves the other two mentioning it, and the guard passes while a
+        real trace goes out unbound. Each one is built and read."""
+        for tool, flag in (("tcptraceroute", "-s"), ("traceroute", "-s"), ("mtr", "-a")):
+            with self.subTest(tool=tool):
+                seen = []
+                nd.SOURCE_ADDRESS, nd.OS_NAME = "10.0.0.9", "Linux"
+                nd.which = lambda c, _t=tool: ("/usr/bin/" + c) if c == _t else None
+                nd.run = lambda cmd, **kw: (seen.append(cmd),
+                                            {"ok": True, "cmd": " ".join(cmd), "code": 1,
+                                             "stdout": "", "stderr": ""})[1]
+                nd.cmd_traceroute_tcp("8.8.8.8")
+                self.assertTrue(seen, "%s was never attempted" % tool)
+                self.assertEqual(seen[0][0], tool)
+                self.assertIn(flag, seen[0])
+                self.assertIn("10.0.0.9", seen[0])
 
     def test_holding_an_address_is_decided_by_the_kernel_not_by_parsing(self):
         """Loopback is always here and a documentation address never is, on any

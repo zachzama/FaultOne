@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1041 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1048 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 160 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1605,6 +1605,25 @@ and reports a healthy box.
 python3 faultone.py --report --source 203.0.113.10 --target 10.0.0.20
 ```
 
+**What is bound, and what cannot be.** Every probe that can name a source does:
+ping, both traceroutes, the TCP trace, the path MTU probe, DNS queries, the
+port checks and the TLS handshakes. The socket-based ones bind before
+connecting, so an address the box does not hold fails in the kernel before a
+packet leaves. The command-driven ones carry the flag their utility takes,
+which is three different spellings for one idea: `-I` for Linux ping, `-S` for
+BSD and macOS ping, `-s` for both traceroutes, `-a` for mtr, `-b` for dig.
+
+A few utilities have no such option at all: Windows `ping` and `tracert`,
+`tracepath`, and `nslookup`. Where one of those is the only one available, that
+single check leaves from whichever address the kernel chose, and the finding
+says so rather than claiming the whole run was bound. The first version of that
+finding did claim it, which was a sentence the code did not keep.
+
+A source of the wrong family is not bound rather than refused. A run bound to
+an IPv4 address still has to be able to reach an IPv6-only target, and refusing
+would turn "measure from this address" into "only measure what this address can
+reach", which is a different and much less useful instruction.
+
 **A box that does not hold the address is the finding, not an error.** The
 kernel refuses to bind, before a packet is sent, and that is reported as
 critical and outranks everything else in the run. It is what a standby node
@@ -1657,7 +1676,10 @@ That is the normal shape of the deployment this section exists for, so an
 absent listener is reported as something to look at, never as a broken box.
 
 A wildcard bind counts as serving every address the box holds, including one
-added after the process started. That is the common case rather than an edge
+added after the process started, with one exception: `0.0.0.0` is the IPv4
+wildcard and never accepts an IPv6 connection, so it does not cover an IPv6
+service address. `::` does cover both, because a dual-stack listener on it
+takes IPv4 as mapped addresses, which is how most of them are built. That is the common case rather than an edge
 one: a server on `0.0.0.0` with a service address placed underneath it by
 keepalived is most of these boxes, and calling it unserved would be wrong about
 nearly all of them.
@@ -1878,7 +1900,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1041 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1048 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3264,7 +3286,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1041 tests, no dependencies, no network, a few seconds, so they run
+1048 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

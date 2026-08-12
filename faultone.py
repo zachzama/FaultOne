@@ -575,7 +575,8 @@ def cmd_dns(target):
     if not valid_target(target):
         return bad_target()
     if which("dig"):
-        return run(["dig", "+noall", "+answer", target])
+        return run(["dig", "+noall", "+answer"]
+                   + (["-b", SOURCE_ADDRESS] if SOURCE_ADDRESS else []) + [target])
     if which("nslookup"):
         return run(["nslookup", target])
     return {"ok": False, "error": "no DNS lookup utility (dig/nslookup) found on this system"}
@@ -743,11 +744,14 @@ def cmd_traceroute_tcp(target, port=443):
         return None
     attempts = []
     if which("tcptraceroute"):
-        attempts.append(["tcptraceroute", "-m", "20", "-w", "2", target, str(port)])
+        attempts.append(["tcptraceroute", "-m", "20", "-w", "2"] + _source_flag("traceroute")
+                        + [target, str(port)])
     if which("traceroute") and OS_NAME != "Windows":
-        attempts.append(["traceroute", "-T", "-p", str(port), "-m", "20", "-w", "2", target])
+        attempts.append(["traceroute", "-T", "-p", str(port), "-m", "20", "-w", "2"]
+                        + _source_flag("traceroute") + [target])
     if which("mtr"):
-        attempts.append(["mtr", "--tcp", "-P", str(port), "--json", "-c", "5", "-b", target])
+        attempts.append(["mtr", "--tcp", "-P", str(port), "--json", "-c", "5", "-b"]
+                        + (["-a", SOURCE_ADDRESS] if SOURCE_ADDRESS else []) + [target])
     for cmd in attempts:
         res = run(cmd, timeout=70)
         if not res.get("ok") or res.get("code") != 0:
@@ -924,6 +928,13 @@ def dns_query(server, name, qtype=1, timeout=2.0):
     try:
         with socket.socket(family, socket.SOCK_DGRAM) as sock:
             sock.settimeout(timeout)
+            # Resolution is a path like any other, and a resolver reached from
+            # one address is not proof about another: an upstream filter or a
+            # split-horizon view keyed on source is exactly the fault a bound
+            # run exists to find.
+            source = _source_for(family)
+            if source:
+                sock.bind(source)
             sock.sendto(packet, (addr, 53))
             # UDP accepts a datagram from anyone; take only the reply from the
             # resolver we actually asked, so a stray or spoofed packet can't be
@@ -1348,6 +1359,22 @@ class SourceAddressUnavailable(OSError):
     else that raises here means the far end did something; this means the near
     end never had the address, and the two must not be reported alike.
     """
+
+
+def _source_for(family):
+    """SOURCE_ADDRESS as a bind tuple, when it belongs to this socket's family.
+
+    None rather than an error on a mismatch. A run bound to an IPv4 address
+    still has to be able to reach an IPv6-only target, and refusing would turn
+    "measure from this address" into "only measure things this address can
+    reach", which is a different and much less useful instruction. The check
+    that the box holds the address is separate and has already run by then.
+    """
+    if not SOURCE_ADDRESS:
+        return None
+    if (family == socket.AF_INET6) != (":" in SOURCE_ADDRESS):
+        return None
+    return (SOURCE_ADDRESS, 0)
 
 
 def connect_from(address, port, timeout):
@@ -4081,15 +4108,20 @@ def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     # Probe the configured MTU first, then common tunnel sizes (PPPoE, IPsec,
     # GRE/VXLAN), then a floor that almost anything passes.
     candidates = [c for c in (ceiling, 1492, 1400, 1280, 1000) if c <= ceiling]
+    # Path MTU is a property of a path, and a box holding two addresses can
+    # have two: a tunnel on one and not the other is the ordinary way that
+    # happens. Measured unbound it was the primary address's path MTU reported
+    # as the answer for whichever address was asked about.
+    src = _source_flag("ping")
     attempts = []
     for mtu in candidates:
         payload = mtu - MTU_OVERHEAD
         if OS_NAME == "Windows":
-            cmd = ["ping", "-f", "-l", str(payload), "-n", "1", "-w", "2000", target]
+            cmd = ["ping", "-f", "-l", str(payload), "-n", "1", "-w", "2000"] + src + [target]
         elif OS_NAME == "Darwin":
-            cmd = ["ping", "-D", "-s", str(payload), "-c", "1", "-t", "3", target]
+            cmd = ["ping", "-D", "-s", str(payload), "-c", "1", "-t", "3"] + src + [target]
         else:
-            cmd = ["ping", "-M", "do", "-s", str(payload), "-c", "1", "-W", "2", target]
+            cmd = ["ping", "-M", "do", "-s", str(payload), "-c", "1", "-W", "2"] + src + [target]
         res = run(cmd, timeout=6)
         got = bool(res.get("ok")) and res.get("code") == 0
         attempts.append({"mtu": mtu, "payload": payload, "ok": got,
@@ -4184,6 +4216,19 @@ def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version,
         banner = ""
         with socket.socket(family, socktype, proto) as s:
             s.settimeout(timeout)
+            # Bound like every other probe. This one was missed, and it is the
+            # one most worth binding: a port check is the question "can a client
+            # of this address reach that service", and answered from the box's
+            # primary address it is a confident answer to a question nobody
+            # asked. The report said every check left from the chosen source
+            # while this one did not.
+            source = _source_for(family)
+            if source:
+                try:
+                    s.bind(source)
+                except OSError as exc:
+                    return fail("source", "could not send from %s: %s"
+                                % (SOURCE_ADDRESS, exc))
             # A completed TCP connect is one round trip, so this figure is the
             # path's own latency to that service - not a guess derived from ping.
             started = time.monotonic()
@@ -10022,9 +10067,12 @@ def _check_source_address(raw, findings):
             "severity": "ok",
             "code": "bound_to_source_address",
             "layer": 3,
-            "message": f"Every check that leaves this box left from {SOURCE_ADDRESS}"
+            "message": f"Every probe that can name a source left from {SOURCE_ADDRESS}"
                        f"{where}, so the path measured is the one a client of that "
-                       f"address gets, including its return path.",
+                       f"address gets, including its return path. A few utilities have "
+                       f"no such option - Windows ping and tracert, tracepath, nslookup "
+                       f"- and where one of those was the only one available, that "
+                       f"check left from whichever address the kernel chose.",
         })
     else:
         findings.append({
@@ -10053,10 +10101,22 @@ def _serves(bound, address):
     by keepalived, and calling that unserved would be wrong about nearly every
     box this is written for.
     """
+    wants_v6 = ":" in (address or "")
     for host, _port in bound or []:
         clean = (host or "").strip("[]")
-        if clean in _WILDCARD_BINDS or clean == address:
+        if clean == address:
             return True
+        if clean not in _WILDCARD_BINDS:
+            continue
+        # Which wildcard, and for which family. 0.0.0.0 is the IPv4 wildcard
+        # and never accepts an IPv6 connection, so counting it as cover for a
+        # v6 service address suppressed the finding on an address that really
+        # did have nothing accepting on it. "::" is allowed to cover both,
+        # because a dual-stack listener on it takes v4 as mapped addresses,
+        # which is how most of them are built.
+        if clean == "0.0.0.0" and wants_v6:
+            continue
+        return True
     return False
 
 

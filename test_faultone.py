@@ -9982,6 +9982,25 @@ def fresh():
     mod.cmd_lldp = lambda: None
     mod.cmd_optics = lambda i: None
     mod.cmd_tls_check = lambda h, p=443, timeout=5: None
+    # The three that open a socket to this box's own listeners. Left live they
+    # really connect to 127.0.0.1 on whatever ports the scenario's fake socket
+    # table invented - twenty-nine connections in a single test, from a suite
+    # whose whole premise is that it sends nothing. Unix refuses them in
+    # microseconds so it never showed; Windows takes about two seconds each,
+    # which was a minute a test and three quarters of the CI run.
+    #
+    # The shape is the one the tool produces when nothing is listening, so a
+    # scenario that wants a served certificate or a live local service still
+    # overrides these afterwards and gets exactly what it asked for.
+    mod.cmd_own_http = lambda port, timeout=5, address="127.0.0.1", tls=False: {
+        "ok": False, "cmd": f"HEAD / {address}:{port}", "port": port,
+        "host": address, "tls": tls, "unreachable_locally": "connection refused"}
+    mod.cmd_own_tls = lambda port, timeout=5, address="127.0.0.1": {
+        "ok": False, "cmd": f"tls handshake {address}:{port} (own listener)",
+        "host": address, "port": port, "own_listener": True,
+        "unreachable_locally": "connection refused"}
+    mod.cmd_tls_check_local = lambda port, server_name, timeout=5, address="127.0.0.1": {
+        "verified": False, "verify_error": "connection refused"}
     mod.cmd_socket_states = lambda: {"ok": True, "cmd": "ss -tan", "stdout": "",
                                     "states": {"ESTABLISHED": 5, "LISTEN": 3}, "pending": {}}
     mod.cmd_listen_ports = lambda: {"ok": True, "cmd": "ss -tuln", "stdout": "listening"}

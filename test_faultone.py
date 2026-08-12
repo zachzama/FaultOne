@@ -9449,6 +9449,39 @@ class TestTheWayInIsNotTrafficThisBoxIsServing(unittest.TestCase):
               "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n" + self.admin(3))
         self.assertEqual(self.parsed(ss)["inbound"], 3)
 
+    def test_a_box_with_only_admin_sessions_reads_as_a_box_with_none(self):
+        """The rule, in the only form that survives someone adding a counter.
+
+        Written against the whole finding set rather than the two codes that
+        went wrong, because naming them makes this a record of one bug instead
+        of a rule. Any future counter that quietly includes the way in changes
+        this comparison, whether or not anybody remembers this test exists.
+
+        It catches both directions, which is what the original defect did: with
+        the sessions counted, two findings appeared that should not have, and
+        no_clients_connected disappeared, because the box believed four clients
+        were connected to it.
+        """
+        listeners = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                     "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                     "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n")
+
+        def codes(ss):
+            setup, kw = S["all_clear"]
+            mod = fresh()
+            setup(mod)
+            mod.cmd_interfaces = lambda: self.VIP
+            mod.cmd_socket_states = lambda: dict(
+                {"ok": True, "cmd": "ss -tan", "stdout": ss},
+                **mod.parse_socket_states(ss, mod._own_access_service()))
+            return {f["code"] for f in mod.diagnose(quick=True,
+                                                    **scenario_kwargs(kw))["findings"]}
+        idle = codes(listeners)
+        worked_on = codes(listeners + self.admin(4))
+        self.assertEqual(worked_on, idle,
+                         "being logged in changed the diagnosis: %s"
+                         % sorted(worked_on ^ idle))
+
     def test_the_counters_the_findings_read_all_exclude_it(self):
         """served_on and served_endpoints feed the per-instance table and the
         service-address findings; inbound and outbound feed the rest. Any one of
@@ -9546,6 +9579,40 @@ class TestNoCollectorPicksOnExistenceAlone(unittest.TestCase):
         del seen[:]
         nd.cmd_socket_states()
         self.assertEqual(seen[0][1], 15)
+
+    def test_advice_in_a_finding_names_a_flag_that_exists(self):
+        """Findings tell people what to run next, and a flag that was renamed
+        leaves that advice pointing at nothing.
+
+        The documents already have this guard and it is not the same one: docs
+        and argparse can be renamed together while the sentences inside findings
+        go on naming the old flag, and nothing reads those. The advice is the
+        part someone actually types.
+        """
+        import ast
+        src = open(nd.__file__, encoding="utf-8").read()
+        real = set(re.findall(r'ap\.add_argument\(\s*"(--[a-z-]+)"', src))
+        self.assertTrue(real, "no flags found, so this guard is looking at nothing")
+        stale = {}
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Dict):
+                continue
+            code = message = None
+            for key, value in zip(node.keys, node.values):
+                if not isinstance(key, ast.Constant):
+                    continue
+                if key.value == "code" and isinstance(value, ast.Constant):
+                    code = value.value
+                elif key.value == "message":
+                    message = ast.get_source_segment(src, value) or ""
+            if not (code and message):
+                continue
+            for flag in re.findall(r"--[a-z][a-z-]+", message):
+                if flag not in real:
+                    stale.setdefault(flag, set()).add(code)
+        self.assertEqual(stale, {},
+                         "findings tell people to pass flags that do not exist: %s"
+                         % {f: sorted(c) for f, c in stale.items()})
 
     def test_no_collector_chooses_on_existence_alone(self):
         """The rule itself, read off the source. Written as a check on the code

@@ -1083,6 +1083,63 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             os.environ.clear()
             os.environ.update(saved)
 
+    def test_force_color_turns_it_back_on_and_no_color_still_wins(self):
+        """The companion to NO_COLOR, for where the isatty guess is wrong: a
+        report piped into `less -R`, or a CI log that renders escapes and is
+        not a terminal.
+
+        The precedence is the point. NO_COLOR beats FORCE_COLOR, because the
+        one that suppresses output must win a tie, and --no-color beats both,
+        because a flag someone typed beats the environment they inherited."""
+        import io as _io
+
+        class Terminal(_io.StringIO):
+            def isatty(self):
+                return True
+
+        pipe, term = _io.StringIO(), Terminal()
+        saved, saved_os = dict(os.environ), nd.OS_NAME
+        try:
+            nd.OS_NAME = "Linux"
+            for key in ("NO_COLOR", "FORCE_COLOR"):
+                os.environ.pop(key, None)
+            os.environ["TERM"] = "xterm-256color"
+
+            self.assertFalse(nd.use_color(pipe), "a pipe got colour unasked")
+            os.environ["FORCE_COLOR"] = "1"
+            self.assertTrue(nd.use_color(pipe), "FORCE_COLOR was ignored")
+            os.environ["FORCE_COLOR"] = ""
+            self.assertFalse(nd.use_color(pipe), "an empty FORCE_COLOR still forced it")
+            os.environ["FORCE_COLOR"] = "1"
+            os.environ["NO_COLOR"] = "1"
+            self.assertFalse(nd.use_color(pipe), "NO_COLOR lost to FORCE_COLOR")
+            del os.environ["NO_COLOR"]
+            self.assertFalse(nd.use_color(term, True), "--no-color lost to FORCE_COLOR")
+        finally:
+            nd.OS_NAME = saved_os
+            os.environ.clear()
+            os.environ.update(saved)
+
+    def test_the_help_says_what_the_exit_codes_mean(self):
+        """The person who needs them is writing a wrapper at the time they need
+        them, and reaching for --help rather than a reference document.
+
+        Also pins the width. Switching the formatter so the epilog keeps its
+        line breaks stops argparse wrapping the description too, and that ran
+        to 129 columns on an eighty column terminal until it was wrapped by
+        hand."""
+        import subprocess
+        out = subprocess.run([sys.executable, nd.__file__, "--help"],
+                             capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, COLUMNS="80"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        for token in ("exit codes:", "0 nothing wrong", "3 no verdict reached",
+                      "NO_COLOR", "FORCE_COLOR"):
+            self.assertIn(token, out.stdout, f"--help never mentions {token}")
+        longest = max(len(l) for l in out.stdout.split("\n"))
+        self.assertLessEqual(longest, 80,
+                             f"--help runs to {longest} columns at COLUMNS=80")
+
     def test_the_override_reaches_the_only_place_colour_is_decided(self):
         """A flag nothing consults is a flag that lies. There is exactly one
         call, so this pins that it is passed rather than defaulted."""

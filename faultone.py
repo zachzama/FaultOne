@@ -11623,13 +11623,29 @@ def use_color(stream, disabled=False):
 
     `disabled` is the override for when all of that guesses wrong.
     """
+    if disabled:
+        return False
+    # FORCE_COLOR overrides the guesses below, not the flag above.
+    if forced_color():
+        return True
     return bool(
-        not disabled
-        and getattr(stream, "isatty", lambda: False)()
+        getattr(stream, "isatty", lambda: False)()
         and os.environ.get("NO_COLOR") is None
         and os.environ.get("TERM") != "dumb"
         and OS_NAME != "Windows"
     )
+
+
+def forced_color():
+    """FORCE_COLOR set to anything but empty means colour even when piped.
+
+    The companion to NO_COLOR, for the case the isatty check gets wrong: a
+    report piped into `less -R`, or a CI log that renders escapes and is not
+    a terminal. NO_COLOR still wins when both are set, and --no-color wins
+    over either, because the explicit request beats the environment.
+    """
+    return (os.environ.get("FORCE_COLOR") not in (None, "")
+            and os.environ.get("NO_COLOR") is None)
 
 
 def worst_by_scope(findings):
@@ -12325,9 +12341,22 @@ def build_parser():
     Split out of main() so the flags can be read - and tested - without
     running a diagnosis; main() is then the dispatch it always meant to be.
     """
+    # Exit codes belong in --help, not only in the reference: the person who
+    # needs them is writing a wrapper at the time they need them.
     ap = argparse.ArgumentParser(
-        description=f"FaultOne {__version__} - field triage for a box you're logged into: "
-                    f"is the fault this device, the network it's plugged into, or upstream?")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        # Wrapped by hand: RawDescriptionHelpFormatter stops argparse wrapping
+        # the description as well as the epilog, and unwrapped this ran to 129
+        # columns on an eighty column terminal.
+        description=f"FaultOne {__version__} - field triage for a box you're logged\n"
+                    f"into: is the fault this device, the network it's plugged into,\n"
+                    f"or upstream?",
+        epilog="exit codes: 0 nothing wrong, 1 a warning, 2 something critical,\n"
+               "            3 no verdict reached (a crash, or a run that could not\n"
+               "            reach a conclusion). 0, 1 and 2 all mean it ran.\n\n"
+               "colour:     off when the output is not a terminal, when NO_COLOR is\n"
+               "            set, and on a dumb terminal. FORCE_COLOR turns it back\n"
+               "            on; --no-color beats both.")
     ap.add_argument("--version", action="version",
                      version=f"FaultOne {__version__} (python {platform.python_version()})")
     ap.add_argument("--report", action="store_true",

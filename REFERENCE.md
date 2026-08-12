@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **153** | Distinct conclusions it can reach and state in plain language. 131 are faults; 22 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 965 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 967 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 153 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1403,7 +1403,9 @@ utilization, and the comparison against a `--baseline`.
                          adds only a reverse-DNS lookup per neighbour)
 --quiet                  hide the progress line while the checks run
 --no-color               never colour the output (already off when redirected,
-                         when NO_COLOR is set, and on a dumb terminal)
+                         when NO_COLOR is set, and on a dumb terminal;
+                         FORCE_COLOR turns it back on, and this flag beats
+                         both)
 --version                print the version and exit
 --quick                  skip the traceroute and path MTU (~2s instead of ~7s, or
                          instead of ~60s where the path answers no traceroute)
@@ -1513,7 +1515,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 965 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 967 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2899,7 +2901,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-965 tests, no dependencies, no network, a few seconds, so they run
+967 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

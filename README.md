@@ -14,16 +14,16 @@ or the way out?** FaultOne runs the checks you'd run by hand, then does the part
 that actually takes experience: it works out which fault is the **cause** and
 which are its consequences, and names who owns it.
 
-The name is the promise — one fault to act on, not a list to triage. It will
+The name is the promise: one fault to act on, not a list to triage. It will
 still tell you if something unrelated is also broken; it just won't make you
 work out which of the two to start with.
 
 It fits two shapes of box and tells them apart on its own:
 
-- **a box that only talks outward** — an appliance at a customer site, a
+- **a box that only talks outward**: an appliance at a customer site, a
   jump host, a worker. There is no way in, so the question is this box or
   everything past it.
-- **a box that answers requests** — a proxy, an API server, anything with
+- **a box that answers requests**: a proxy, an API server, anything with
   clients connected. Now there are two directions, and they have different
   owners: the loss your users see and the loss your database sees are not the
   same fault.
@@ -38,7 +38,7 @@ layer is. On a box nothing connects to, the first one reads `none connected` and
 the strip below carries the detail.
 
 The strip reads in the same order: the way in, then the box, then the way out.
-Note what it does **not** say here — `internet PASS`, because what this box
+Note what it does **not** say here: `internet PASS`, because what this box
 depends on is fine. The fault is on the traffic arriving at it, and that is a
 different direction with a different owner.
 
@@ -49,14 +49,14 @@ One Python file. Nothing to install, nothing left behind, no port opened.
 The two commands at the top are the whole tool. Everything here is optional.
 
 **What it aims at.** By default (`--target auto`) a box with clients connected
-is diagnosed against **the backend it depends on most** — read off its own open
-connections — because whether a service can reach its database matters more
+is diagnosed against **the backend it depends on most** (read off its own open
+connections), because whether a service can reach its database matters more
 than whether it can reach `8.8.8.8`. A box with no clients connected falls back
 to `8.8.8.8`. Either way the report names what it chose and why, and
 `--target host` overrides it.
 
 > [!TIP]
-> **Can't copy files onto the box?** Pipe it in — it runs from memory and
+> **Can't copy files onto the box?** Pipe it in. It runs from memory and
 > leaves nothing behind:
 >
 > ```bash
@@ -68,7 +68,7 @@ repetitive text: it goes over the wire at 178 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
-the file. The standard library will drop them for the trip — no build step, no
+the file. The standard library will drop them for the trip: no build step, no
 second version to keep in step, same behaviour:
 
 ```bash
@@ -77,9 +77,9 @@ ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 127 KB on t
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
-Stripped and compressed together it's 127 KB instead of 597 — 79% less, which
-is eleven minutes down to just over two on a 9600-baud console (8N1, so 960
-bytes a second), and nothing you'd notice on anything faster.
+Stripped and compressed together it's 127 KB instead of 597. That is 79%
+less, which is eleven minutes down to just over two on a 9600-baud console
+(8N1, so 960 bytes a second), and nothing you'd notice on anything faster.
 
 **Want the visual version?** Two ways, both offline:
 
@@ -92,7 +92,7 @@ The `.html` carries the report inside it: double-click and you're looking at the
 verdict, which direction the fault is on, the hop-by-hop path and the evidence
 behind all of it. It follows your system's light or dark setting, prints to
 paper properly, and opens from the keyboard. The `.json` is smaller and carries
-no viewer, so it's the one to paste through a terminal — and it's what
+no viewer, so it's the one to paste through a terminal, and it's what
 `--baseline` reads on the next visit.
 
 **Getting it back off a box you can barely reach?** Most of an export is the
@@ -103,13 +103,13 @@ captured output of every command, kept so a conclusion can be audited later.
 python3 faultone.py --export-compact report.json    # ~5 KB instead of ~120 KB
 ```
 
-Same verdict, same findings, same hop diagram, same stage strip — all of that is
+Same verdict, same findings, same hop diagram, same stage strip: all of that is
 derived and none of it is what makes an export big. What's kept is the evidence
 behind the stages that aren't passing, plus any check that couldn't run, because
 a gap in coverage has to stay visible or it reads as a pass.
 
 **Can't copy a file off it at all?** No `scp`, no outbound connection, nothing
-to install — but you can always read the screen. Print the report instead:
+to install. But you can always read the screen. Print the report instead:
 
 ```bash
 python3 faultone.py --export-compact -              # one line, on stdout
@@ -117,7 +117,7 @@ python3 faultone.py --export-compact -              # one line, on stdout
 
 Triple-click it, copy, and paste it into the box in the viewer's sidebar. SSH
 sends characters and your own terminal draws them, so the selection never
-involves the box — which is exactly why this works where a file transfer
+involves the box, which is exactly why this works where a file transfer
 doesn't. It comes out on one line so a single click takes all of it, and the
 viewer copes with the wrapping and with a stray shell prompt either side.
 
@@ -128,9 +128,9 @@ machine.
 
 | | |
 |---|---|
-| `--quick` | Skips the traceroute and path MTU — the slow parts. Use it when someone's on the phone, or where the path answers no traceroute at all and the full check waits out a 60-second timeout. |
+| `--quick` | Skips the traceroute and path MTU, the slow parts. Use it when someone's on the phone, or where the path answers no traceroute at all and the full check waits out a 60-second timeout. |
 | `--soak 120` | Watches for two minutes instead of taking a snapshot. Use it for faults that come and go. |
-| `--target auto` | The default. On a box that accepts connections, aims at the backend it depends on most rather than at 8.8.8.8 — and re-owns the verdicts accordingly. |
+| `--target auto` | The default. On a box that accepts connections, aims at the backend it depends on most rather than at 8.8.8.8, and re-owns the verdicts accordingly. |
 | `--uplink-mbps 50` | The site's line rate, off the ticket. Without it the tool measures against the NIC's speed and can blame the carrier for a line the site is filling itself. |
 | `--baseline old.json` | Compares against a previous visit and tells you what changed. |
 | `--check-ports common` | Checks 22, 53, 80, 443, 8080 without typing them out. |
@@ -142,7 +142,7 @@ machine.
 ## Why the ranking is the point
 
 Every tool in this category collects more than this one does. None of them
-decides, from the same counters, which fault is the cause — and that decision is
+decides, from the same counters, which fault is the cause, and that decision is
 where the wrong answer usually comes from, because the obvious reading of the
 evidence is often wrong.
 
@@ -151,18 +151,18 @@ reaches the wrong conclusion:
 
 | The evidence says | The obvious answer | What the ordering says |
 |---|---|---|
-| CRC errors climbing | replace the cable | collisions on a **full-duplex** link mean the switch port disagrees about duplex — no cable fixes that |
-| Every destination lossy | your link is bad | the box's own receive backlog is overflowing — too busy, not broken |
-| Retransmissions high | the path is dropping | the far end acknowledged data it already had — reordering, not loss |
+| CRC errors climbing | replace the cable | collisions on a **full-duplex** link mean the switch port disagrees about duplex; no cable fixes that |
+| Every destination lossy | your link is bad | the box's own receive backlog is overflowing: too busy, not broken |
+| Retransmissions high | the path is dropping | the far end acknowledged data it already had, so this is reordering, not loss |
 | Certificate won't validate | renew the certificate | it isn't valid *yet*, which is almost always this device's clock |
-| Clients losing traffic, and so is the database | one problem, upstream | two problems facing opposite ways — neither explains the other, and fixing one leaves the other exactly where it was |
+| Clients losing traffic, and so is the database | one problem, upstream | two problems facing opposite ways; neither explains the other, and fixing one leaves the other exactly where it was |
 
 The rule is one sentence: **a broken layer makes every layer above it look
 broken, so the lowest layer with a live fault is the cause and the rest are
 symptoms.** A dead gateway with failing DNS on top reports the gateway.
 
 That rule is right, and it is right *within a direction*. Layer and direction
-are separate axes, so every finding also carries which way it faces — the way
+are separate axes, so every finding also carries which way it faces: the way
 in, this box, or the way out. A fault facing one way can neither explain nor
 corroborate one facing the other, and this box faces both. Without that, client
 loss and backend loss are both layer 3 and the tool named one while presenting
@@ -194,11 +194,11 @@ the other as its consequence.
 Within any one branch the layer rule applies as normal: the lowest layer with a
 live fault is the cause, and everything above it is a symptom. `FINDING_SIDE`
 is the table that puts each finding on a branch. An unlisted code falls back to
-`local`, which is the safe answer because it faces both ways — but a test fails
+`local`, which is the safe answer because it faces both ways. But a test fails
 on any emitted code the table doesn't name, so that fallback stays a decision
 somebody made rather than one nobody noticed.
 
-What it doesn't claim: it applies one plausible ordering, consistently — it
+What it doesn't claim: it applies one plausible ordering, consistently; it
 doesn't know your network. It still says *likely*. It tells you how much of
 itself managed to run, names faults it can't explain, and refuses to call
 something loss when the sample can't support it:
@@ -212,12 +212,12 @@ something loss when the sample can't support it:
 ```
 
 Both halves matter. The line above says the packet loss and the poor call
-quality are **this fault's symptoms** — fix the saturated link and they go with
+quality are **this fault's symptoms**: fix the saturated link and they go with
 it. The line below says the expired certificate is **not**: it will still be
 expired afterwards. Getting that backwards is how a report sends someone to
 their carrier about a fault on their own box.
 
-No model is involved — `VERDICT_RULES` is an ordered list you can read, and
+No model is involved. `VERDICT_RULES` is an ordered list you can read, and
 every verdict cites the findings it came from. [The rules, and the numbers
 behind them.](REFERENCE.md#why-the-ranking-is-the-point)
 
@@ -229,9 +229,9 @@ explains what:
 | Layer | Checks | Answers |
 |---|---|---|
 | **L1** Physical | address present, error/CRC counters, collisions, carrier flaps, speed & duplex, fibre optical power | Is this device's own link healthy? |
-| **L2** Data link | ARP table, gateway reachability, MTU, LLDP switch port, receive-backlog drops | Is the local segment healthy — and is this box keeping up with it? |
+| **L2** Data link | ARP table, gateway reachability, MTU, LLDP switch port, receive-backlog drops | Is the local segment healthy, and is this box keeping up with it? |
 | **L3** Network | routing, gateway, internet, traceroute, path MTU, checksum errors, call quality | Does traffic leave the site and arrive intact? |
-| **L4** Transport | listening ports, socket states, TCP port checks, per-connection loss and stalls, connection tracking, accept queues, connection setup, ephemeral ports, file descriptors | Is the service reachable — and is this device's own stack in the way? |
+| **L4** Transport | listening ports, socket states, TCP port checks, per-connection loss and stalls, connection tracking, accept queues, connection setup, ephemeral ports, file descriptors | Is the service reachable, and is this device's own stack in the way? |
 | **L7** Application | DNS and each resolver, TLS handshake and certificate, the certificate this box serves, clock synchronisation | Do names resolve, and does the service actually work? |
 
 **Which direction** decides who owns it:
@@ -250,7 +250,7 @@ directions.
 ### What it actually checks
 
 **33 things are inspected**, and **153 distinct conclusions** can come out of
-them — 131 are faults, 22 are context.
+them: 131 are faults, 22 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -292,12 +292,12 @@ target.
 
 If the box has something older, it says so and stops rather than failing
 halfway through a check. If Python is upgraded on the box later, nothing here
-needs changing — only the standard library is used, and every report records
+needs changing. Only the standard library is used, and every report records
 which interpreter produced it, so a `--baseline` across an upgrade tells you
 the interpreter changed instead of blaming the network.
 
 If `mtr`, `ethtool`, `lldpd` or `tcptraceroute` happen to be installed it uses
-them for better data — per-hop loss, negotiated duplex, which switch port
+them for better data: per-hop loss, negotiated duplex, which switch port
 you're plugged into. If they aren't, it says less and carries on.
 
 **Several checks read Linux-specific counters and stay silent elsewhere**: the
@@ -306,7 +306,7 @@ accept-queue drops, connection tracking, and the TCP extended counters behind
 the checksum and connection-setup findings. The clock check needs one of
 `chronyc`, `timedatectl` or `ntpq` to be present. On macOS or Windows those
 report that they couldn't run rather than that nothing is wrong, and the
-verdict's confidence drops accordingly — which is the honest answer, since less
+verdict's confidence drops accordingly, which is the honest answer, since less
 of the tool ran.
 
 **A check that can't run is never reported as a fault.** Missing `ifconfig`
@@ -315,11 +315,11 @@ address". A false diagnosis is worse than a gap.
 
 ## Security, and the reports
 
-It never opens a port and never listens for anything — there's no server to
+It never opens a port and never listens for anything. There's no server to
 secure. It does run real commands with your privileges.
 
 > [!WARNING]
-> A report is a **map of the network it was taken on** — internal addressing,
+> A report is a **map of the network it was taken on**: internal addressing,
 > MAC addresses, switch names, VLANs, resolvers, listening ports. Exports are
 > written `0600` for that reason. Treat one like a network diagram: fine in a
 > ticket, fine with the people who own that network, **not** committed to a
@@ -330,7 +330,7 @@ secure. It does run real commands with your privileges.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). Use it, change it, ship it inside whatever you
+MIT. See [LICENSE](LICENSE). Use it, change it, ship it inside whatever you
 like; it comes with no warranty.
 
 Nothing is vendored, so no other licence travels with the file. The optional
@@ -339,12 +339,12 @@ separate programs, never linked or copied in.
 
 ## More
 
-- **[REFERENCE.md](REFERENCE.md)** — every check explained, and why it's worth checking
-- `faultone.py` — the whole tool
-- `static/index.html` — the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py` — `python3 test_faultone.py`, 965 tests, no dependencies
-- `dev/` — release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
+- **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
+- `faultone.py`: the whole tool
+- `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
+- `test_faultone.py`: `python3 test_faultone.py`, 965 tests, no dependencies
+- `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months
-later — or a `--baseline` from a previous visit — can be read for what made it.
+later, or a `--baseline` from a previous visit, can be read for what made it.
 `python3 faultone.py --version` tells you what's on the box.

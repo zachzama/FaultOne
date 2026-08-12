@@ -1413,20 +1413,41 @@ service.
 license server, the destination a user is complaining about. That is the path
 whose loss matters to you, and the one whose owner you can call.
 
-If you need a neutral public host - proving the line itself works, or comparing
-two sites - these answer ICMP, which means every check has something to measure:
+What to aim at depends on which question is being asked, and the three
+questions want different targets.
 
-| Host | Notes |
-|---|---|
-| `8.8.8.8`, `8.8.4.4` | Google Public DNS. Anycast, so this reaches the nearest edge |
-| `9.9.9.9` | Quad9. Anycast, same caveat |
+**"Can people here use the internet at all?"** This is the common one on a box
+whose users browse and whose applications live elsewhere. Aim at a large web
+host and name the port, which is what turns a reachability check into an
+end-to-end one:
 
-**Anycast is the first caveat.** Both answer from whichever edge is closest,
-often inside your own ISP, so a clean result proves the first few hops and
-little about a long path.
+```bash
+python3 faultone.py --report --target www.google.com --check-ports 443
+```
 
-**Most cloud endpoints do not answer ICMP at all**, which is the second. A
-regional endpoint looks like the right way to put distance in the path:
+That exercises the whole chain a browser uses: the name resolves, ICMP gets
+through, TCP 443 completes, and the TLS handshake succeeds. The port check
+reports the certificate as well, which is the part worth reading twice:
+
+```
+www.google.com:443       open   TLSv1.2, issued by Google Trust Services, 61d left
+```
+
+An issuer that is not the site's own is a proxy re-signing traffic in the
+middle. That is a normal thing to find on a corporate line and a surprising one
+on a customer's, and nothing else in the report will tell you.
+
+Anycast is not a caveat for this question. A large web host answers from the
+nearest edge, which is exactly where the users' traffic goes, so the nearest
+edge is the honest thing to measure. `www.google.com`, `wikipedia.org` and
+`github.com` all answer ICMP and resolve everywhere; any of them does.
+
+**"Is the path to the thing we depend on healthy?"** Aim at the thing. The
+database, the API gateway, the licence server. `--target auto` does this for
+you on a box that has connections open to one.
+
+**"Is there loss that only shows over distance?"** Now a regional endpoint
+earns its place, because anycast will not put distance in the path:
 
 | Region | Endpoint |
 |---|---|
@@ -1436,28 +1457,27 @@ regional endpoint looks like the right way to put distance in the path:
 | Asia Pacific | `ec2.ap-southeast-1.amazonaws.com` (Singapore), `ec2.ap-northeast-1.amazonaws.com` (Tokyo) |
 | South America | `ec2.sa-east-1.amazonaws.com` |
 
-Those resolve and accept TCP on 443, and they are regional rather than anycast,
-so the path to one has real distance in it. They drop ping. Aimed at one of
-them this tool falls back to reaching the target the way an application would,
-so reachability and the verdict are sound - a healthy box against
-`ec2.us-east-1.amazonaws.com` reports no fault and exits 0.
+These are the narrowest of the three, and they cost something. They do not
+answer ping at all: they resolve and take TCP on 443, so reachability and the
+verdict hold up through the fallback of reaching the target the way an
+application would, but the checks that need ICMP have nothing to work with.
+Measured here, roughly one full run in three came back with
+`pmtu_unmeasurable`, which takes the headline on an otherwise clean box and
+exits 1, because it is a warning about coverage rather than a finding about the
+network. Pair them with `--quick`, which skips path MTU.
 
-What you lose is the part that needs ICMP, and it is worth knowing exactly
-what that looks like. The do-not-fragment probes a full run sends sometimes get
-through to these endpoints and sometimes do not - measured here, roughly one
-run in three came back with `pmtu_unmeasurable`. When it fires on an otherwise
-clean box it becomes the headline, so the report leads with a sentence about
-filtered probes rather than about your network, and the run exits 1 rather
-than 0 because it is a warning about coverage.
+**The neutral addresses** are still the right answer for "is IP working at
+all", and they are what `--target auto` falls back to:
 
-Nothing is wrong when that happens, and the message says so. But a target that
-intermittently turns a clean report into a warning is a poor default for a
-scheduled check. Pair these with `--quick`, which skips path MTU entirely, or
-keep them for the questions they answer well: reachability and the shape of a
-long path.
+| Host | Notes |
+|---|---|
+| `8.8.8.8`, `8.8.4.4` | Google Public DNS. Answers ICMP reliably |
+| `9.9.9.9` | Quad9 |
 
-If path MTU is what you are chasing, aim at something that answers ICMP: a host
-you run, your own gateway, or one of the resolvers above.
+The fallback is deliberately an address and not a name. Pinging a name needs
+DNS to work first, so a name would fold two questions into one and report a
+DNS outage as unreachable internet. The resolver checks answer the DNS question
+separately.
 
 Two things to know before reading too much into any of them. A public host is
 under no obligation to answer you: ICMP is commonly rate-limited or

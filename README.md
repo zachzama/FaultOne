@@ -10,9 +10,22 @@ python3 faultone.py --report --target 10.0.0.20 # aim at a real dependency
 ```
 
 Python 3.7 or newer, and nothing else. The full check is ~7s where the path
-answers a traceroute. `--target` matters more than it looks: everything
-measured off the box is measured to one host, so aim it at something you
-depend on rather than the public address it falls back to.
+answers a traceroute.
+
+`--target` matters more than it looks: everything measured off the box is
+measured to one host, so it decides what the verdict is about. If the box
+exists to reach a database, aim at the database. If its users just need the
+internet, aim at a site they actually use and name the port, which checks
+the whole chain a browser needs rather than only whether packets return:
+
+```bash
+python3 faultone.py --report --target www.google.com --check-ports 443
+```
+
+That resolves the name, reaches it, completes TCP 443 and shakes hands over
+TLS, and it reports who issued the certificate. An issuer that is not the
+site's own is something re-signing traffic in the middle.
+[Which host to pick, and why.](REFERENCE.md#choosing-a-target)
 
 You're SSH'd into a box and something is broken. **Is it this box, the way in,
 or the way out?** FaultOne runs the checks you'd run by hand, then does the part

@@ -8,7 +8,7 @@ answer. For getting started see the
 
 Every tool in this category collects more than this one does. What none of them
 does is decide, from the same counters, which fault is the cause and which are
-its consequences — and that decision is where the wrong answer usually comes
+its consequences, and that decision is where the wrong answer usually comes
 from, because the obvious reading of the evidence is often wrong.
 
 Five cases where a competent engineer, looking at exactly the same numbers,
@@ -16,9 +16,9 @@ reaches the wrong conclusion:
 
 | The evidence says | The obvious answer | What the ordering says |
 |---|---|---|
-| CRC errors climbing on the interface | replace the cable | collisions on a **full-duplex** link mean the switch port disagrees about duplex — no cable will fix that |
-| Every destination is losing traffic | your link is bad | the box's own receive backlog is overflowing — it is too busy, not broken, and the signature is identical |
-| Retransmissions are high | the path is dropping packets | the far end acknowledged data it already had, so the packets arrived — reordering, not loss |
+| CRC errors climbing on the interface | replace the cable | collisions on a **full-duplex** link mean the switch port disagrees about duplex. No cable will fix that |
+| Every destination is losing traffic | your link is bad | the box's own receive backlog is overflowing. It is too busy, not broken, and the signature is identical |
+| Retransmissions are high | the path is dropping packets | the far end acknowledged data it already had, so the packets arrived: reordering, not loss |
 | The certificate won't validate | renew the certificate | it has not started being valid yet, which is almost always this device's clock |
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
@@ -29,8 +29,8 @@ findings exist and exactly one reaches you as the answer.
 The rule is a single sentence. **A broken layer makes every layer above it look
 broken, so the lowest layer with a live fault is the cause and the rest are
 symptoms.** The word doing the work there is *live*. Bottom-up ordering has one
-well-known failure — taken alone it will chase the lowest layer whether or not
-anything there is actually broken — so a finding that describes a risk rather
+well-known failure. Taken alone it will chase the lowest layer whether or not
+anything there is actually broken, so a finding that describes a risk rather
 than a failure (an optic with margin left, a link that flapped yesterday, a
 table filling but refusing nothing) is never the headline while something is
 actively failing. It is still reported, and it is still the answer when nothing
@@ -39,7 +39,7 @@ corroboration, which are too weak to be evidence, which are consequences of the
 one already named.
 
 It is worth being precise about what this does and does not claim. It applies
-one plausible ordering, consistently, every time — it does not know your
+one plausible ordering, consistently, every time. It does not know your
 network. It still says *likely*. It reports how much of itself managed to run,
 names faults it cannot explain, and declines to call something loss when the
 sample cannot support it. The value is that the reasoning is the same on every
@@ -51,18 +51,18 @@ a model, and every verdict cites the findings it came from.
 A third shape, and the one every check here is quietest about: a connector that
 opens no listening ports by design, holds a few long-lived links outward, and
 carries traffic over them. Nothing connects *to* it, so every inbound check
-stays silent correctly — and that silence used to be the whole report.
+stays silent correctly, and that silence used to be the whole report.
 
 **A box with no listeners can still have dependencies.** Backend detection was
-gated on serving, which is right for a laptop — the busiest peer there is
-whatever application is open — but wrong for a connector, whose handful of
+gated on serving, which is right for a laptop. The busiest peer there is
+whatever application is open, but wrong for a connector, whose handful of
 links to an edge is the one thing it needs. The gate is now *serving, or
 holding a concentrated handful* (`CONNECTOR_DESTINATIONS`), so a connector's
 edge becomes what the run aims at while a laptop browsing thirty sites still
 gets nothing.
 
 **A box doing nothing reports nothing wrong, which is why this was invisible.**
-No listeners, no connections, every check passing — because a box with no
+No listeners, no connections, every check passing, because a box with no
 traffic has no faults in its traffic. It read *"no fault found, this device
 looks healthy"*, identically to the same box with its links up.
 `no_traffic_at_all` fires when there are no listening ports and no connections
@@ -79,25 +79,25 @@ at once.
 
 Some boxes open connections *on behalf of other people*: a forwarding proxy, a
 gateway, anything brokering user traffic outward. Two of this tool's
-assumptions are wrong on one, and both were wrong in the same direction — they
+assumptions are wrong on one, and both were wrong in the same direction: they
 treat every outbound connection as this box's own business.
 
 **Ephemeral pressure is per destination, not global.** A source port only has
 to be unique within the four-tuple, so the same one serves any number of
 different destinations at once. `ephemeral_ports_low` counted every outbound
 socket against the range, which reports exhaustion on a box holding 26,000
-connections spread over 250 destinations — about a hundred per destination, and
+connections spread over 250 destinations, about a hundred per destination, and
 nowhere near a limit. It now measures the busiest single destination, names it,
 and says how many places the rest are spread across:
 
 | | old reading | correct reading |
 |---|---|---|
-| 26,000 conns over 250 destinations | 92% — fires | ~104 to the worst — quiet |
-| 26,000 conns to one destination | 92% — fires | 92% — fires |
+| 26,000 conns over 250 destinations | 92% (fires | ~104 to the worst) quiet |
+| 26,000 conns to one destination | 92% (fires | 92%) fires |
 
 **Its outbound peers are not its dependencies.** `--target auto` picks the
 most-connected outbound peer, which on a forwarding box is whichever
-destination happens to be popular this minute — diagnosing the path to it says
+destination happens to be popular this minute, diagnosing the path to it says
 nothing about the box. A dependency now has to hold `BACKEND_MIN_SHARE` of the
 outbound connections as well as clearing the minimum count: a handful of real
 backends each hold a large slice, one destination out of hundreds holds almost
@@ -106,7 +106,7 @@ none.
 When no peer qualifies and there are more than `FORWARDER_DESTINATIONS` of
 them, that shape is itself reported (`target_is_forwarded`) and the run falls
 back to the default target rather than inventing a dependency. The finding says
-what to pass instead — the service this box reports to, or a destination its
+what to pass instead, the service this box reports to, or a destination its
 users are complaining about.
 
 ## Two failures that make every other check pass
@@ -118,11 +118,11 @@ most common way a proxy is "down" and the least visible from inside it.
 
 `no_clients_connected` fires when this box is listening on a port whose purpose
 is answering clients and fewer than `SERVING_INBOUND_MIN` connections are open
-inbound — naming the peer when there is one, since a single connection from one
+inbound, naming the peer when there is one, since a single connection from one
 address at that volume is a health check rather than traffic.
 
 Gated to `SERVING_PORTS` deliberately. Almost every machine listens on
-*something* — sshd, a metrics endpoint, a database bound to the LAN — and
+*something* (sshd, a metrics endpoint, a database bound to the LAN) and
 "listening with nobody connected" is only interesting when the thing listening
 exists to be connected to. Without that gate it fired on any box running sshd,
 which is all of them; it fired on the machine this was written on.
@@ -131,7 +131,7 @@ It stays a **warning**: a genuinely quiet period looks the same from here, and
 the message says so.
 
 **The answers came from a cache on this box.** `dns_local_cache` reports when a
-configured resolver is on loopback — `127.0.0.53` (systemd-resolved),
+configured resolver is on loopback, `127.0.0.53` (systemd-resolved),
 `127.0.1.1` (dnsmasq or a NetworkManager stub), or any other loopback address.
 
 It is context, never a fault, and it changes what every DNS result below it
@@ -143,33 +143,33 @@ knowing before a resolver result is read as the network's answer.
 ## Redundancy: what a neighbour table can and cannot show
 
 A gateway that is a **virtual address** belongs to a redundancy pair, and that
-reframes every finding about it — "the gateway is down" on a pair more often
+reframes every finding about it, "the gateway is down" on a pair more often
 means a failover that did not complete than a router that stopped. The protocol
 and group are readable straight off the MAC the neighbour table already gave
 us:
 
 | | |
 |---|---|
-| `00:00:5e:00:01:XX` | VRRP, or CARP — they share this range, which is exactly why a CARP `vhid` and a VRRP `vrid` collide on one segment |
+| `00:00:5e:00:01:XX` | VRRP, or CARP. They share this range, which is exactly why a CARP `vhid` and a VRRP `vrid` collide on one segment |
 | `00:00:5e:00:02:XX` | VRRP for IPv6 |
 | `00:00:0c:07:ac:XX` | HSRPv1 |
 | `00:00:0c:9f:fX:XX` | HSRPv2 |
 | `00:07:b4:00:XX:YY` | GLBP |
 
 `gateway_is_virtual` reports which, as context. `virtual_router_conflict` fires
-when **two different groups** answer for one address — two virtual routers
+when **two different groups** answer for one address: two virtual routers
 configured onto the same IP, traffic landing on whichever the switch learned
 last, symptoms moving with no pattern.
 
-**What this cannot see, and says so.** A same-group split brain — two masters,
-one VRID — is invisible here, because both use the *same* virtual MAC. That is
+**What this cannot see, and says so.** A same-group split brain: two masters,
+one VRID, is invisible here, because both use the *same* virtual MAC. That is
 what VRRP is for. The neighbour table shows one entry and there is nothing to
 detect, and a check that implied otherwise would be worse than no check. A
 first draft of this had a branch for it that could never execute.
 
 The signal that *is* available is the address **changing hands between
 visits**: same IP, different hardware behind it. `--baseline` reports it,
-neutrally rather than as a regression — a pair failing over is the pair doing
+neutrally rather than as a regression. A pair failing over is the pair doing
 its job, and only the reader knows whether it should have. One virtual MAC and
 one real one stays an ordinary `duplicate_ip`, because one of each is not two
 virtual routers and claiming so would outrun the evidence.
@@ -182,13 +182,13 @@ Three assumptions that held on a domestic appliance and do not hold on a fleet.
 for IPv4 and nothing else, so a box on a mobile carrier or in a datacentre that
 never handed out IPv4 was reported *critical, exit 2, "this device never got
 onto the network"* while holding a global IPv6 address and serving traffic. It
-now counts a routable IPv6 address — but not link-local, since every interface
+now counts a routable IPv6 address, but not link-local, since every interface
 gets an `fe80::` whether or not anything configured it, and accepting that
 would make the check unfailable.
 
 The knock-on matters more. Every reachability check here is IPv4-shaped: the
 gateway comes from `default via <IPv4>`, the default target is an IPv4 literal.
-On an IPv6-only box those aren't failing, they're **unmeasurable** — so they
+On an IPv6-only box those aren't failing, they're **unmeasurable**, so they
 report `gw_unmeasurable_v4` and `inet_unmeasurable_v4` and conclude nothing,
 the same way an absent tool does. The all-clear stops claiming "the gateway and
 the internet are reachable" when neither was reached, which is the exact
@@ -200,7 +200,7 @@ path; on an IPv6-only box it now says so instead of inventing an outage. Point
 path that box actually uses.
 
 **Names are not all ASCII.** `--target` accepts an internationalised hostname
-and converts it to the punycode form the DNS actually carries, once, at entry —
+and converts it to the punycode form the DNS actually carries, once, at entry: 
 so every command run and socket opened downstream sees ASCII, and the report
 records what was *reached* rather than what was typed. A box in Tokyo or Munich
 has backends named in its own script, and rejecting them as "invalid" made the
@@ -208,8 +208,8 @@ tool unusable exactly where nobody can paste an alternative.
 
 **The defaults point at hosts some jurisdictions filter.** `8.8.8.8` and the
 `google.com` DNS probe are blocked or poisoned in several countries. The
-reachability confirmation covers part of this — nothing is called unreachable
-on ICMP alone — but on a filtered network the honest move is to point
+reachability confirmation covers part of this. Nothing is called unreachable
+on ICMP alone, but on a filtered network the honest move is to point
 `--target` at something the box is actually supposed to reach. With
 `--target auto` on a box serving traffic that already happens: it aims at a
 backend it holds connections to, which is by definition reachable.
@@ -232,7 +232,7 @@ point: knowing the rule does not stop you breaking it, and a guard written per
 check is a guard that covers the checks you remembered. One test now sweeps
 every counter-driven finding with a sample of two and asserts silence.
 
-It found a fifth on its first run — `tcp_checksum_errors`, which fires on a
+It found a fifth on its first run: `tcp_checksum_errors`, which fires on a
 single bad checksum by design, because one should never happen. That one is not
 the same bug, and the fix was different: it still reports the error, and no
 longer quotes "500,000 per million received" for one packet on an idle box.
@@ -242,12 +242,12 @@ Below a sample that supports a rate it gives the count and says so.
 
 `mtu_nonstandard` fires on any interface not at 1500. On a box terminating a
 VPN that is every tunnel it has, because the reduction **is** the header
-overhead of whatever wraps the traffic — and with nothing else wrong, a healthy
+overhead of whatever wraps the traffic, and with nothing else wrong, a healthy
 VPN box came back with *"Interface MTU is not the standard 1500"* as its
 verdict, every run.
 
-Interfaces whose names say they are encapsulations — `tun`, `tap`, `utun`,
-`wg`, `ppp`, `ipsec`, `vti`, `gre`, and the branded WireGuard names — now get
+Interfaces whose names say they are encapsulations: `tun`, `tap`, `utun`,
+`wg`, `ppp`, `ipsec`, `vti`, `gre`, and the branded WireGuard names: now get
 `tunnel_mtu` instead: **context, exempt from the verdict**. Matched on the name
 because that is what the kernel offers; there is no flag in sysfs that says
 "this is a tunnel".
@@ -255,7 +255,7 @@ because that is what the kernel offers; there is no flag in sysfs that says
 The number is still printed, because it is the number that decides whether
 traffic inside the tunnel fits. Something inside assuming 1500 and sending
 packets that will not fit shows up as large transfers stalling while small ones
-are fine — which is worth knowing, and is not the same as the tunnel being
+are fine, which is worth knowing, and is not the same as the tunnel being
 misconfigured.
 
 ## Why something we serve did not verify
@@ -266,13 +266,13 @@ distinction matters most on a box that **re-signs traffic on purpose**:
 
 | what OpenSSL said | what it means |
 |---|---|
-| self signed certificate **in certificate chain** | the chain ends at a root this box does not trust — what a certificate re-signed by a private authority looks like. If this box issues its own, that is it working, and anything never given that root refuses outright |
-| unable to get local issuer certificate | the issuer's certificate was not sent and is not held here — the incomplete chain that works from a machine which already has the intermediate and fails from one that does not |
+| self signed certificate **in certificate chain** | the chain ends at a root this box does not trust, what a certificate re-signed by a private authority looks like. If this box issues its own, that is it working, and anything never given that root refuses outright |
+| unable to get local issuer certificate | the issuer's certificate was not sent and is not held here. The incomplete chain that works from a machine which already has the intermediate and fails from one that does not |
 | self signed certificate | the leaf signed itself |
 
 Read off the error string rather than by parsing the certificate, which would
 mean the ASN.1 work this file deliberately avoids elsewhere. Both spellings are
-handled — newer OpenSSL hyphenates it — and the leaf error is a substring of the
+handled (newer OpenSSL hyphenates it) and the leaf error is a substring of the
 chain error, so the order they are tested in is load-bearing.
 
 ## The rest of /proc/net/snmp
@@ -282,12 +282,12 @@ protocols' worth of counters were going past every run, and both answer
 questions nothing else here can.
 
 **DNS runs over UDP.** A box overflowing its receive buffers loses resolver
-answers while every TCP check in this tool passes — so the report reads as a
+answers while every TCP check in this tool passes, so the report reads as a
 slow or flaky resolver, and the resolver is fine. `udp_recv_buffer_full` is the
 finding, and it is owned by **this device, not the resolver it looks like**.
 
 `InErrors` contains `RcvbufErrors` one for one. What is left over arrived and
-failed *before any socket saw it* — a bad checksum, a malformed header — which
+failed *before any socket saw it* (a bad checksum, a malformed header) which
 is damage in the path rather than this box failing to keep up:
 
 | | |
@@ -296,12 +296,12 @@ is damage in the path rather than this box failing to keep up:
 | `udp_datagrams_corrupt` | this box had room; the datagram was already broken. **Upstream.** Ethernet has its own CRC, so whatever re-framed it after that did the damage |
 
 Subtracting the one from the other is what keeps them from being counted twice,
-and the two have different owners — which is the whole reason for splitting them.
+and the two have different owners, which is the whole reason for splitting them.
 
 **Fragments that arrived and never came back together** are the receiving half
 of what the path-MTU probe measures on the way out, and evidence that probe
 cannot produce: it is about traffic *other people* sent here. `fragments_lost`
-fires when a tenth of reassembly attempts fail, and names the usual cause — an
+fires when a tenth of reassembly attempts fail, and names the usual cause: an
 MTU step on the path with the ICMP that would report it filtered, so the sender
 never learns to send smaller packets and keeps trying.
 
@@ -310,7 +310,7 @@ never learns to send smaller packets and keeps trying.
 A connection with no file descriptor left to close it, still holding kernel
 memory. The kernel counts an orphan at **two to four times its weight** when it
 decides whether it is under pressure, so `tcp_max_orphans` bites sooner than the
-number suggests — and past it the kernel stops being polite and resets them,
+number suggests, and past it the kernel stops being polite and resets them,
 which arrives at the far end as a connection dropped for no reason visible from
 there.
 
@@ -321,8 +321,8 @@ whether it is a lot.
 ## The path summary agrees with the finding
 
 Naming a hop is a claim that it is the one to go and look at. `latency_wall`
-already declines to make that claim below **half** the round trip — the share
-test is what makes its own sentence true — and the summary line was making it
+already declines to make that claim below **half** the round trip: the share
+test is what makes its own sentence true, and the summary line was making it
 anyway:
 
 ```
@@ -340,12 +340,12 @@ is unusual. The analysis had refused to say it; the display said it regardless.
 
 Both read the same `LATENCY_WALL_SHARE`, so they cannot drift into disagreeing.
 And the delay is still reported: 182ms is worth knowing about even when nothing
-on the path is at fault for it — silence would be worse than the wrong hop.
+on the path is at fault for it. Silence would be worse than the wrong hop.
 
 ### Why there is no waterfall
 
 A per-hop latency bar was prototyped and rejected. On a path with one wall it
-restates what the summary already says in words, and less precisely — the
+restates what the summary already says in words, and less precisely: the
 sentence also names whose side of the demarc it falls on. On an evenly graded
 path every bar comes out the same length, which is the same conclusion the line
 above now states outright.
@@ -359,7 +359,7 @@ here a rule can.
 
 "The service answered in 900ms" is true and useless. Getting a connection,
 finishing a handshake and waiting for the application to think are three
-different things with three different owners — and this connection goes to a
+different things with three different owners, and this connection goes to a
 listener on the *same box*, so the first two should be almost nothing. That
 makes the split unusually easy to read: whatever is left is the service
 thinking, and none of it is the network.
@@ -370,12 +370,12 @@ and 305ms was waiting for the service itself.
 ```
 
 Context rather than a fault. What counts as slow depends entirely on what the
-service does, and a number picked here would be wrong for most of them — the
+service does, and a number picked here would be wrong for most of them: the
 same reasoning as the throughput split above.
 
 ## Colour, for the terminal reader
 
-`--report` is the primary way this is read — the viewer is optional, and on a
+`--report` is the primary way this is read. The viewer is optional, and on a
 locked-down box often unavailable. The colour vocabulary is deliberately small
 and means one thing throughout: **red is critical, amber is warning, green is
 fine.** It is switched off unless stdout is a real terminal, and honours
@@ -386,7 +386,7 @@ read on a serial console or an out-of-band card would come back with `ESC[31m`
 through the middle of it. `--no-color` overrides all of that for when the
 detection guesses wrong.
 
-Two tables were entirely monochrome — the interface error counters and the link
+Two tables were entirely monochrome, the interface error counters and the link
 modes, which are the tables carrying the actual numbers. On a box with eight
 interfaces that table is the fastest way to find the bad one, and it gave no cue
 at all:
@@ -400,8 +400,8 @@ eth2          10,000,000        0       0     0.0   steady over 2s
 
 The row takes **the severity of what was found about that interface**, read off
 the findings by their `scope`. It is not a second opinion formed in the
-renderer: the tables would otherwise need their own copy of every threshold —
-what counts as an error rate, a drop rate, a slow link — and a second copy of a
+renderer: the tables would otherwise need their own copy of every threshold: 
+what counts as an error rate, a drop rate, a slow link, and a second copy of a
 rule is a second chance to disagree with the first.
 
 An `ok`-severity note is not a reason to mark a row. Context like `tunnel_mtu`
@@ -425,7 +425,7 @@ owner: the fibre link into this device   confidence: medium (15 of 16 checks ran
                      ^ the cause · needs hands on it
 ```
 
-Not a severity — an **action**. Everything else in this report is read,
+Not a severity, an **action**. Everything else in this report is read,
 configured, or escalated to whoever owns the next segment. These thirteen need
 a connector reseated, an optic cleaned, a cable swapped, an adapter replaced or
 an air intake cleared:
@@ -440,7 +440,7 @@ an air intake cleared:
 
 **What it deliberately does not claim.** A duplex mismatch, a link negotiated
 below its port's rating, a collision count, a ring overrun and an invalid frame
-length are each *either* something physical or a setting forced at one end — and
+length are each *either* something physical or a setting forced at one end, and
 this tool cannot tell which from where it stands. They are left unmarked rather
 than sending somebody to a rack on a coin toss.
 
@@ -452,9 +452,9 @@ hardware-derived; thirteen of them are ones where the answer is unambiguous.
 
 The strip is the chain this tool reasons about: clients, link, address,
 gateway, internet, DNS, MTU, ports - the way in, then the box, then the way
-out. A finding that moves none of it is allowed — a wrong
+out. A finding that moves none of it is allowed: a wrong
 clock breaks authentication and certificate validity rather than the wire, and
-the strip does not model that — but only as a **warning**.
+the strip does not model that, but only as a **warning**.
 
 A *critical* finding that moves no stage produces this:
 
@@ -463,7 +463,7 @@ verdict: CRITICAL
 strip:   clients -  link SKIP  address PASS  gateway PASS  internet PASS  dns PASS  mtu SKIP  ports SKIP
 ```
 
-A critical verdict beside a strip on which nothing failed — the same misleading
+A critical verdict beside a strip on which nothing failed: the same misleading
 silence as `link PASS` on an adapter that cannot fail a link check.
 
 The exemption list was flat, so nothing stopped a future hardware fault being
@@ -473,14 +473,14 @@ finding: give it a stage, make it a warning, or do not add it.
 **This is why RAID and IPMI are not here.** A failed array member or a dead
 power supply read over IPMI is a real, critical fault and belongs to no part of
 the network chain. Adding either would mean choosing between a strip that
-contradicts the verdict and a strip that stops meaning "the chain" — and the
+contradicts the verdict and a strip that stops meaning "the chain", and the
 strip is the thing that answers *where*, which is the question this tool is
 built around.
 
 Nothing about that is a claim they do not matter. It is a claim that a network
 diagnostic saying "your array is degraded" has stopped being a network
 diagnostic, and that the honest place to notice a degraded array is a tool that
-watches arrays. The one hardware fault that *is* here — CPU thermal throttling —
+watches arrays. The one hardware fault that *is* here: CPU thermal throttling: 
 earns its place because it costs the cycles that move packets, which is a chain
 this tool can follow.
 
@@ -490,8 +490,8 @@ Two lists were cut to a fixed length and rendered as though that were all there
 was.
 
 **The verdict's unrelated faults.** That field exists for one reason: so naming
-a root cause does not hide a second, separate problem. It showed two and stopped
-— so a box with four unrelated faults reported two, and the field undercut its
+a root cause does not hide a second, separate problem. It showed two and stopped,
+so a box with four unrelated faults reported two, and the field undercut its
 own purpose. The cap is still right (the point is not to hand the findings list
 back a second time), so the count comes with it:
 
@@ -502,13 +502,13 @@ and 2 more unrelated finding(s) below
 ```
 
 **Resolver answers.** The DNS panel showed the first three and no more, so two
-resolvers that *disagreed* could render as identical rows — on the one panel a
+resolvers that *disagreed* could render as identical rows: on the one panel a
 reader uses to check whether they agree, while `dns_disagree` was firing about
 it three lines above.
 
 It now reads `192.0.2.1, 192.0.2.2, 192.0.2.3 (+1 more)`. That does not make two
-disagreeing rows look different — naming the disagreement is what `dns_disagree`
-is for — but it stops the row asserting it showed everything, which is what let
+disagreeing rows look different. Naming the disagreement is what `dns_disagree`
+is for, but it stops the row asserting it showed everything, which is what let
 the two look alike.
 
 Both are the same defect as the average hiding the peak below: the analysis knew
@@ -518,7 +518,7 @@ something the display did not say.
 
 The oldest complaint about every tool that consolidates by mean: the peak
 flattens as the window grows, until a line that filled every minute reads as
-quiet. This report was computing the peak and printing the average — and the two
+quiet. This report was computing the peak and printing the average, and the two
 sat three lines apart, disagreeing:
 
 ```
@@ -548,14 +548,14 @@ the two tell the same story and printing both is noise. It is a ratio rather
 than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000
 over a 999 does not.
 
-This is the same lesson `saturation_bursts` was written for — that lesson had
+This is the same lesson `saturation_bursts` was written for. That lesson had
 been applied to the *analysis* and never to the *display*, which is a layer with
 rules of its own that nothing here was testing.
 
 ## The list says what explains what
 
-The relationships were already in the verdict — `based_on`, `explains`,
-`unrelated` — and the report printed them as a line of **raw finding codes**
+The relationships were already in the verdict: `based_on`, `explains`,
+`unrelated`, and the report printed them as a line of **raw finding codes**
 above a flat list:
 
 ```
@@ -577,13 +577,13 @@ Every finding now carries where it stands, in both the terminal and the page:
 
 | | |
 |---|---|
-| **the cause** | the verdict's own finding — the first entry of `based_on` |
+| **the cause** | the verdict's own finding, the first entry of `based_on` |
 | **backs it up** | an independent fault that corroborates it |
 | **caused by it** | a consequence: fix the cause and this goes with it |
 | **separate problem** | it will still be there afterwards |
 
 No diagram, and deliberately. A fault tree drawn as a graph would need a layout
-library, and this file ships no external assets — but the thing a fault tree is
+library, and this file ships no external assets, but the thing a fault tree is
 *for* is knowing which node is the root and which hang off it, and a flat list
 that labels each entry says that without drawing anything.
 
@@ -595,8 +595,8 @@ for the same idea.
 
 ## A virtual NIC cannot fail a physical check
 
-On a paravirtual adapter — `virtio_net`, `vmxnet3`, `hv_netvsc`, `xen-netfront`,
-`ena`, `gve` — the CRC, frame, collision and optical counters are **hardwired to
+On a paravirtual adapter: `virtio_net`, `vmxnet3`, `hv_netvsc`, `xen-netfront`,
+`ena`, `gve`, the CRC, frame, collision and optical counters are **hardwired to
 zero by the driver**. There is no cable to damage, no duplex to mismatch, no
 optic to dim.
 
@@ -609,16 +609,16 @@ every VM.
 anything is well, but that the question cannot be asked from inside the guest.
 If the physical link is genuinely suspect, it has to be read on the host.
 
-It is context and exempt from the verdict — a virtual NIC is not a fault, and
+It is context and exempt from the verdict. A virtual NIC is not a fault, and
 most boxes this runs on will have one.
 
 The driver comes from the sysfs symlink at
-`/sys/class/net/<iface>/device/driver`. Interfaces with no device behind them —
-bonds, VLANs, tunnels — have no driver to read, which is not a failure: there is
+`/sys/class/net/<iface>/device/driver`. Interfaces with no device behind them: 
+bonds, VLANs, tunnels, have no driver to read, which is not a failure: there is
 nothing there to name.
 
-This is the same rule applied everywhere else here — *a check that could not run
-is never reported as a fault* — pointed at a check that **does** run, returns
+This is the same rule applied everywhere else here, *a check that could not run
+is never reported as a fault*, pointed at a check that **does** run, returns
 zero, and could never have returned anything else.
 
 ## Which of three is holding throughput back
@@ -627,8 +627,8 @@ The kernel times how long a connection could not send because the far end had
 no window left, and how long because this box had nothing queued. Whatever is
 left of its busy time is time spent **waiting on the path**.
 
-Two of those three already produced findings here — `tcp_flow_receiver_limited`
-and `tcp_flow_sendbuf_limited` — and the third never did. So the tool could say
+Two of those three already produced findings here: `tcp_flow_receiver_limited`
+and `tcp_flow_sendbuf_limited`, and the third never did. So the tool could say
 *"it is the far end"* and *"it is this box"*, and could not say *"it is the
 network"*, on a run whose entire subject is the network.
 
@@ -639,12 +639,12 @@ receiver 2%  +  sender 2%  ->  path 96%
 Reported as **context, never a fault**: a transfer limited by the path is
 usually TCP working exactly as designed. The value is in being able to answer
 *why is it slow* with which of three things is responsible, since the three have
-three different owners — and to answer it from the traffic the box is really
+three different owners, and to answer it from the traffic the box is really
 carrying rather than from a probe.
 
 Only connections that have actually been sending for **1 second** are counted.
 The percentages are shares of busy time, so on a connection that has barely
-moved they are all zero — and subtracting zero from a hundred would report an
+moved they are all zero, and subtracting zero from a hundred would report an
 idle socket as limited by the network, confidently, on no evidence at all.
 
 The remainder is clamped at zero. The two shares the kernel reports can overlap
@@ -658,7 +658,7 @@ NIC nobody ever plugged in, and calling an unused port a fault is the kind of
 noise that gets a tool ignored.
 
 **A baseline settles it.** This interface was up when somebody last looked, so
-its being down now is a change with a known-good reference behind it — which is
+its being down now is a change with a known-good reference behind it, which is
 why mature monitoring systems pin the expected interface state at discovery
 rather than guessing it. The comparison now reports it, along with an interface
 that has gone from the box entirely: renamed, removed, or failed to come back
@@ -672,7 +672,7 @@ while working perfectly. Treating that as down would report every tunnel on the
 box as a regression.
 
 **`lowerlayerdown` is kept as the kernel said it.** That state is the kernel
-naming the cause for us — a VLAN or bridge member whose parent went away —
+naming the cause for us, a VLAN or bridge member whose parent went away: 
 and flattening it to "down" would throw away the one word that says where to
 look.
 
@@ -685,7 +685,7 @@ the absence of a floor was a real defect.
 
 `--baseline` reports what moved since a previous visit, and anything that moved
 in the wrong direction raised `regression_since_baseline`. Applied to the error
-counters, that meant **one new error between two visits was a regression** — a
+counters, that meant **one new error between two visits was a regression**: a
 relative deterioration of infinity and an absolute nothing. A healthy box
 rechecked next week reported that it had got worse, every time.
 
@@ -705,7 +705,7 @@ deterioration. It becomes one when the new score is actually poor.
 
 **Below the bar the change is still reported**, as neutral, with the rate it
 worked out to. The rule is about what counts as a deterioration, not about
-hiding data — somebody hunting an intermittent fault wants to see that two
+hiding data, somebody hunting an intermittent fault wants to see that two
 errors appeared. And where the packet counter did not move at all there is no
 rate to compute, so nothing is claimed: a sample that cannot support the claim
 does not get to make it, which is the same discipline as everywhere else here.
@@ -726,7 +726,7 @@ matter and each rejects what the other lets through:
 | | |
 |---|---|
 | three, not two | a box with two bad patch leads is a box with two bad patch leads |
-| all of them, not merely enough | three bad out of eight is three bad cables — and the five clean ones are the evidence that whatever they all share is working |
+| all of them, not merely enough | three bad out of eight is three bad cables, and the five clean ones are the evidence that whatever they all share is working |
 
 A single-NIC box can never reach it, which is the point: one interface is
 always "every interface", and saying so would turn the commonest hardware there
@@ -736,13 +736,13 @@ is into a shared-cause fault.
 
 A connect that fails instantly because the kernel has no route, and one that
 fails after waiting because nothing came back, are opposite situations. Both
-landed in the timeout bucket — which describes only the second, and sends the
+landed in the timeout bucket, which describes only the second, and sends the
 reader to the network for a routing table on this box.
 
 | errno | reason | owner |
 |---|---|---|
-| `ENETUNREACH` | `no_route` | **this device's routing table** — nothing reached the wire, so nothing on the network had the chance to fail |
-| `EHOSTUNREACH` | `host_unreachable` | the router that answered — something forwarded partway and reported the destination unreachable from there |
+| `ENETUNREACH` | `no_route` | **this device's routing table**. Nothing reached the wire, so nothing on the network had the chance to fail |
+| `EHOSTUNREACH` | `host_unreachable` | the router that answered, something forwarded partway and reported the destination unreachable from there |
 | `ECONNREFUSED` | `refused` | unchanged |
 | everything else | `timeout` | unchanged |
 
@@ -751,12 +751,12 @@ preset. A preset port asserts nothing about a service, but a missing route is
 this box's own configuration whichever port happened to ask the question.
 
 The mapping names both the platform constant and the Linux number, the way the
-refused branch beside it already did — `ENETUNREACH` is 101 on Linux and 51 on
+refused branch beside it already did, `ENETUNREACH` is 101 on Linux and 51 on
 BSD.
 
 ## Delay that will not sit still
 
-TCP reports its round trip as `rtt:87.5/45.2` — smoothed, then variance. The
+TCP reports its round trip as `rtt:87.5/45.2`, smoothed, then variance. The
 parser took the first number, so the second was dropped on the floor. It is the
 only jitter figure here **measured on the traffic this box actually carries**;
 everything else comes from probes, which a router is free to deprioritise.
@@ -776,7 +776,7 @@ two pieces of equipment with two owners.
 
 A well-behaved connection ends with a FIN. A reset on an established one means
 somebody gave up on it mid-flight. The counter records the teardown **without
-saying who sent it** — so this box's own reset count is used as the check: when
+saying who sent it**, so this box's own reset count is used as the check: when
 it sent far fewer than the number of connections that died, the rest arrived
 from outside.
 
@@ -784,16 +784,16 @@ That last step is stated as an inference rather than a measurement, because that
 is what it is. A session-tracking firewall timing connections out, a load
 balancer recycling them, and a backend restarting all look identical from here.
 
-It faces **upstream** where `resets_sent_high` faces local — one is this box
+It faces **upstream** where `resets_sent_high` faces local. One is this box
 refusing, the other is this box being refused. The same wire event with opposite
 owners, and they must not corroborate each other into a confident wrong answer.
 
 ## What the cause accounts for
 
 The verdict has always said what it *cannot* explain. It never said what it
-does — and that asymmetry produced the worst sentence this tool has printed:
+does, and that asymmetry produced the worst sentence this tool has printed:
 
-> **LIKELY ROOT CAUSE:** The link is full — it is being used to capacity, not broken
+> **LIKELY ROOT CAUSE:** The link is full. It is being used to capacity, not broken
 > *Also, unrelated:* Packet loss reaching 8.8.8.8… Suggests upstream congestion or an unstable WAN link.
 
 The link being full is *what causes* that loss. The report named the fault
@@ -801,7 +801,7 @@ correctly and then, in the next line, sent the reader to their carrier about the
 symptom of it. That is the exact failure this tool exists to prevent.
 
 The bug was using **layer distance** as the test. Anything above the cause was
-called something the cause could not explain — but a layered stack is precisely
+called something the cause could not explain, but a layered stack is precisely
 a thing where faults below produce symptoms above. A full link is layer 2 and
 the loss it causes is layer 3.
 
@@ -811,7 +811,7 @@ a bad cable and no amount of recabling renews it. What separates the two is
 
 | | |
 |---|---|
-| a *transport symptom* | traffic lost, delayed, or timing out — the shape any fault below produces when it bites. **Explained** by a cause underneath it. |
+| a *transport symptom* | traffic lost, delayed, or timing out, the shape any fault below produces when it bites. **Explained** by a cause underneath it. |
 | a *state or a decision* | a certificate that has run out, an answer that came back wrong, an address claimed twice, a device refusing on purpose. **Survives** fixing anything below, so it is genuinely unrelated. |
 
 Both DNS findings show the split: a resolver **timing out** is what a degraded
@@ -824,8 +824,8 @@ layers say.
 
 The verdict now carries `explains`, and the report prints *"this also accounts
 for: …"* beside the count of what corroborates it. Two general assertions hold
-it honest across every scenario: nothing is ever both explained and unrelated —
-that would be the report contradicting itself in adjacent lines — and nothing is
+it honest across every scenario: nothing is ever both explained and unrelated: 
+that would be the report contradicting itself in adjacent lines, and nothing is
 ever both corroborating and explained, which would be the verdict using one
 fault as its own proof and its own result.
 
@@ -833,7 +833,7 @@ fault as its own proof and its own result.
 
 A CPU that is clocking itself down loses cycles exactly where a box that moves
 packets needs them. The receive backlog fills, latency spikes for no reason
-visible on the wire, retransmits climb — and every one of those is a finding
+visible on the wire, retransmits climb, and every one of those is a finding
 here that points somewhere else. None of them is wrong. All of them are
 downstream of a box too hot to run at speed.
 
@@ -844,23 +844,23 @@ as reading a table's refusals rather than how full it looks.
 
 | | |
 |---|---|
-| `cpu_throttled_live` | the count moved during the check — it is happening now |
-| `cpu_throttled_historical` | non-zero since boot, not moving — cooling that is marginal rather than failed, which bites at the busiest hour and never reproduces afterwards |
+| `cpu_throttled_live` | the count moved during the check. It is happening now |
+| `cpu_throttled_historical` | non-zero since boot, not moving. Cooling that is marginal rather than failed, which bites at the busiest hour and never reproduces afterwards |
 
 The kernel documents every CPU in a package as reporting the same package
-counter, so these are **maxed, not summed** — adding them reports sixteen
+counter, so these are **maxed, not summed**: adding them reports sixteen
 throttling events on a sixteen-core box that had one.
 
 This is not a load check, and the distinction is the point. A busy box is not a
 fault; a box being clocked down by its own hardware is. The guard that keeps
 load out of the findings used to ban the `cpu_` prefix outright, which stated
-the rule as a spelling convention and blocked a real fault — it now names the
+the rule as a spelling convention and blocked a real fault. It now names the
 load-derived codes, and the assertion with teeth is still there: load average
 99 on one core, and the verdict is `ok`.
 
 ## A hop that said why
 
-traceroute prints the ICMP reason next to the time — `!X`, `!H`, `!N`, `!F` and
+traceroute prints the ICMP reason next to the time: `!X`, `!H`, `!N`, `!F` and
 the rest. All of it was being dropped along with everything else that was not a
 number, which is how a hop that told us **exactly** why it would not forward got
 reported as an unexplained silent path.
@@ -868,7 +868,7 @@ reported as an unexplained silent path.
 The reasons are now kept on the hop and shown in the path panel, and one of them
 produces a finding. `!X` / `!A` / `!T` mean *administratively prohibited*: a
 device received the traffic, decided against forwarding it, and reported the
-decision. That is configuration, not a fault — so there is a policy to read and
+decision. That is configuration, not a fault, so there is a policy to read and
 a person to ask, rather than a carrier to open a ticket with.
 
 The condition that matters is **whether the path still completed**. A policy
@@ -877,7 +877,7 @@ common and benign; the same annotation on the hop where the path stops is a
 firewall standing in the way. Only the second fires.
 
 `!H` and `!N` are deliberately excluded. A router reporting that it cannot reach
-onward is describing a broken path, not making a policy decision — a different
+onward is describing a broken path, not making a policy decision: a different
 fault with a different owner, and one the existing reachability rules already
 cover.
 
@@ -886,12 +886,12 @@ cover.
 `--baseline` takes a file the operator names, and being handed the wrong one is
 ordinary: a truncated write, an mtr export, last week's inventory, a typo that
 lands on a different JSON file. The loader already rejected anything that would
-not parse. What got through was **valid JSON with a foreign shape** — and it
+not parse. What got through was **valid JSON with a foreign shape**, and it
 crashed the comparison half way through the run, losing the entire diagnosis
 over a piece of optional context.
 
-Two layers now. The file is checked at load for the shape of a report — a
-findings list and a verdict object — and rejected with a message that says what
+Two layers now. The file is checked at load for the shape of a report: a
+findings list and a verdict object, and rejected with a message that says what
 was wrong rather than a traceback. And the comparison itself no longer breaks if
 one gets past: a key that is *present and null* is not a key that is absent, and
 `.get(k, {})` hands back the `None` rather than the default for it, which is
@@ -903,13 +903,13 @@ though it had been compared.
 
 ## "own" says whose service, not which check
 
-The family heuristic splits a finding's code on its first word — right for four
+The family heuristic splits a finding's code on its first word: right for four
 port results, and wrong when the first word is a scope marker. `own_` means
 *this box's own*, and it was putting two genuinely separate checks in one
 family: reading the certificate this box serves, and making an HTTP request to
 it.
 
-The effect was an understatement rather than an overstatement — an expired
+The effect was an understatement rather than an overstatement: an expired
 certificate could not corroborate the service erroring, so two independent
 signals were counted as one and the confidence came out lower than the evidence
 justified. That is the safer direction to be wrong in, and still wrong.
@@ -921,20 +921,20 @@ confidence of many verdicts on a judgement call rather than on a demonstrable
 error.
 
 A test now asks the whole override table two things: that every key names a
-finding that exists, and that no override puts a code in a family of its own —
+finding that exists, and that no override puts a code in a family of its own: 
 a line that reads as a rule while doing nothing.
 
 ## What the tools actually print
 
 Every fixture in this suite was written from an *idea* of what these commands
 emit. That idea was checked by describing the real output independently, then
-diffing it against the parsers. Four places it was wrong — none of which any
+diffing it against the parsers. Four places it was wrong. None of which any
 test could have caught, because the tests asserted the same idea the code did.
 
 **A receiver seeing nothing prints `-inf`.** A module with no light arriving
 reports `0.0000 mW / -inf dBm`. The dBm regex matches numbers, `-inf` is not
 one, so the reading was dropped and **the single fault the optical check exists
-for produced no finding at all**. It is now recorded as `rx_dark` — its own
+for produced no finding at all**. It is now recorded as `rx_dark`: its own
 fact, deliberately not a very low dBm figure, because a sentinel chosen to work
 as a number ends up printed in the report as a measurement. The message says
 what it means: nothing is arriving, check the receive strand specifically,
@@ -944,13 +944,13 @@ because the pair can be crossed so this end transmits fine and hears nothing.
 Linux prints `00:00:5e:00:01:01`. Same VRRP virtual router; only one of them
 was recognised as one. On a Mac the tool saw two routers arguing over an
 address and reported a **duplicate IP** instead of the failover pair it was
-looking at — wrong owner, wrong advice, and no way to notice from the output.
+looking at, wrong owner, wrong advice, and no way to notice from the output.
 Addresses are now normalised at the single point they enter the table.
 
 **Drivers have several ways of saying they don't know the link speed.** Modern
 tools print `Speed: Unknown!`, which no number regex matches. Older ethtool
 prints the raw u16 sentinel as `65535Mb/s`, and some kernels put the u32 one in
-sysfs as `4294967295`. Both parse cleanly as enormous link speeds — and a link
+sysfs as `4294967295`. Both parse cleanly as enormous link speeds, and a link
 that claims 4 Tbps has a utilisation of zero forever, which **silently retires
 every saturation check** rather than failing anywhere visible. The sentinels are
 now named as the specific values they are, rather than bounded by "faster than
@@ -959,7 +959,7 @@ long ago.
 
 **A share of an aggregate cannot exceed it.** Many drivers wire
 `rx_over_errors` and `rx_missed_errors` to the same hardware counter, so adding
-them counts one overrun twice — enough to print *"80 of 40 errors"* and to
+them counts one overrun twice, enough to print *"80 of 40 errors"* and to
 drive the comparison in the section below from a number larger than the total
 it is a share of. The host share is now the larger of the two rather than their
 sum, both shares are capped at the aggregate, and the remainder left to the link
@@ -968,7 +968,7 @@ is never negative.
 ## One error burst, three owners
 
 `rx_errors` is an aggregate. The kernel documents it as including the length,
-CRC and frame counters "and other errors not otherwise counted" — and this
+CRC and frame counters "and other errors not otherwise counted", and this
 reported all of it with one sentence, sending the reader to *"cable,
 connector/SFP, or a duplex mismatch on the switch port"* whatever had actually
 happened. The sub-counters were read, but only to print a parenthetical.
@@ -977,18 +977,18 @@ Which one moved decides who owns it:
 
 | what moved | what it means | owner |
 |---|---|---|
-| `rx_over_errors`, `rx_missed_errors` | the receiver overflowed, or the host had no buffer ready | **this box** — ring buffer, driver, or the CPU servicing the queue |
-| `rx_length_errors` | runts and giants — frames arriving at an invalid length | **the segment** — an MTU or VLAN-tagging disagreement |
+| `rx_over_errors`, `rx_missed_errors` | the receiver overflowed, or the host had no buffer ready | **this box**, ring buffer, driver, or the CPU servicing the queue |
+| `rx_length_errors` | runts and giants (frames arriving at an invalid length | **the segment**) an MTU or VLAN-tagging disagreement |
 | `rx_crc_errors`, `rx_frame_errors`, anything else | a frame arrived damaged | the cable, connector, optic or duplex setting |
 
 The frames in the first row **arrived intact**. Nothing about the cable, the
 optic or the switch port explains a box that failed to take delivery of them,
 and its verdict deliberately contains no phrase that would send anyone to a
-port — the guard that makes port-naming verdicts name the port would otherwise
+port. The guard that makes port-naming verdicts name the port would otherwise
 append a switch port to advice that says not to go there.
 
 The dominant cause wins, so one burst produces one finding. Where a driver
-breaks nothing down — common on cheap hardware — it falls through to the link,
+breaks nothing down (common on cheap hardware) it falls through to the link,
 which is both the old behaviour and the safest guess.
 
 `nic_ring_overruns` shares a family with the softnet backlog findings. Both are
@@ -1001,7 +1001,7 @@ These were judged alike: a single dropped packet in the counter window produced
 `drops_live`, exactly as a single error produced `link_errors_live`. The two
 counters mean opposite things. An error is a frame that arrived damaged and
 should never happen. A discard is a frame this box chose not to deliver
-upwards — buffer pressure, traffic it was never going to pass on — and happens
+upwards (buffer pressure, traffic it was never going to pass on) and happens
 on every busy interface there is.
 
 So `drops_live` was the finding that was always present. Worse than noise: it
@@ -1009,7 +1009,7 @@ sits at layer 2, so it corroborated nearly anything above it and lifted the
 confidence of conclusions it had nothing to do with.
 
 It now needs **2%** of the window's packets, across a window of at least
-**1,000** of them — two orders of magnitude looser than the error threshold,
+**1,000** of them, two orders of magnitude looser than the error threshold,
 which is the asymmetry the counters deserve. A percentage of fifty packets is
 not a percentage of anything, and the window is seconds long on a box that may
 be nearly idle.
@@ -1019,7 +1019,7 @@ One error still speaks where one discard does not. That is the point.
 ## A bond hides the thing it was built for
 
 Lose one member of a bonded pair and nothing reports a fault. The interface
-stays up, the address stays put, no route changes and no alarm fires — because
+stays up, the address stays put, no route changes and no alarm fires: because
 concealing exactly that is what a bond is for. What has gone is the redundancy
 that was the reason for buying two cables, and the next member to fail takes
 the box off the network.
@@ -1030,7 +1030,7 @@ something that is. It also carries the interface as its scope, so it corroborate
 faults on the same bond and not on some other cable.
 
 All members down is *not* this finding. That is an interface with no carrier,
-and the link checks already say so in better words — reporting both would blame
+and the link checks already say so in better words. Reporting both would blame
 the redundancy for a cable nobody has plugged in.
 
 ## The ceiling on how many neighbours this box can have
@@ -1039,7 +1039,7 @@ The ARP table has a hard limit and no back pressure. Past `gc_thresh3` the
 kernel stops resolving addresses, so the box loses the ability to talk to
 *some* of its neighbours while everything that does not need one of them keeps
 working. The result is intermittent unreachability that follows no pattern and
-never reproduces on demand — a setting on this box presenting as the network.
+never reproduces on demand, a setting on this box presenting as the network.
 
 | | |
 |---|---|
@@ -1051,7 +1051,7 @@ reported. The count comes from `/proc/net/stat/arp_cache` rather than from
 counting the entries this tool parsed: that column is what `gc_thresh3` is
 actually compared against, and the parsed table mixes in IPv6. Like the
 conntrack table it repeats the whole total on every CPU's row, so it is
-assigned and never accumulated — adding it up puts a two-core box over its own
+assigned and never accumulated, adding it up puts a two-core box over its own
 ceiling.
 
 ## Resets this box sends
@@ -1059,11 +1059,11 @@ ceiling.
 These counters were collected for several versions before anything read them.
 On a box that answers requests they are the wire-level shape of every refusal
 it makes, and whoever is on the other end of one sees a connection **dropped**,
-not a slow one — which gets reported as the network and is not the network.
+not a slow one, which gets reported as the network and is not the network.
 
 A reset is not by itself a fault: an application that closes with data still
 unread sends one, and browsers abandon connections all day. So the line sits
-where the count stops looking like a by-product — **at least one reset for every
+where the count stops looking like a by-product, **at least one reset for every
 connection the box opened or accepted**. A listener that has stopped, a port
 nothing is bound to, and a scan all produce exactly that; ordinary churn does
 not come close.
@@ -1079,14 +1079,14 @@ arriving from either side, and it can corroborate one facing either way.
 
 ## A link below its own capacity
 
-`slow_link` can only speak in absolute numbers — it fires at 100 Mbps or less,
+`slow_link` can only speak in absolute numbers. It fires at 100 Mbps or less,
 where a broken pair in a cable drops a gigabit port. That leaves a 10G port
 sitting at 1G invisible: not slow by any threshold worth writing down, and a
 tenth of what was bought.
 
 `negotiated_below_capacity` compares the negotiated speed against the fastest
 mode the hardware itself advertises, read from ethtool's supported-modes block.
-It is latent — nothing fails until the traffic needs the capacity — and it
+It is latent (nothing fails until the traffic needs the capacity) and it
 fires only **above** 100 Mbps, so one bad link does not produce two findings.
 Below that, `slow_link` already says the more useful thing.
 
@@ -1098,21 +1098,21 @@ verdict to high confidence.
 
 Until now the only thing this said about a slow path was what it would do to a
 phone call. An 800ms round trip to a database reported that *voice and video
-will be unusable* — true, and no use whatsoever to whoever runs the database.
+will be unusable*, true, and no use whatsoever to whoever runs the database.
 The score also needs a loss figure to compute, so a run that could not measure
 loss said nothing about latency at all.
 
 `latency_high` fires at **400ms** and says what the delay costs any traffic:
 every request pays it before a byte moves, and a new TLS connection pays it
 three times over. It is deliberately one threshold rather than a warning and a
-critical — the verdict takes its severity from the finding that headlines it,
+critical. The verdict takes its severity from the finding that headlines it,
 so a warning-level rule sitting above a critical one would quietly downgrade
 the whole run.
 
 400ms is a physical line, not a preference. Light in fibre covers about
 200,000 km/s, so the far side of the planet and back is roughly 250ms and the
 longest real terrestrial paths measure 250–300ms. Past 400ms distance has
-stopped explaining it — with one benign exception the finding names itself, a
+stopped explaining it, with one benign exception the finding names itself, a
 geostationary satellite hop, which is 500–650ms on its own with nothing wrong.
 
 Where it sits in the ranking is the rest of the answer:
@@ -1130,24 +1130,24 @@ and the delay is queuing or a bad route rather than the width of an ocean.
 
 **The call score does not corroborate it.** It is computed from the same round
 trip, so counting it as an independent second opinion put a slow path at high
-confidence on a single measurement — the same inflation two cables produced,
+confidence on a single measurement, the same inflation two cables produced,
 in a different guise. Both, and the wall, are now one family.
 
 ## Down, or unreachable
 
 A host that is failing and a host you cannot get to are different states with
 different owners. Monitoring systems have drawn that line for decades; this
-collapsed both into `inet_unreachable`, owner *the provider* — which sends
+collapsed both into `inet_unreachable`, owner *the provider*, which sends
 someone to a carrier about their own server.
 
 When the target answers nothing, the trace decides which it is:
 
 | | |
 |---|---|
-| the trace **reached** it | `destination_unresponsive` — the path carries traffic and the host itself is silent. Owner: *the destination, not the path to it*. |
-| the trace **stopped short** | `inet_unreachable` — the path is broken somewhere before it. Owner: *the provider*, as before. |
+| the trace **reached** it | `destination_unresponsive`. The path carries traffic and the host itself is silent. Owner: *the destination, not the path to it*. |
+| the trace **stopped short** | `inet_unreachable`. The path is broken somewhere before it. Owner: *the provider*, as before. |
 
-With no trace to judge by — a `--quick` run — nothing is concluded between them
+With no trace to judge by (a `--quick` run) nothing is concluded between them
 and the older, vaguer finding stands. Guessing between two answers with
 different owners is worse than being vague about which.
 
@@ -1156,13 +1156,13 @@ different owners is worse than being vague about which.
 Findings about an interface carry which one they came from. Corroboration
 counts an independent second fault at the same layer or below as agreement, and
 without a scope it counted **errors on `eth0` and collisions on `eth1`** as one
-problem confirmed twice — high confidence in whichever happened to be named, on
+problem confirmed twice, high confidence in whichever happened to be named, on
 a box with two unrelated bad cables.
 
 Same interface still corroborates: a duplex mismatch and collisions on `eth0`
 are the same fault seen twice, which is exactly what the rule is for. A finding
-with **no** scope is about the box rather than one of its interfaces — the
-softnet backlog belongs to all of them — and agrees with any of them.
+with **no** scope is about the box rather than one of its interfaces: the
+softnet backlog belongs to all of them, and agrees with any of them.
 
 This is the same idea an alert manager expresses as scoping suppression by
 label: the relationship only holds between things that are about the same
@@ -1170,20 +1170,20 @@ thing.
 
 ## Which way a fault faces
 
-The ordering rule — *the lowest layer with a live fault is the cause* — is
+The ordering rule (*the lowest layer with a live fault is the cause*) is
 right, and it is right **within a direction**. Direction and layer are
 orthogonal axes, and the chain collapsed them into one, built for a device that
 only talks outward. On a box that answers requests there are two directions:
 
 | | |
 |---|---|
-| **local** | This box and its own link. Sits in both paths, so it explains symptoms in either — which is the original rule, unchanged. |
+| **local** | This box and its own link. Sits in both paths, so it explains symptoms in either, which is the original rule, unchanged. |
 | **downstream** | Toward whoever connects to this box: the load balancer, the edge, the accept path. Broken here and clients cannot get in. |
 | **upstream** | Toward whatever this box depends on: backends, DNS, the path out. Broken here and this box cannot answer them. |
 
 The two resource ceilings show why this is not cosmetic. `fd_pressure` and
 `ephemeral_ports_low` are both "this box ran out of something", and they break
-**opposite directions** — descriptors stop it accepting, ports stop it opening.
+**opposite directions**, descriptors stop it accepting, ports stop it opening.
 Before this they were indistinguishable.
 
 ### Reading it without knowing what a layer is
@@ -1196,7 +1196,7 @@ an arrow:
   clients in (10.20.0.7) FAULT  ->  this box ok  ->  depends on (10.60.9.30) degraded
 ```
 
-- The state is a **word as well as a colour** — colour alone is not readable to
+- The state is a **word as well as a colour**: colour alone is not readable to
   everyone, and does not survive a printout or a screenshot pasted into a
   ticket.
 - Each zone carries **the sentence that put it there**, not just a lamp. A
@@ -1210,7 +1210,7 @@ an arrow:
 - The **upstream zone names what the run aimed at**, which with `--target auto`
   is the backend.
 - On a box with nothing connected the inbound zone reads **none connected** and
-  greys out — not green, which would claim something had been examined, and not
+  greys out, not green, which would claim something had been examined, and not
   an alarm, because the socket table *was* read and there was nothing coming
   in. That is an answer, not a gap.
 
@@ -1221,7 +1221,7 @@ an arrow:
 The panel is shown on **every** box, including one that only talks outward. It
 was hidden there at first, on the grounds that two boxes and an arrow restate an
 eight-stage strip that says the same thing more precisely. That reasoning
-optimises for a reader who can already read the strip — and boxes that only
+optimises for a reader who can already read the strip, and boxes that only
 talk outward are the common case, so hiding it there meant the panel written
 for someone who *cannot* read the strip was the one they would almost never be
 shown.
@@ -1232,20 +1232,20 @@ What it changes:
   layer.** Client-side loss and loss on the path to a backend are both layer 3,
   so the layer rule named one and presented the other as its consequence, and
   said nothing about the second. Fixing the first left the second exactly where
-  it was — the failure `also, unrelated` exists to prevent.
+  it was, the failure `also, unrelated` exists to prevent.
 - **A fault facing the other way is not corroboration.** Two problems is not
   one problem confirmed twice.
 
 `FINDING_SIDE` is exhaustive rather than defaulting, so every code is a
 decision someone made and a new one cannot join by accident. On a box with no
 inbound service every finding is local or upstream, nothing here can fire, and
-the output is **identical** — verified across all 110 scenarios, comparing
+the output is **identical**, verified across all 110 scenarios, comparing
 findings, headline, owner, confidence, corroboration, unrelated and every stage.
 
 ## The verdict
 
 The top of every report names one likely root cause, who owns it, and what to
-do next — so you don't read eight findings to work out which one is the cause
+do next, so you don't read eight findings to work out which one is the cause
 and which are consequences:
 
 ```
@@ -1259,13 +1259,13 @@ LIKELY ROOT CAUSE: The gateway does not answer at all - the local link is down
 
 **This is ordering, not intelligence, and deliberately so.** A broken layer
 makes every layer above it look broken, so the rule is: the lowest layer with a
-*live* fault is the root cause, and each rule names the owner — this device,
+*live* fault is the root cause, and each rule names the owner. This device,
 the site network, the provider, or the destination. A dead gateway with failing
 DNS on top reports the gateway, not DNS.
 
 Confidence is a three-way label, not a percentage. A percentage would imply a
-probability calibrated against outcomes — *"of boxes that looked like this, 73%
-had this cause"* — and nothing ever tells the tool whether reseating the cable
+probability calibrated against outcomes, *"of boxes that looked like this, 73%
+had this cause"*, and nothing ever tells the tool whether reseating the cable
 fixed it, so that number would be a formula's output wearing a decimal point.
 What the verdict shows instead is the countable evidence behind the label:
 
@@ -1275,12 +1275,12 @@ owner: this device or its cable   confidence: medium (16 of 18 checks ran)
 
 Coverage feeds the label as well as being shown. Below 70% of collections
 returning data a verdict cannot be called well-supported, and below 40% it is
-low confidence however well corroborated — a conclusion drawn from a third of
+low confidence however well corroborated, a conclusion drawn from a third of
 the checks is not the same as one drawn from all of them.
 
 The verdict also names a fault it *cannot* explain. The layer rule assumes a
-causal chain, which is what makes it useful; where there is no chain — a
-flapping link and an expired certificate have nothing to do with each other —
+causal chain, which is what makes it useful; where there is no chain: a
+flapping link and an expired certificate have nothing to do with each other: 
 it would otherwise discard the second one, and fixing the first leaves it
 exactly where it was:
 
@@ -1300,7 +1300,7 @@ by collisions reads `high`; a lone historical error count reads `low`.
 A third rule: findings too weak to be a verdict are too weak to be evidence for
 one. An error count that stopped climbing, an MTU that's merely unusual, and a
 router that declines to answer traceroute all read as `low` confidence when
-they're the answer — so none of them can raise someone else's. Without that, an
+they're the answer, so none of them can raise someone else's. Without that, an
 unrelated non-standard MTU sitting in the report turned a `medium` call into a
 `high` one purely by being present.
 
@@ -1308,12 +1308,12 @@ No model is involved. When you're explaining a conclusion you have to be able
 to say *why* the
 tool concluded what it did, so every verdict cites the finding codes it was
 built from (`based_on` in the JSON), and the rules are a readable list in
-`VERDICT_RULES` — you can check its work, and it can't invent a cause that
+`VERDICT_RULES`. You can check its work, and it can't invent a cause that
 isn't in the data.
 
 ## How the diagnosis works
 
-It's a short rule-based pass, not a model — deliberately, so you can
+It's a short rule-based pass, not a model: deliberately, so you can
 read and trust exactly why it says what it says. Roughly:
 
 1. Does any interface have an IPv4 address? If not → local
@@ -1326,7 +1326,7 @@ read and trust exactly why it says what it says. Roughly:
    an upstream/ISP issue.
 5. Does DNS resolve `google.com`? IP connectivity works but this fails →
    DNS server misconfigured or unreachable.
-6. Traceroute to the target — if every probe times out for the last
+6. Traceroute to the target, if every probe times out for the last
    few hops with no success afterward, the break is likely at or just
    past that hop.
 
@@ -1341,7 +1341,7 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **33** | Distinct things it inspects on the device or the path — the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **153** | Distinct conclusions it can reach and state in plain language. 131 are faults; 22 are context, like which switch port you're on. |
 | **Ranked causes** | **131** | Findings the verdict knows how to rank and assign an owner to. |
 | **Automated tests** | **531** | 965 tests of this program's own code. A developer number, not a measure of what it checks for you. |
@@ -1356,17 +1356,17 @@ end.
 1. Interfaces and addresses
 2. Routing table and default gateway
 3. Interface error, drop, CRC and collision counters
-4. Carrier transitions — how often the link has dropped and returned
-5. Kernel log — link transitions and NIC resets, with the times attached (Linux)
-6. Packets this device drops itself — receive backlog and accept queues (Linux)
-7. Connection tracking table — how full it is, and whether it has refused (Linux)
+4. Carrier transitions: how often the link has dropped and returned
+5. Kernel log, link transitions and NIC resets, with the times attached (Linux)
+6. Packets this device drops itself: receive backlog and accept queues (Linux)
+7. Connection tracking table: how full it is, and whether it has refused (Linux)
 8. Link speed, duplex and MTU
 9. Optical module power and alarms (fibre)
-10. LLDP/CDP neighbour — which switch and port
+10. LLDP/CDP neighbour: which switch and port
 11. ARP / neighbour table
 12. TCP socket states
 13. TCP retransmission counters
-14. Per-connection TCP statistics — loss and stalls broken down by destination (Linux)
+14. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
 15. Clock synchronisation and offset, where a time daemon can be asked
 16. Listening ports
 17. Neighbour inventory (with `--inventory`)
@@ -1383,11 +1383,11 @@ end.
 26. TLS handshake and certificate on ports that should have one
 27. Bonded interface members, and which of them are down (Linux)
 28. Neighbour table size against its own ceiling (Linux)
-29. CPU thermal throttling counters — times the hardware clocked itself down (Linux)
+29. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
 30. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
 31. The TLS certificate this box *serves*, read from the outside in
 32. This box's own service, asked over HTTP for an answer rather than a connection
-33. Proxy configuration — how this box is told to reach the internet: the
+33. Proxy configuration, how this box is told to reach the internet: the
     `http_proxy` family, and on macOS the system settings including a PAC file
     or WPAD. Read, never probed
 
@@ -1428,8 +1428,8 @@ utilization, and the comparison against a `--baseline`.
 
 ### `--export-compact`
 
-A full export is mostly captured command output — on a real box the port
-probes alone can be half of it — and all of it is kept so a conclusion can be
+A full export is mostly captured command output, on a real box the port
+probes alone can be half of it, and all of it is kept so a conclusion can be
 audited months later. That is the right default, and the wrong thing to carry
 off a locked-down box through a console.
 
@@ -1443,7 +1443,7 @@ that passed left on the box:
 
 Nothing the picture needs is lost, because none of it is what makes an export
 big. The verdict, the findings, the stage strip, the hop-by-hop path, the
-direction panel and the call-quality figures are all **derived** — they total a
+direction panel and the call-quality figures are all **derived**. They total a
 couple of kilobytes, and they are what you look at. What goes is the raw
 material behind the checks that were fine.
 
@@ -1452,7 +1452,7 @@ Two things are always kept:
 | | |
 |---|---|
 | evidence for a stage that is **not passing** | it is the reason the report exists |
-| a check that **could not run** | a gap in coverage has to stay visible — dropped, it would look exactly like a check that passed |
+| a check that **could not run** | a gap in coverage has to stay visible, dropped, it would look exactly like a check that passed |
 
 The report is marked `"compact": true`, so a reader months later can tell why a
 panel is missing, and a `--baseline` comparison does not read a trimmed report
@@ -1470,16 +1470,16 @@ scheduled check without anything parsing its output:
 | `0` | nothing wrong |
 | `1` | at least one warning |
 | `2` | at least one critical finding |
-| `3` | the check couldn't run, or couldn't deliver — too old a Python, a bad `--target`, an unreadable `--baseline`, a report that couldn't be written, or a crash |
+| `3` | the check couldn't run, or couldn't deliver, too old a Python, a bad `--target`, an unreadable `--baseline`, a report that couldn't be written, or a crash |
 
 **This changed in 1.3.** It used to be `1` for a critical and `0` for
 everything else, which meant a run reporting a degraded link, a flapping
-resolver or 7% path loss exited `0` — so a wrapper saw success while the tool
+resolver or 7% path loss exited `0`, so a wrapper saw success while the tool
 was saying something was wrong. If you script against it, `!= 0` now means
 "something to look at" rather than "catastrophe only".
 
-A failed `--export` prints the report to stdout rather than losing it — the
-run has already happened — says what went wrong on stderr, and exits `3`.
+A failed `--export` prints the report to stdout rather than losing it: the
+run has already happened, says what went wrong on stderr, and exits `3`.
 
 While the checks run, a single line on **stderr** shows what's happening and
 how long it's taken:
@@ -1491,13 +1491,13 @@ how long it's taken:
 It overwrites itself, and clears before the report prints. Under `--soak` it
 counts the remaining window down each second, so a two-minute sample doesn't
 look like a hang. It's on stderr rather than stdout so `--export -` still emits
-nothing but JSON, it turns itself off when stderr is redirected — a log full of
-half-finished lines helps nobody — and `--quiet` disables it entirely.
+nothing but JSON, it turns itself off when stderr is redirected: a log full of
+half-finished lines helps nobody, and `--quiet` disables it entirely.
 
 
 ## Python versions
 
-**Minimum: Python 3.7** — that's where `subprocess.run`'s `capture_output` and
+**Minimum: Python 3.7**, that's where `subprocess.run`'s `capture_output` and
 `text` arguments arrived. Nothing newer is used, and nothing outside the
 standard library, so there is no dependency to break when the box is patched.
 
@@ -1506,7 +1506,7 @@ the stated floor (so newer syntax can't slip in and fail months later on an
 appliance instead of here), and one asserts every import is standard library.
 
 If the interpreter is older, the tool prints the version it needs and exits
-`2` — before running any command, so you get a sentence instead of a
+`2`, before running any command, so you get a sentence instead of a
 `TypeError` from the first ping.
 
 **After a Python upgrade on the box**, the check is the tool itself:
@@ -1517,7 +1517,7 @@ python3 test_faultone.py           # 965 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
-of having no dependencies — you can validate the tool in the environment that
+of having no dependencies. You can validate the tool in the environment that
 matters rather than hoping your laptop resembles it.
 
 Every report records the interpreter alongside the tool version:
@@ -1539,7 +1539,7 @@ versions once shipped with no Release and the Releases page kept showing one
 from eight releases back.
 
 `python3 faultone.py --version` prints what's on the box, and every report
-carries the version that produced it — in the JSON, at the top of the terminal
+carries the version that produced it, in the JSON, at the top of the terminal
 output, and in the badge of a self-contained page:
 
 ```
@@ -1559,7 +1559,7 @@ can say what the bar was rather than "the tool said so".
 | Constant | Value | What it decides |
 |---|---|---|
 | `ERR_PPM_WARN` | **100** | interface errors, per million packets, before they're worth reporting |
-| `COLL_PPM_WARN` | **10** | collisions, per million packets — lower, because full duplex shouldn't have any |
+| `COLL_PPM_WARN` | **10** | collisions, per million packets, lower, because full duplex shouldn't have any |
 | `LINK_FLAP_PER_DAY` | **2** | carrier transitions per day of uptime before a link counts as flapping |
 | `KLOG_RECENT_SECONDS` | **3600** | how far back a kernel-log event still counts as happening now |
 | `KLOG_FLAPS_RECENT` | **4** | carrier transitions logged within that hour before the link is called unstable. Two is one clean down/up |
@@ -1583,7 +1583,7 @@ can say what the bar was rather than "the tool said so".
 | `FLOW_LOSSY_PCT` | **2.0** | retransmit ratio at which one connection is called lossy |
 | `SYN_RETRANS_PCT` | **5** | share of connection attempts needing their SYN resent before setup is called the problem |
 | `ATTEMPT_FAIL_PCT` | **10** | share of connection attempts that never establish at all |
-| `CSUM_ERR_PPM` | **1** | segments per million arriving with a bad TCP checksum — should be zero |
+| `CSUM_ERR_PPM` | **1** | segments per million arriving with a bad TCP checksum: should be zero |
 | `SPURIOUS_RETRANS_PCT` | **30** | share of retransmissions the far end says were unnecessary before reordering, not loss, is the story |
 | `MIN_WINDOW_PACKETS_FOR_RATE` | **1,000** | the same idea for a counter window rather than a lifetime. A percentage of fifty packets is not a percentage of anything, and the window is seconds long on a box that may be nearly idle |
 | `DROP_PCT_WARN` | **2.0** | share of a window's packets discarded before it is worth saying so. Two orders of magnitude looser than the error threshold on purpose - the counters mean opposite things: an error is a frame that arrived damaged and should never happen, a discard is a frame this box chose not to deliver upwards and happens on every busy interface there is |
@@ -1635,7 +1635,7 @@ And the limits that bound a run rather than judging anything:
 | `MIN_COUNTER_WINDOW` | **2** | seconds the counter window runs for, even on a fast run |
 | `MAX_SOAK_SECONDS` | **3600** | longest --soak accepted |
 | `MAX_CHECK_PORTS` | **32** | most ports --check-ports will try |
-| `PORT_CHECK_WORKERS` | **8** | concurrent port connects — bounded so it doesn't resemble a scan |
+| `PORT_CHECK_WORKERS` | **8** | concurrent port connects, bounded so it doesn't resemble a scan |
 | `BANNER_TIMEOUT` | **0.5** | seconds spent waiting for a service to announce itself |
 | `FLOW_MAX` | **20000** | connections read from ss before the sample is declared partial |
 | `FLOW_READ_BYTES` | **12000000** | how much socket-table output is read before analysing it. None of it is stored - the table is replaced by a digest before the report is written |
@@ -1650,7 +1650,7 @@ tool you pipe over SSH shouldn't need a second file to behave predictably.
 
 ## The stage strip
 
-Under the verdict, the whole chain at a glance — the way a handheld tester
+Under the verdict, the whole chain at a glance: the way a handheld tester
 shows it:
 
 ```
@@ -1674,10 +1674,10 @@ in the UI and as a `layer` field in the exported JSON:
 | Layer | Checks | What a failure here means |
 |---|---|---|
 | **L1 · Physical** | interface has an IPv4 address, error counters, link speed/duplex | cable unseated, Wi-Fi not associated, port down, DHCP never completed, corrupted frames on the wire |
-| **L2 · Data link** | ARP/neighbour table, gateway ping, interface MTU, LLDP switch port | local segment problem — switch/AP port, bad cabling, interference |
-| **L3 · Network** | routing table, default gateway, internet ping, traceroute, path MTU | addressing or routing — no gateway, upstream/ISP break |
+| **L2 · Data link** | ARP/neighbour table, gateway ping, interface MTU, LLDP switch port | local segment problem, switch/AP port, bad cabling, interference |
+| **L3 · Network** | routing table, default gateway, internet ping, traceroute, path MTU | addressing or routing: no gateway, upstream/ISP break |
 | **L4 · Transport** | listening ports, TCP port checks | firewall rule or the service isn't listening |
-| **L7 · Application** | DNS lookup | name resolution — wrong or unreachable DNS server |
+| **L7 · Application** | DNS lookup | name resolution, wrong or unreachable DNS server |
 
 A check is tagged with the **lowest layer it can implicate**, not the
 layer of the protocol it speaks. Pinging your gateway is an L3 (ICMP)
@@ -1704,48 +1704,48 @@ timeout) between "this device" and the target.
 ## What the path diagram tells you
 
 Each hop carries a bit of insight beyond "hop 3 answered in 24ms", all derived
-from the trace already taken — no extra packets:
+from the trace already taken: no extra packets:
 
-- **lan / wan** — whether the hop is inside this site (RFC1918, link-local) or
+- **lan / wan**: whether the hop is inside this site (RFC1918, link-local) or
   out on the provider's network. The first hop that is public *or in carrier
   NAT* is marked **site edge**, and that boundary is the demarcation between
-  the site's network and their ISP — usually the first thing you want to
+  the site's network and their ISP, usually the first thing you want to
   establish. Carrier NAT counts as theirs: 100.64.0.0/10 is not routable on
   the internet, so it reads like a private range, but it is the provider's
   addressing and not the site's. Taking the first *public* hop alone put the
   edge past their NAT layer and drew it as though it were inside the site.
-- **+Nms** — latency this hop *added* over the previous one. An accumulating
+- **+Nms**: latency this hop *added* over the previous one. An accumulating
   total tells you little; the jump tells you where the delay is introduced.
   The largest jump is called out, along with which side of the edge it's on.
-- **jitter** — spread between the three probes to that hop (shown at 5ms and
+- **jitter**: spread between the three probes to that hop (shown at 5ms and
   above). A wide spread means congestion or an unstable link even when the
   average looks healthy.
-- **gateway / target** — which hop is this device's default gateway, and
+- **gateway / target**: which hop is this device's default gateway, and
   whether the path actually reached what you aimed at.
 
-- **network handoffs** — where the PTR domain changes, so you can see the path
+- **network handoffs**: where the PTR domain changes, so you can see the path
   pass from one operator into the next (`example-isp.net → dns.google`). The
   summary lists every network crossed.
-- **cgnat** — a hop in `100.64.0.0/10` means the provider is NAT-ing this site.
+- **cgnat**: a hop in `100.64.0.0/10` means the provider is NAT-ing this site.
   There's no public address on the connection, so nothing reaches it from
-  outside regardless of local configuration — worth knowing before chasing an
+  outside regardless of local configuration: worth knowing before chasing an
   inbound-access problem on the device.
 
 Three structural faults are detected from the same data:
 
-- **Two private networks in series** — two different private subnets before
+- **Two private networks in series**: two different private subnets before
   the site edge mean traffic crosses at least two routers on the way out.
   Commonly that is double NAT, and it is reported as a likelihood rather than
   a reading: a traceroute cannot tell a translating router from one that only
   routes, and a site with several routed VLANs is ordinary in itself. If it
   is NAT it breaks inbound connections and port forwarding; either way there
   is a second device in the path to rule out. Only hops before the edge are
-  counted — plenty of carriers number their own core out of RFC1918, and
+  counted, plenty of carriers number their own core out of RFC1918, and
   scanning the whole trace reported their addressing as the site's.
-- **Routing loop** — the same address answering at two hop numbers. Traffic is
+- **Routing loop**: the same address answering at two hop numbers. Traffic is
   circling and will die when the TTL runs out; that's an upstream routing
   misconfiguration, not a fault on the device.
-- **Latency wall** — a single-hop jump over 100ms, attributed to the correct
+- **Latency wall**: a single-hop jump over 100ms, attributed to the correct
   side of the demarcation (site, carrier-NAT layer, or provider network).
   Everything past it inherits the delay, so the later hops looking slow is a
   symptom rather than a separate problem.
@@ -1767,41 +1767,41 @@ with TCP SYN probes to port 443 (`tcptraceroute`, `traceroute -T`, or
 `mtr --tcp`, whichever exists). If that reaches the target, the report says so:
 
 > The standard trace stopped at hop 4, but a TCP probe to port 443 reached
-> 8.8.8.8 — so the path is fine and something along it simply doesn't answer
+> 8.8.8.8, so the path is fine and something along it simply doesn't answer
 > traceroute probes.
 
 That's the difference between escalating a broken path and knowing the probes
 were being filtered. TCP probes need raw sockets, so this is skipped when
-running unprivileged — like every other optional step here.
+running unprivileged, like every other optional step here.
 
 ## Interface error counters
 
-Every other check here measures *reachability* — it tells you something is
+Every other check here measures *reachability*. It tells you something is
 broken, not whose fault it is. The error counters the NIC keeps are different:
 they're evidence that the damage is happening on this device's own link.
 
-- **CRC / frame errors** — bits arriving corrupted: bad cable, dying SFP,
+- **CRC / frame errors**: bits arriving corrupted: bad cable, dying SFP,
   dirty fiber, or a duplex mismatch. Physical, and on this device's link.
-- **Carrier losses** — the link is flapping up and down.
-- **Collisions** — on a full-duplex port (nearly all modern ones) these
+- **Carrier losses**: the link is flapping up and down.
+- **Collisions**: on a full-duplex port (nearly all modern ones) these
   shouldn't happen at all; a steady rate is the classic duplex-mismatch
   fingerprint, so they get a lower threshold than generic errors.
-- **Drops / overruns** — frames arrived but the box couldn't keep up. That's
-  device-side: CPU, ring buffer, or driver — *not* the network.
+- **Drops / overruns**: frames arrived but the box couldn't keep up. That's
+  device-side: CPU, ring buffer, or driver, *not* the network.
 
-Counters are cumulative since boot, so a bare number means little — 47 errors
+Counters are cumulative since boot, so a bare number means little: 47 errors
 over 200 days of uptime is noise. Three things are reported instead:
 
-1. the raw count per interface,
-2. the **rate** (errors per million packets), which separates background
+1. The raw count per interface,
+2. The **rate** (errors per million packets), which separates background
    noise from a real problem, and
-3. whether the counters are **climbing right now** — outside `--quick` the
+3. whether the counters are **climbing right now**: outside `--quick` the
    counters are sampled twice, 2s apart. "1,200 errors, +14 in the last 2s"
    is a live fault; "1,200 errors, steady" is history.
 
 Only interfaces that have actually passed traffic are considered, so the pile
 of idle virtual interfaces on a typical box stays out of the way. When
-everything is clean, the all-clear says so explicitly — "the physical link
+everything is clean, the all-clear says so explicitly: "the physical link
 into this device is clean" is exactly the sentence you need when the question
 is whether the box is at fault.
 
@@ -1815,7 +1815,7 @@ negotiated with each other, so a problem there is unambiguously about that
 cable and those two ports:
 
 - **Half duplex** on a switched link is almost always a failed negotiation or
-  a hard-coded mismatch — one side forced, the other auto-negotiating.
+  a hard-coded mismatch, one side forced, the other auto-negotiating.
   Throughput collapses under load while pings stay perfect, which is why it
   gets misdiagnosed as "the network is slow". Reported critical when
   collisions are also present, since that confirms it.
@@ -1823,7 +1823,7 @@ cable and those two ports:
   cable: gigabit needs all four pairs, 100 Mbps needs two, so one broken pair
   silently drops you a tier instead of failing outright.
 
-Collisions are read in light of the negotiated duplex — on a half-duplex link
+Collisions are read in light of the negotiated duplex: on a half-duplex link
 they're expected, so only the duplex finding is reported rather than both.
 
 **Interface MTU** below 1500 usually means a tunnel (VPN/PPPoE) or a manual
@@ -1831,10 +1831,10 @@ override; above 1500 (jumbo) only works if every device in the path agrees.
 
 **Path MTU** is the more valuable half, and it's the one thing here that
 catches a failure invisible to everything else. The interface can say 1500
-while something along the path silently drops full-size packets — so pings
+while something along the path silently drops full-size packets, so pings
 and SSH work fine while large transfers, file copies, TLS handshakes and VPN
 traffic stall. FaultOne sends do-not-fragment pings at descending sizes
-(interface MTU, then 1492/1400/1280/1000 — the common tunnel sizes) and
+(interface MTU, then 1492/1400/1280/1000: the common tunnel sizes) and
 reports the largest that gets through:
 
 ```
@@ -1858,7 +1858,7 @@ OPTICAL MODULES
   eth0        rx  -36.90 dBm  tx   -2.33 dBm   FINISAR CORP. FTLX8571D3BCL
 ```
 
-A degrading fibre link — dirty connector, tight bend, dying laser — stays
+A degrading fibre link (dirty connector, tight bend, dying laser) stays
 **up** and passes every reachability check while quietly corrupting frames. The
 error counters see the damage; only this says why. Below about -25 dBm most
 receivers can't work reliably (reported critical); below -20 dBm the link works
@@ -1884,7 +1884,7 @@ follow the device, it's the NIC or its transceiver. This device is connected to
 SW-CLOSET-2 port Gi1/0/12.
 ```
 
-Entirely passive — nothing is sent and nothing is captured; `lldpd` has already
+Entirely passive. Nothing is sent and nothing is captured; `lldpd` has already
 collected the frames. Needs `lldpd` present and LLDP or CDP enabled on the
 switch; skipped silently otherwise, like every optional tool here.
 
@@ -1899,19 +1899,19 @@ DNS RESOLVERS (probe: google.com)
   192.168.1.2           no reply     2000 ms
 ```
 
-- **One of two resolvers dead** — the nastiest DNS fault, because lookups work
+- **One of two resolvers dead**: the nastiest DNS fault, because lookups work
   or hang depending on which one the stub picks. It reads as "the network is
   intermittently slow", and a single lookup usually passes.
-- **A slow resolver** — every new connection waits on it, so the whole site
+- **A slow resolver**: every new connection waits on it, so the whole site
   feels broken while every connectivity check succeeds.
-- **NXDOMAIN hijacking** — a name in the reserved `.invalid` domain is queried;
+- **NXDOMAIN hijacking**: a name in the reserved `.invalid` domain is queried;
   it cannot exist, so an answer means a captive portal or ISP redirect service
   is inventing replies.
-- **Disagreement** between resolvers — a stale cache, or a middlebox answering
+- **Disagreement** between resolvers: a stale cache, or a middlebox answering
   selectively.
 
 Queries are built and parsed here in ~60 lines of standard library rather than
-shelled out to `dig`, which minimal appliances often don't ship — and which
+shelled out to `dig`, which minimal appliances often don't ship, and which
 would make the timings include process startup.
 
 ## Call quality (MOS)
@@ -1924,7 +1924,7 @@ CALL QUALITY (estimated, to 8.8.8.8)
   MOS 4.39 (excellent)   latency 24ms · jitter 2ms · loss 0%
 ```
 
-Scored from the measurements already taken — no extra packets — using the
+Scored from the measurements already taken (no extra packets) using the
 E-model arithmetic PingPlotter uses: effective latency is `avg + jitter×2 + 10`,
 because variation hurts a call more than steady delay does, then loss costs
 ~2.5 R-points per percent. The scale is 4.3+ excellent, 4.0–4.3 good, 3.6–4.0
@@ -1943,8 +1943,8 @@ negotiated link speed:
 en0    122,124,366    0    0    0.0   steady over 60s   94.1/3.2 Mbps rx/tx (94% of link)
 ```
 
-A full link behaves exactly like a broken one from the application's side —
-latency climbs, transfers stall — but nothing is faulty. Above 80% this is
+A full link behaves exactly like a broken one from the application's side: 
+latency climbs, transfers stall, but nothing is faulty. Above 80% this is
 reported, and the verdict names it "capacity, not a fault" so nobody replaces
 hardware that's working.
 
@@ -1953,7 +1953,7 @@ hardware that's working.
 That 94% is against the **NIC's** negotiated speed, which is the only rate this
 box can read. On the appliances this tool is built for it is also the wrong
 one. A branch box has a gigabit port in front of a 50 Mbps line, so a site
-filling that line completely shows as 5% busy — and every symptom it produces
+filling that line completely shows as 5% busy, and every symptom it produces
 (loss to every destination, latency climbing under load, calls breaking up)
 gets read as the carrier dropping traffic. That verdict came out at high
 confidence, and it sends someone to open a ticket against a circuit that is
@@ -1961,20 +1961,20 @@ working exactly as sold.
 
 Measuring the line from here would mean generating load on a customer's
 connection, which this tool won't do. So it takes the number as an input
-instead — it's on the ticket:
+instead: it's on the ticket:
 
 ```bash
 python3 faultone.py --report --soak 60 --uplink-mbps 50
 ```
 
 With that, utilisation is computed against the line as well as the NIC, and at
-`UPLINK_FULL_PCT` (70%) or above one of two findings comes out — and which one
+`UPLINK_FULL_PCT` (70%) or above one of two findings comes out, and which one
 depends on whether anything was actually failing at the time:
 
 | | |
 |---|---|
 | `uplink_saturated` | Full, **and** something broke while it was: dropped packets, or probes that went unanswered. Ranked above every loss, latency and retransmit verdict it explains, and owned by "the site's own capacity, not the carrier". |
-| `uplink_busy` | Full, nothing failing. A backup, a sync, a large transfer — a line being used, which is not a line that is broken. Reported, and `LATENT`, so it can't headline over a live fault but is still the answer when nothing else is wrong. |
+| `uplink_busy` | Full, nothing failing. A backup, a sync, a large transfer, a line being used, which is not a line that is broken. Reported, and `LATENT`, so it can't headline over a live fault but is still the answer when nothing else is wrong. |
 
 `link_saturated` and `link_busy` split the same way against the NIC's speed.
 
@@ -2017,17 +2017,17 @@ ICMP alone any more:
 
 | | how reachability is confirmed instead |
 |---|---|
-| the target | A TCP connect to 443, 80 then 53 — the host the operator named, not a scan. **A refusal proves it as well as an accept does:** an RST is a completed round trip, so the packets got there and the reply got back. Only a timeout is inconclusive. Reports `inet_icmp_filtered`. |
+| the target | A TCP connect to 443, 80 then 53, the host the operator named, not a scan. **A refusal proves it as well as an accept does:** an RST is a completed round trip, so the packets got there and the reply got back. Only a timeout is inconclusive. Reports `inet_icmp_filtered`. |
 | the gateway | Its entry in the neighbour table. ARP does not cross a dead cable or a down switch port, so an entry with a hardware address means the link is up whatever ICMP says. An entry with no MAC, or in `FAILED`/`INCOMPLETE`, is the kernel asking rather than the gateway replying, and does not count. Reports `gw_icmp_filtered`. |
 
-Both findings read as `ok` — they exist to stop something else being misread,
+Both findings read as `ok`. They exist to stop something else being misread,
 and neither is ever a fault. When ICMP *and* the confirming probe both get
 nothing, `gw_unreachable` and `inet_unreachable` still fire exactly as before,
 still critical, still exit 2. The point was never to stop reporting outages.
 
 ## Running this on a server rather than a branch box
 
-Most of this tool assumes a device that *initiates* traffic — the question is
+Most of this tool assumes a device that *initiates* traffic. The question is
 whether it can get out. A box serving inbound traffic inverts that, and two
 things follow from it.
 
@@ -2037,7 +2037,7 @@ a service, and an established connection whose local port matches one is a
 client. `SERVING_INBOUND_MIN` (3) is the bar, because one inbound connection is
 your own SSH session or a load-balancer health check.
 
-So when nothing outbound reaches the target — no ICMP, no TCP — but clients are
+So when nothing outbound reaches the target (no ICMP, no TCP) but clients are
 connected inbound, that is `egress_blocked` (warning, owner *"this box's egress
 policy, probably by design"*) rather than `inet_unreachable` (critical, owner
 *the provider*). A server with no outbound internet is usually a server that
@@ -2049,7 +2049,7 @@ has no fibre optics, no switch neighbour, no `ethtool` and no carrier
 transitions to count. Those were counted as failed collections, so coverage
 read low and *every* verdict on that box was marked down in confidence for
 running on the hardware it runs on. Platform-gated collectors now return
-`applicable: False` and drop out of the denominator entirely — the figure is
+`applicable: False` and drop out of the denominator entirely. The figure is
 meant to say how much of what *could* have run did. On a Mac this moved a
 routine run from `11 of 15 checks ran` to `11 of 12`.
 
@@ -2060,7 +2060,7 @@ None of it does harm; it now costs nothing in confidence either.
 ### The ceilings that look like network faults
 
 Five findings for limits that live on this box and are invisible to every
-other check here — which is the point, because from a client's side and from
+other check here, which is the point, because from a client's side and from
 the wire they are indistinguishable from the path being broken:
 
 | | reads | what it means |
@@ -2069,7 +2069,7 @@ the wire they are indistinguishable from the path being broken:
 | `syncookies_historical` | same, since boot | It has overflowed before but not during this run. `LATENT`, so it can't headline over a live fault. |
 | `ephemeral_ports_low` | `ip_local_port_range` vs outbound sockets | A proxy talking to backends runs out of source ports long before anything else breaks, and the failure looks exactly like the far end refusing the connection. `TIME_WAIT` is named in the finding because it is usually what is holding them. |
 | `fd_pressure` | `/proc/sys/fs/file-nr` | At the ceiling the service stops accepting. Nothing on the wire is wrong. |
-| `syn_recv_backlog` | `SYN_RECV` count vs `somaxconn` | Half-open connections piling up — either the accept queue isn't draining or something opens connections and abandons them. The syncookie counter is what tells those apart, which is why both are reported. |
+| `syn_recv_backlog` | `SYN_RECV` count vs `somaxconn` | Half-open connections piling up, either the accept queue isn't draining or something opens connections and abandons them. The syncookie counter is what tells those apart, which is why both are reported. |
 
 All five are ranked above the path and loss verdicts, because each one makes
 this box refuse or fail to open connections, and bottom-up ordering would
@@ -2079,7 +2079,7 @@ otherwise hand the answer to whatever symptom that produced further out.
 
 `8.8.8.8` answers "can this box reach the internet". That is the whole question
 on a branch appliance and close to irrelevant on a box whose job is answering
-requests — what matters there is whether it can reach the things it *depends
+requests. What matters there is whether it can reach the things it *depends
 on*. Those are visible in `ss`: the connections it opened itself.
 
 `--target` now defaults to `auto`. On a box that accepts connections it picks
@@ -2098,7 +2098,7 @@ the peer with the most outbound connections; on anything else it falls back to
   load balancer in front of you outnumbers every backend you have, and aiming
   at it would point the tool at what sends traffic rather than what the service
   needs.
-- `BACKEND_MIN_CONNECTIONS` (2) — one connection somewhere is a DNS lookup or
+- `BACKEND_MIN_CONNECTIONS` (2): one connection somewhere is a DNS lookup or
   a webhook.
 - **Ties break by address**, so the choice is the same on every run. A target
   that moves makes two reports impossible to compare.
@@ -2108,16 +2108,16 @@ the peer with the most outbound connections; on anything else it falls back to
   silently leaving you reading a report about `8.8.8.8` believing it is about
   your database.
 
-A dependency on a **public** address — a managed database, an external API — is
+A dependency on a **public** address (a managed database, an external API) is
 still worth aiming at, and is reported as `dependency` rather than `backend`.
 The path to it genuinely leaves the site, so it aims there without claiming the
 readings are about an internal segment.
 
 **The attribution changes with it.** "The provider" is right for `8.8.8.8` and
 flatly wrong for a database on the other side of a rack, so
-`BACKEND_TARGET_VERDICTS` re-owns the five verdicts about reaching the target —
+`BACKEND_TARGET_VERDICTS` re-owns the five verdicts about reaching the target: 
 `inet_unreachable`, `inet_partial_loss`, `trace_stalls`, `loop`,
-`egress_blocked` — to the internal segment. One rule per fault, with only the
+`egress_blocked`, to the internal segment. One rule per fault, with only the
 attribution overridden, rather than a parallel set of near-duplicate codes. The
 `--uplink-mbps` caveat also switches off: "rule out the site's own line" is
 about the WAN, which an internal segment does not go near.
@@ -2125,7 +2125,7 @@ about the WAN, which an internal segment does not go near.
 ### The path only goes one way, and says so
 
 A traceroute is outbound. This box can send probes toward a client, but nothing
-here can observe the route a client's packets took to *arrive* — that is a
+here can observe the route a client's packets took to *arrive*. That is a
 property of IP, not a gap in the tool. So there is no inbound path diagram, and
 inventing one would be worse than leaving it out.
 
@@ -2153,7 +2153,7 @@ PATH OUT TO 10.60.9.30 - what this box depends on
   balancer is not a clean reading to the user, and a panel that does not say
   so invites exactly that reading.
 - When connections arrive from many addresses there is no balancer to name, and
-  it says that instead — the spread *is* the answer.
+  it says that instead, the spread *is* the answer.
 - On a box nothing connects to there is no inbound direction, so the panel is
   absent and the outbound one keeps its original title. Drawing an empty
   inbound leg would be inventing a measurement.
@@ -2164,7 +2164,7 @@ PATH OUT TO 10.60.9.30 - what this box depends on
 them. `rtt` is the smoothed average; `minrtt` is the lowest that same socket has
 ever seen. The difference between them is time spent **waiting**, and it is the
 one number that separates *this path is long* from *something on it is
-buffering* — two faults with different owners and different fixes, which every
+buffering*, two faults with different owners and different fixes, which every
 other latency reading here is blind to. A ping and a per-hop delta can say how
 long the trip took; neither can say how much of it was queue.
 
@@ -2183,14 +2183,14 @@ equipment.
 
 | | `QUEUE_RTT_MULTIPLE` alone | `QUEUE_DELAY_MS` alone | both |
 |---|---|---|---|
-| LAN backend, 0.2ms → 2.2ms | fires — 11× | quiet | quiet ✓ |
-| satellite hop, 575ms → 620ms | quiet | fires — 45ms | quiet ✓ |
+| LAN backend, 0.2ms → 2.2ms | fires, 11× | quiet | quiet ✓ |
+| satellite hop, 575ms → 620ms | quiet | fires: 45ms | quiet ✓ |
 | backend behind a full interconnect, 8ms → 96ms | fires | fires | fires ✓ |
 
 Chosen by running candidate rules against twelve paths that should and should
 not fire; this pair was the only one that got all twelve right.
 
-A connection's own minimum is the honest floor for it — the same socket has
+A connection's own minimum is the honest floor for it. The same socket has
 been that fast, so anything above is waiting somewhere. Kernels too old to
 report `minrtt` leave it absent, and absent is skipped rather than read as
 zero: zero would make every connection look infinitely queued.
@@ -2223,7 +2223,7 @@ answers "who owns this" and the shape only answers "how many destinations".
 When **both** sides are lossy the direction says nothing useful and the
 existing every-destination reading is the better answer, so it falls through.
 On a box with no listening ports every flow is outbound by definition, `side`
-stays `None`, and nothing about this changes — inventing a side there would be
+stays `None`, and nothing about this changes. Inventing a side there would be
 a claim the data cannot support.
 
 ### Whether the service answers, not just whether it accepts
@@ -2231,21 +2231,21 @@ a claim the data cannot support.
 Every other check here stops at the handshake: the port is open, the TLS
 completes, the certificate is valid, the TCP connection is established. A
 service that accepts connections and then **answers nothing** passes all of it
-while being completely down from a client's side — and that is the commonest
+while being completely down from a client's side, and that is the commonest
 way a service is broken and the least visible from the box it runs on.
 
 One `HEAD /` per listener, no redirects followed, no body read, no credentials,
 and only against ports this box is **already listening on** that are
-conventionally HTTP — so it never becomes a probe. Skipped under `--quick`.
+conventionally HTTP, so it never becomes a probe. Skipped under `--quick`.
 
 | | |
 |---|---|
 | `own_service_silent` | Accepted a connection, took the request, answered nothing. Ranked above the certificate findings: a client meets this first, and it is more broken than a wrong certificate. |
-| `own_service_upstream_error` | Answered 502, 503 or 504 — the service running and reporting that *what it depends on* failed. Classified **upstream**: this box is not the fault. |
+| `own_service_upstream_error` | Answered 502, 503 or 504, the service running and reporting that *what it depends on* failed. Classified **upstream**: this box is not the fault. |
 | `own_service_erroring` | Any other 5xx. The service accepting connections and failing to serve them, which no network change will fix. |
 | `own_service_not_http` | Answered with something that is not an HTTP status line. Either the wrong thing is bound to that port, or it speaks a protocol this cannot read. |
 
-A 4xx is **an answer**, not a failure — 401 and 404 mean the service is up and
+A 4xx is **an answer**, not a failure, 401 and 404 mean the service is up and
 replying, and only the server errors are its own fault.
 
 The gateway split is the useful one on a box that proxies: a 502 is the
@@ -2257,7 +2257,7 @@ one finding here whose evidence is seen downstream and whose cause is upstream.
 
 Every other TLS check here points outward, at something this device connects
 to. A box terminating HTTPS is the opposite case, and its own certificate is
-the one that takes the site down when it expires — and nothing was looking at
+the one that takes the site down when it expires, and nothing was looking at
 it. A proxy could be two days from an outage and the report read healthy.
 
 On every full run, for each TLS port this box is **already listening on** (at
@@ -2267,7 +2267,7 @@ never becomes a probe):
 | | |
 |---|---|
 | `own_tls_expired` | Browsers are refusing it now. Ranked above everything about the path: when this is wrong the path is irrelevant. |
-| `own_tls_expiring` | Within `CERT_EXPIRY_WARN_DAYS`. `LATENT` — real, dated, and not yet refusing anyone. |
+| `own_tls_expiring` | Within `CERT_EXPIRY_WARN_DAYS`. `LATENT`, real, dated, and not yet refusing anyone. |
 | `own_tls_untrusted` | Usually an incomplete chain. Works from any machine that already trusts the issuer, which is why it works for you and not for customers. |
 | `own_tls_handshake_failed` | TCP connects and the handshake doesn't. Every client is getting exactly this. |
 
@@ -2282,13 +2282,13 @@ Two details that decide whether this is useful or just noisy:
 - **It verifies against the name on the certificate**, read from the
   certificate itself, while connecting to this box. The public name often
   resolves to a load balancer in front of you, so dialling it would test the
-  wrong machine — and a chain that only completes because of *this* machine's
+  wrong machine, and a chain that only completes because of *this* machine's
   trust store is exactly the failure that reaches customers and not you.
 
 A certificate that doesn't verify never reaches Python's parsed dates, and a
 private CA is most of what a proxy serves internally. ASN.1 encodes times as
 printable ASCII, so `der_validity` takes them from the same string scan
-`der_strings` already does — no hand-written X.509 parsing, which this file
+`der_strings` already does, no hand-written X.509 parsing, which this file
 deliberately avoids.
 
 ### Resets, and why the count of them is not a finding
@@ -2296,7 +2296,7 @@ deliberately avoids.
 A proxy sends a lot of TCP resets, and most of them are housekeeping.
 [HAProxy closes backend connections with RST on purpose](https://gitlab.com/gitlab-com/gl-infra/production-engineering/-/issues/10589),
 via `SO_LINGER`, to conserve ports and memory. So `OutRsts` is recorded in the
-report and **never becomes a finding** — the same number is normal on one box
+report and **never becomes a finding**. The same number is normal on one box
 and alarming on another, and a tool whose job is deciding which fault matters
 has no business guessing.
 
@@ -2306,7 +2306,7 @@ separately:
 | | |
 |---|---|
 | `aborts_on_memory` | `TCPAbortOnMemory` moving. The box ran out of socket memory and killed established connections to cope. Unambiguous, and never normal. |
-| `reqq_full_drops` | `TCPReqQFullDrop` moving. SYNs dropped before reaching a queue. The client sees a connection that never opens and retries — indistinguishable from packet loss, and there is none. |
+| `reqq_full_drops` | `TCPReqQFullDrop` moving. SYNs dropped before reaching a queue. The client sees a connection that never opens and retries, indistinguishable from packet loss, and there is none. |
 | `aborts_on_timeout` | `TCPAbortOnTimeout` as a **share** of connections handled (`PassiveOpens` + `ActiveOpens`), above `ABORT_TIMEOUT_PCT`. A count alone means nothing: some of this is ordinary on any public service, because people close laptops. Needs at least 100 connections in the window before a percentage is allowed to exist at all. |
 
 ### Per-flow analysis at proxy scale
@@ -2314,7 +2314,7 @@ separately:
 `ss -tin` is about 430 bytes per connection. Command output is capped at
 `MAX_OUTPUT_BYTES` (64 KB) so that a report stays a size you can paste, which
 on a box holding tens of thousands of connections meant the per-flow analysis
-ran on an arbitrary first ~150 sockets — 0.3% of them — and "worst peer" was
+ran on an arbitrary first ~150 sockets, 0.3% of them, and "worst peer" was
 picked out of that sample.
 
 The socket table is never stored: it names every peer this box talks to and is
@@ -2322,21 +2322,21 @@ replaced by a digest before the report is written. So the cap that mattered was
 never the report's. `FLOW_READ_BYTES` (12 MB) is how much is *read* and
 `FLOW_MAX` (20,000) how many connections are analysed; 40,000 sockets parse in
 about 125 ms and analyse in about 20 ms. A sample that hits either limit still
-reports `tcp_flow_sample_partial`, exactly as before — the aim was to make the
+reports `tcp_flow_sample_partial`, exactly as before. The aim was to make the
 sample representative, not to stop admitting when it isn't.
 
 ## Duplicate IP and TCP retransmits (Wireshark findings, without a capture)
 
 Two of Wireshark's most useful signals are available without capturing any
-traffic — which matters on someone else's network, where capture is a consent
+traffic, which matters on someone else's network, where capture is a consent
 question, not a technical one:
 
-- **Duplicate IP** — Wireshark flags an address claimed by two MACs. The same
+- **Duplicate IP**: Wireshark flags an address claimed by two MACs. The same
   conflict is visible in the ARP/neighbour table this box already keeps. The
   reverse (one MAC, many IPs) is a router answering proxy ARP and is *not*
   reported. A duplicate address makes symptoms move around with no pattern,
   which is why it wastes so much time.
-- **TCP retransmits** — read from `/proc/net/snmp` on Linux (`netstat -s` on
+- **TCP retransmits**: read from `/proc/net/snmp` on Linux (`netstat -s` on
   BSD). This is loss measured on the box's **real traffic**, not probe traffic,
   so it catches drops that ICMP tests miss. Under `--soak` it's a live rate;
   otherwise a lifetime figure, and the report says which.
@@ -2345,7 +2345,7 @@ question, not a technical one:
 
 The counter above gives one number for the whole box. It can tell you traffic
 is being dropped; it cannot tell you whether that's one sick destination or all
-of them — and those have different owners. On Linux, `ss -tin` reports the
+of them, and those have different owners. On Linux, `ss -tin` reports the
 kernel's own per-connection statistics, so the split is available without
 capturing anything or reading any payload.
 
@@ -2353,7 +2353,7 @@ capturing anything or reading any payload.
 |---|---|---|
 | Every network lossy | Loss that follows every destination equally isn't out in the network | this device or its segment |
 | Some networks lossy, others clean | The link carries the clean traffic fine, so the drops are further out | the provider or upstream |
-| Only one destination measured | Nothing to compare against — stated as the weaker finding it is | that path, or that host |
+| Only one destination measured | Nothing to compare against, stated as the weaker finding it is | that path, or that host |
 
 It also reports what a loss figure can't: a connection blocked on the **far
 end's receive window** is waiting on the remote application, not the network,
@@ -2367,7 +2367,7 @@ Some details that decide whether the answer is trustworthy:
   every-destination call, so two addresses reached over one upstream path don't
   read as two independent faults.
 - Kernels before ~4.15 have no per-socket byte counters. The segment counts are
-  used instead, and the report says which basis it used — without that fallback
+  used instead, and the report says which basis it used: without that fallback
   a genuinely lossy box on an older kernel reads as perfectly clean.
 - Loopback peers are excluded (retransmits on `127.0.0.1` are memory pressure,
   never a path), as is the SSH session this tool is probably running over, which
@@ -2379,12 +2379,12 @@ Some details that decide whether the answer is trustworthy:
   rate are the same drops seen twice, so they can't corroborate each other into
   false confidence.
 - On a box with more connections than one report can carry, only a prefix is
-  read — and `ss` prints in kernel table order, so a prefix can easily be one
+  read, and `ss` prints in kernel table order, so a prefix can easily be one
   busy application's connections. "No destination is clean" is a claim about
   what *isn't* there, so it needs the whole sample and is withheld; the loss is
   still reported, with the owner left open rather than guessed. "This one is
   lossy, that one is clean" is a claim about what *is* there, and still holds.
-- The report stores a digest, never the socket table — that table names every
+- The report stores a digest, never the socket table: that table names every
   peer this box has spoken to and runs to tens of kilobytes.
 
 `ss` is Linux-only. Elsewhere the check reports that it can't run, which is not
@@ -2402,7 +2402,7 @@ NEIGHBOURS (33 known to this device, nothing was probed)
   192.168.1.50    printer.local                   00:e0:4c:b0:03:fd
 ```
 
-**It is not a scan.** Nothing is probed, pinged or connected to — every entry
+**It is not a scan.** Nothing is probed, pinged or connected to: every entry
 is a device that was already talking to this one. That distinction is the
 reason it can run on a network nobody gave you permission to sweep, and it
 costs nothing because the table was already collected for the duplicate-address
@@ -2414,7 +2414,7 @@ neighbours into 257 phantom ones the first time this ran.
 
 The trade is honest: this shows what this device *has talked to*, not what
 *exists* on the segment. A host that has never exchanged a frame with it won't
-appear. If you need real discovery, use a scanner built for it — that job wants
+appear. If you need real discovery, use a scanner built for it. That job wants
 a different tool, and sweeping someone else's network is a consent question
 rather than a technical one.
 
@@ -2424,8 +2424,8 @@ diagnosis for.
 
 ## Socket states
 
-What this device's own TCP sockets are doing right now, read from `ss`/`netstat`
-— the same signal Zeek derives from the wire, without a capture:
+What this device's own TCP sockets are doing right now, read from `ss`/`netstat`,
+the same signal Zeek derives from the wire, without a capture:
 
 ```
 SOCKETS (this device)
@@ -2434,11 +2434,11 @@ SOCKETS (this device)
 
 Two states carry a diagnosis:
 
-- **SYN_SENT piling up** — this device is trying and nothing is answering. That
+- **SYN_SENT piling up**: this device is trying and nothing is answering. That
   is traffic being filtered, not a slow network, and the finding names the
   address it's failing to reach. From the application's side a dropped SYN and
   a slow server look identical.
-- **CLOSE_WAIT piling up** — the far end hung up and the local application never
+- **CLOSE_WAIT piling up**: the far end hung up and the local application never
   closed its socket. That is an application bug, not a network fault, and it is
   the clearest "stop blaming the network" evidence available from here. It ends
   with the process running out of file descriptors.
@@ -2457,13 +2457,13 @@ PORT CHECKS
 
 Which surfaces four faults nothing else here can see:
 
-- **The port opens but TLS doesn't complete** — something is listening and it
+- **The port opens but TLS doesn't complete**: something is listening and it
   isn't the service you wanted. A port check alone calls this healthy.
-- **An expired certificate** — clients refuse outright while the network is
+- **An expired certificate**: clients refuse outright while the network is
   perfect. Reported critical, with days remaining.
-- **A certificate close to expiry** — cheaper to fix now than during the outage
+- **A certificate close to expiry**: cheaper to fix now than during the outage
   it becomes.
-- **Interception** — if the issuer is a known inspection product rather than a
+- **Interception**: if the issuer is a known inspection product rather than a
   public CA, traffic is being re-signed in the path.
   Anything that pins or verifies certificates fails while ping and port checks
   look perfect.
@@ -2472,14 +2472,14 @@ Verification failures aren't fatal to the check: the handshake is retried
 without verification purely to read the certificate, because a bad certificate
 is exactly what needs describing.
 
-**Banners.** Ports that aren't TLS get a short read after connecting — SSH and
+**Banners.** Ports that aren't TLS get a short read after connecting: SSH and
 SMTP announce themselves immediately. A quiet port costs 0.5s and nothing else.
 
 ## Listening ports
 
 What this device has bound, and on which interface rather than just loopback.
 It pairs with the port checks below: those ask whether something answers from
-outside, this shows whether anything is listening here at all — the difference
+outside, this shows whether anything is listening here at all: the difference
 between "the firewall is blocking it" and "the service isn't running".
 
 ## Port checking
@@ -2499,8 +2499,8 @@ watching the site's network.
 
 ## Catching intermittent faults: `--soak`
 
-A normal run is a snapshot. The faults that are hardest to place — a marginal
-cable, a hop dropping 3%, a link that flaps — are invisible in one pass and
+A normal run is a snapshot. The faults that are hardest to place: a marginal
+cable, a hop dropping 3%, a link that flaps, are invisible in one pass and
 obvious over a minute. `--soak SECONDS` samples over a window instead:
 
 ```bash
@@ -2512,11 +2512,11 @@ python3 faultone.py --report --soak 120
   window runs alongside everything else rather than as a dedicated pause, so a
   normal run reports the error rate over its full duration (~7s) at no extra
   cost, and `--soak 60` takes about 60 seconds rather than 60 plus the run.
-- **Per-hop loss** comes from `mtr` when it's installed — hundreds of probes per
+- **Per-hop loss** comes from `mtr` when it's installed: hundreds of probes per
   hop instead of traceroute's three.
 - **Pings** run for longer, so partial loss shows up as a percentage.
 - **Throughput** is sampled every second through the window, not just at its
-  two ends — see below.
+  two ends, see below.
 
 Sixty to 120 seconds is the sweet spot. Longer rarely tells you more, and
 you're usually on a call.
@@ -2535,12 +2535,12 @@ That gives a mean, and a mean is precisely the wrong statistic for the fault
 
 The middle row is the point: 46% is indistinguishable from a healthy site
 running at 46%, and the line is completely full for a third of the window.
-Longer soaks made it worse, not better — more window to average the burst away.
+Longer soaks made it worse, not better, more window to average the burst away.
 
 The progress line already ticked once a second through the wait. It now reads
 the counters on the same tick, which costs about 2.4 ms per read: 0.29 s of
 work across a `--soak 120`. Each interface carries `peak_mbps` and the series
-itself, and `SERIES_MAX_SAMPLES` bounds what a long soak stores — at or below
+itself, and `SERIES_MAX_SAMPLES` bounds what a long soak stores: at or below
 900 seconds the interval is one second, above it the interval stretches, so an
 hour-long window costs the same to carry as a two-minute one and every sample
 stays a real measurement over a real interval rather than a decimated guess.
@@ -2552,11 +2552,11 @@ alongside everything else, and under `--soak` the probes stretch too, so about
 
 | | sampler gets | samples |
 |---|---|---|
-| `--soak 20` | nothing — the run outlasts the window | 0 |
+| `--soak 20` | nothing, the run outlasts the window | 0 |
 | `--soak 60` | 21 s | 21 |
 | `--soak 120` | 83 s | 82 |
 
-**So bursts need `--soak 60` at the least, and 120 is where it works properly** —
+**So bursts need `--soak 60` at the least, and 120 is where it works properly**: 
 which is the same window this section already recommends for everything else.
 Each interface records `series_seconds` next to the series so the sampled span
 is never confused with the nominal one, and the peak and the mean are both
@@ -2573,14 +2573,14 @@ Two details that are easy to get wrong and are tested:
 
 #### When a burst is a fault, and when it is just a line being used
 
-A line going to 100% in bursts is normal — that is a line doing its job. Firing
+A line going to 100% in bursts is normal. That is a line doing its job. Firing
 on the shape alone cries wolf on every site with a backup window. So
 `saturation_bursts` requires **harm in the same window**: packets this device
 dropped, or probes to the target that went unanswered. Neither is inferred from
 the throughput itself, which would make the test circular.
 
 That rule was picked by testing candidates against patterns that should fire
-and patterns that should not. It was the only one that got all seven right —
+and patterns that should not. It was the only one that got all seven right: 
 `peak >= 70%`, `p95 >= 70%` and a duty-cycle threshold each raised false alarms
 on an ordinary download or backup window.
 
@@ -2588,7 +2588,7 @@ on an ordinary download or backup window.
 
 A soak catches a fault while you're watching. The kernel has been watching
 since boot, and every carrier transition and adapter reset went into its log
-with a timestamp — the one thing a counter doesn't carry.
+with a timestamp, the one thing a counter doesn't carry.
 
 This matters because every lifetime counter in this tool is divided by uptime
 to get a rate, and that division destroys exactly the information you need. A
@@ -2617,15 +2617,15 @@ Two findings come from it:
 | | |
 |---|---|
 | `link_flapping_logged` | `KLOG_FLAPS_RECENT` (4) or more carrier transitions inside the last hour. Supersedes the lifetime rate for that interface, so one cable is one finding, not two at different urgencies. |
-| `nic_reset_logged` | The driver reset the adapter — "Detected Hardware Unit Hang", a transmit queue timeout, a firmware crash. Every connection drops each time and **no interface counter records that it happened**, so the log is the only place this is visible at all. |
+| `nic_reset_logged` | The driver reset the adapter, "Detected Hardware Unit Hang", a transmit queue timeout, a firmware crash. Every connection drops each time and **no interface counter records that it happened**, so the log is the only place this is visible at all. |
 
 How it reads the log, and why in that order:
 
 - `dmesg` first, with its default `[  1234.567]` seconds-since-boot stamps.
   Subtracting from `/proc/uptime` gives an exact age, and unlike `dmesg -T`
   it cannot be broken by a locale.
-- `journalctl -k -o short-unix` when dmesg is restricted — `dmesg_restrict=1`
-  is the default on Debian and Ubuntu — which gives epoch stamps.
+- `journalctl -k -o short-unix` when dmesg is restricted: `dmesg_restrict=1`
+  is the default on Debian and Ubuntu, which gives epoch stamps.
 - If neither can be read, the check reports itself **unavailable**, which
   lowers coverage. It never reports "nothing was logged": a check that reads a
   refusal as good news is worse than no check.
@@ -2642,7 +2642,7 @@ How it reads the log, and why in that order:
 
 **A comparison is only a comparison if both visits measured the same thing.**
 Since `--target auto` picks a backend off this box's own connections, the
-target can change between visits with nobody touching a flag — no clients on
+target can change between visits with nobody touching a flag: no clients on
 the first visit, clients on the second. Everything measured *to the target*
 (call quality, hop count, where the site edge falls) is therefore only compared
 when both runs went to the same place; the change of target is reported on its
@@ -2652,7 +2652,7 @@ Without that, comparing call quality to `8.8.8.8` against call quality to a
 database two racks away reported *"something changed since the last visit, and
 not for the better"* on a network where nothing had changed at all.
 
-A field tool can't keep history — but you keep the reports, so "what changed"
+A field tool can't keep history, but you keep the reports, so "what changed"
 is a diff of two JSON files with no service, no storage and no network:
 
 ```bash
@@ -2671,14 +2671,14 @@ CHANGES SINCE BASELINE
 ```
 
 That's a device that got re-patched into a different port, negotiated badly,
-and has been collecting errors since — a story no single reading tells. Changes
+and has been collecting errors since, a story no single reading tells. Changes
 that got *worse* also become a finding, so they can't be scrolled past, and the
 verdict will name the change rather than the symptom.
 
 Two things it deliberately won't do: report a difference when either side is
 missing the data (a `--quick` baseline, or a tool that wasn't installed last
 time, would otherwise manufacture regressions), and report negative error
-counts when the box has rebooted — a counter that went backwards is reported as
+counts when the box has rebooted, a counter that went backwards is reported as
 a reboot instead.
 
 ## Export / import workflow (no server, no open port)
@@ -2694,13 +2694,13 @@ sudo python3 faultone.py --export report.json --target 8.8.8.8 --check-ports 53,
 
 This runs the same collection and heuristics as the terminal report but opens
 no port at all. Copy `report.json` to your laptop (`scp`, USB, email, whatever),
-then open `static/index.html` **directly in a browser** — no server is needed
+then open `static/index.html` **directly in a browser**. No server is needed
 for this part. There are three ways in: **Load exported report**, dropping the
 file anywhere on the page, or pasting the JSON into the box in the sidebar.
 Everything is built client-side from the report; the page makes no network
 request of any kind.
 
-The page reads in the order the questions arrive — the verdict first, then which
+The page reads in the order the questions arrive: the verdict first, then which
 direction the fault is on and the path out beneath it, then the findings, then
 what was checked, then the captured output behind it. Each group is marked by a
 rail down its side.
@@ -2721,7 +2721,7 @@ box you're diagnosing.
 
 When file transfer off the box is blocked or awkward, use `-` to send the
 JSON to stdout, then select it in your terminal and paste it straight into the
-viewer — no file needed at either end. SSH sends characters and your own
+viewer, no file needed at either end. SSH sends characters and your own
 terminal draws them, so the selection never involves the box, which is why this
 works where `scp` does not:
 
@@ -2731,21 +2731,21 @@ sudo python3 faultone.py --export - --report         # JSON on stdout, findings 
 sudo python3 faultone.py --export - > report.json    # or redirect it
 ```
 
-With `--export -`, stdout carries nothing but the JSON — every human-readable
-line goes to stderr — so piping and redirecting stay clean.
+With `--export -`, stdout carries nothing but the JSON: every human-readable
+line goes to stderr, so piping and redirecting stay clean.
 
 Sent to stdout the JSON is written on **one line**; written to a named file it
 keeps its indentation. The two destinations are for different things. A file is
-read, diffed and handed to `--baseline`, so it stays legible. stdout is piped or
-pasted, and a compact report indented is 192 logical lines — about 198 rows on
-an 80-column terminal — which on a box you can't copy a file from means dragging
+read, diffed and handed to `--baseline`, so it stays legible. Stdout is piped or
+pasted, and a compact report indented is 192 logical lines: about 198 rows on
+an 80-column terminal, which on a box you can't copy a file from means dragging
 a selection across all of it and scrolling part-way through. On one line a
 terminal's triple-click takes the whole thing, because a soft wrap is not a line
 break to it. The viewer's paste box removes the wrapping again and ignores a
 shell prompt either side.
 
 `-` is always JSON. The format is taken from the filename extension and `-`
-hasn't got one, so there is no way to ask for the self-contained page here —
+hasn't got one, so there is no way to ask for the self-contained page here: 
 `--export - > report.html` gives you JSON in a file named `.html`. Name the file
 instead.
 
@@ -2754,44 +2754,44 @@ instead.
 None is required. The rule for every one of them is the same: use it when it's
 there, fall back silently when it isn't, and record in the report which tool
 produced the data. On a box with nothing but `python3` the tool still runs and
-says which checks it couldn't make — an absent tool lowers coverage, it never
+says which checks it couldn't make, an absent tool lowers coverage, it never
 becomes a fault.
 
 **Better data than the fallback gives**
 
-- **`scutil`** — macOS only, and part of the system rather than something
+- **`scutil`**: macOS only, and part of the system rather than something
   to install. It is how the system-wide proxy settings are read: an explicit
   HTTP or HTTPS proxy, a PAC file and its URL, or WPAD auto-discovery. On
   Linux the same question is answered only by the `http_proxy` family of
-  environment variables, which is the honest limit — a system-wide proxy
+  environment variables, which is the honest limit: a system-wide proxy
   there is a per-application convention rather than a setting anything can
   read. Absent either way, no proxy is reported, which is not the same as
   reporting there is none.
 
-- **`mtr`** — per-hop loss over many cycles, which a single traceroute can't
+- **`mtr`**: per-hop loss over many cycles, which a single traceroute can't
   give you. When present it replaces the traceroute entirely, and the report
   says `path via mtr`. Loss is read from the destination backwards: loss at an
   intermediate hop that clears by the final hop is that router rate-limiting
   ICMP, not a fault, and is reported as such rather than as a problem.
-- **`ethtool`** — what the two ends actually negotiated, plus whether
+- **`ethtool`**: what the two ends actually negotiated, plus whether
   auto-negotiation was on at all. That's the difference between "half duplex"
   and "half duplex because someone hard-coded one end", which sysfs can't tell
   you. Also the source of optical power readings on fibre.
-- **`ss`** — per-connection TCP statistics (`ss -tin`), which is what makes
+- **`ss`**: per-connection TCP statistics (`ss -tin`), which is what makes
   loss attributable to a destination instead of an average across the box.
   Always run with `-n`: reverse DNS on a broken network is exactly the hang you
   don't want in a diagnostic.
 
 **Things nothing else can tell you**
 
-- **`dmesg`** / **`journalctl`** — the kernel log, for link transitions and
+- **`dmesg`** / **`journalctl`**: the kernel log, for link transitions and
   adapter resets with the times attached. See
   [the kernel log](#the-window-you-didnt-have-to-wait-for-the-kernel-log-linux).
-- **`chronyc`** / **`ntpq`** / **`timedatectl`** — whether the clock is
+- **`chronyc`** / **`ntpq`** / **`timedatectl`**: whether the clock is
   synchronised and how far off it is, asked of whichever time daemon is
   actually running. A wrong clock is reported as a certificate fault by
   everything that isn't looking for it.
-- **`tcptraceroute`** — a path built from TCP probes, for the networks where
+- **`tcptraceroute`**: a path built from TCP probes, for the networks where
   ICMP and UDP traceroute are filtered and the normal path stops dead.
 
 **Plain fallbacks**
@@ -2804,7 +2804,7 @@ Whichever is present is used, and the report names it.
 
 **A check that can't run is never reported as a fault.** If `ifconfig`/`ip` or
 `netstat` isn't on the box, you get "couldn't read the interface list" as a
-warning — not "this device has no IP address". Missing `dig`/`nslookup` falls
+warning, not "this device has no IP address". Missing `dig`/`nslookup` falls
 back to the resolver queries this program makes itself, which need nothing
 installed. On a stripped appliance the difference matters: a false critical is
 worse than a gap.
@@ -2812,7 +2812,7 @@ worse than a gap.
 Linux is the best-supported target: error counters and speed/duplex come
 straight from sysfs. On macOS/BSD they're parsed from `ifconfig`/`netstat`; on
 Windows those two checks report "not available" rather than guessing. Everything
-else (interfaces, routes, ping, traceroute, DNS, ports) works on all three —
+else (interfaces, routes, ping, traceroute, DNS, ports) works on all three: 
 the tool picks the right command per OS (`ip`/`ifconfig` vs `ipconfig`,
 `traceroute` vs `tracert`). Commands run with `LC_ALL=C` so a localized system
 doesn't silently break output parsing.
@@ -2820,7 +2820,7 @@ doesn't silently break output parsing.
 A full `--report` is ~7s where the path answers the trace: the gateway ping,
 the target ping and the trace are independent, so they run together and the run
 costs about as long as the trace alone. Where it doesn't answer, the trace runs
-its full 60s timeout and the whole run costs that instead — that's what
+its full 60s timeout and the whole run costs that instead: that's what
 `--quick` is for. Being broken is not the only way to get there: a network in
 perfect health that filters traceroute reaches the same timeout, so this is a
 normal cost on a locked-down path rather than a symptom of anything.
@@ -2833,8 +2833,8 @@ more than the seconds saved.
 
 This app has **no login and no authentication**. It executes real
 system commands with whatever privileges you run it as. That's the
-design — the point is to run the common diagnostics on a device you
-already have root on — so treat it like a root shell, not a public
+design. The point is to run the common diagnostics on a device you
+already have root on, so treat it like a root shell, not a public
 web app:
 
 - **It never opens a port.** There is no server, no API and nothing listening,
@@ -2845,8 +2845,8 @@ web app:
   They make no network requests of any kind - no CDN, no fonts, no analytics -
   so they work with the internet unplugged, which matters for a tool you reach
   for when the network is what's broken.
-- User-supplied targets (for ping/traceroute/DNS) are validated — IPs via
-  `inet_pton`, hostnames against a strict regex with a length cap — and
+- User-supplied targets (for ping/traceroute/DNS) are validated: IPs via
+  `inet_pton`, hostnames against a strict regex with a length cap, and
   commands are run as argument lists, never through a shell. So `; rm -rf /`
   style injection isn't possible, and a target can't start with `-` and be
   swallowed as a command-line flag. That's defense in depth, not a replacement
@@ -2856,16 +2856,16 @@ web app:
   a timeout and an unbounded list would keep the box busy for a very long time.
   Truncation is reported in the findings, never silent.
 - Exported reports are written `0600`. They contain internal addressing, MAC
-  addresses, listening ports, resolver addresses and — where LLDP is available —
+  addresses, listening ports, resolver addresses and. Where LLDP is available: 
   switch names, management IPs and VLAN ids. That's a map of the site's network,
   so treat a `report.json` as sensitive when moving it around.
 - DNS queries are sent only to the resolvers this device is already configured
   with, and a reply is accepted only from the address it was sent to, with a
-  random query id — so a stray or off-path packet can't be read as a resolver's
+  random query id, so a stray or off-path packet can't be read as a resolver's
   answer.
 - `--soak` is capped at an hour, and the port-check list at 32, so neither a
   typo nor a query string can leave the box busy indefinitely.
-- Nothing in the UI calls out to the internet (no CDN fonts/scripts) —
+- Nothing in the UI calls out to the internet (no CDN fonts/scripts): 
   everything needed to run it is in these two files, which matters for
   a tool you might reach for when the network is the thing that's broken.
 
@@ -2886,7 +2886,7 @@ specifically rather than by a check failing in the field:
   unknown instead.
 - **Numbers that aren't finite.** `json.dumps` writes bare `NaN` and
   `Infinity`, which Python reads back happily and every browser's `JSON.parse`
-  refuses — one stray value would make a self-contained report fail to open
+  refuses. One stray value would make a self-contained report fail to open
   with nothing on screen to explain why. Non-finite floats become `null`.
 
 Non-ASCII text (hostnames, switch names) round-trips intact through JSON, the
@@ -2899,14 +2899,14 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-965 tests, no dependencies, no network, a few seconds — so they run
+965 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
 They're weighted toward what has actually broken here rather than spread evenly
 for coverage's sake. Every real bug in this project came from a **parser**
-meeting a format it hadn't seen — a macOS routing table, a traceroute
-continuation line — so the parsers get the most cases, each with real captured
+meeting a format it hadn't seen, a macOS routing table, a traceroute
+continuation line, so the parsers get the most cases, each with real captured
 output from Linux, macOS/BSD and Windows. The rest cover target validation
 (these strings end up in an argv list), the analysis logic, and the verdict's
 ordering rule.
@@ -2935,32 +2935,32 @@ The suite is checked by mutation: each bug that was fixed here gets
 reintroduced deliberately and the suite must fail. The five checked are the
 macOS gateway branch, traceroute continuation lines, the loose IPv6 regex,
 unknown counters reading as zero, and a symptom outranking its cause in the
-verdict. That found a real hole the first time — the counter test patched one
+verdict. That found a real hole the first time: the counter test patched one
 layer above the code the bug lived in, so it passed against the bug. Passing
 tests are not evidence until you've watched them fail.
 
 ## Files
 
 This section described a server with HTTP routing and a `COMMANDS_META` table
-until 2026-08-07. None of it had existed for a long time — server mode was
+until 2026-08-07. None of it had existed for a long time. Server mode was
 removed, and nothing pins prose the way the counts are pinned.
 
-- `faultone.py` — the whole tool. Collectors (`cmd_*`) gather, checks
+- `faultone.py`: the whole tool. Collectors (`cmd_*`) gather, checks
   (`_check_*`) turn what they gathered into findings, and `build_verdict`
   ranks those against `VERDICT_RULES` to pick one cause. To add a check:
   write a collector, write a `_check_*` that appends findings, give each new
   code a rule in `VERDICT_RULES`, a stage in `STAGE_RULES`, and a direction in
-  `FINDING_SIDE`. The suite will tell you which of those you forgot — every
+  `FINDING_SIDE`. The suite will tell you which of those you forgot: every
   one of them is guarded.
-- `test_faultone.py` — the suite. Standard library `unittest`, no network,
+- `test_faultone.py`: the suite. Standard library `unittest`, no network,
   a few seconds. Includes the guards that keep these documents honest: counts,
   thresholds, flags, optional tools, and whether the README still describes
   what the tool can do.
-- `static/index.html` — the standalone viewer, for reading an exported
+- `static/index.html`: the standalone viewer, for reading an exported
   `report.json` on your own machine. Generated from `VIEWER_TEMPLATE` by
   `--emit-viewer`; a test holds the two byte-identical, so edit the template
   and regenerate rather than editing the file.
-- `dev/` — five harnesses that are not part of the tool: `deep_e2e.py` runs
+- `dev/`: five harnesses that are not part of the tool: `deep_e2e.py` runs
   every finding through the whole pipeline, `equivalence.py` proves a change
   stayed inert by diffing every scenario against a git ref, `audit.py` checks
   the rules between findings under one fault and under six, `about.py` compares
@@ -2970,10 +2970,10 @@ removed, and nothing pins prose the way the counts are pinned.
 
 ## The repository description
 
-GitHub's About box lives outside the repository, so no test here can read it —
+GitHub's About box lives outside the repository, so no test here can read it: 
 which is how it sat quoting a finding count three releases out of date while
 every count inside these files stayed green. (Writing that stale number here as
-a numeral would trip the very guard this section exists to enable — which is a
+a numeral would trip the very guard this section exists to enable, which is a
 fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
@@ -2987,7 +2987,7 @@ only one of them is changed, the test suite fails on this file.
 
 That only ever caught half of it: the suite pins the block, and nothing could
 see the box itself. It sat quoting a count eighteen findings out of date while
-every number inside the repository stayed green — the exact drift the guards
+every number inside the repository stayed green: the exact drift the guards
 exist to prevent, in the one place they cannot look. `dev/about.py` closes it:
 
 ```bash
@@ -3002,7 +3002,7 @@ you tag.
 ## Licence
 
 MIT, in [LICENSE](LICENSE). Every file carries an `SPDX-License-Identifier: MIT`
-line, including the viewer — so a self-contained `report.html` handed to a
+line, including the viewer, so a self-contained `report.html` handed to a
 site states its own terms.
 
 Nothing third-party is bundled. The optional tools are executed, not linked, so
@@ -3011,7 +3011,7 @@ true only as long as nobody copies code *out* of them and into here.
 
 ## Extending it
 
-Additions that fit what this tool is for — separating "the device" from
+Additions that fit what this tool is for: separating "the device" from
 "the network it's plugged into" from "upstream":
 
 - DHCP lease details: whose DHCP answered, and does it match what the site

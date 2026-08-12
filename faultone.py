@@ -1292,10 +1292,17 @@ def _cert_name(entry):
     return None
 
 
-# TLS listeners of our own to test, at most. A box with more than a couple is
-# unusual, and each costs a handshake against a service that is probably
-# logging connections.
-OWN_TLS_MAX_PORTS = 3
+# Listeners of our own to test, at most, counted per address-and-port rather
+# than per port. Each costs a handshake or a request against a service that is
+# probably logging connections, so this stays small on purpose.
+#
+# Three was right while this counted ports, because a box with more than a
+# couple of TLS ports is unusual. Counting instances it was far too low: a front
+# end terminating several services on 443 has one entry per address, and the
+# old limit checked the first and said nothing about the rest. Twelve covers
+# that shape and still bounds the cost; whatever is past it is reported as not
+# checked rather than dropped.
+OWN_TLS_MAX_LISTENERS = 12
 
 
 def _cert_names(der):
@@ -1858,10 +1865,17 @@ def parse_socket_states(text):
     # own addresses they arrived on is a property of this box, and its addresses
     # are already in the report.
     served_on = {}
+    # And the same counted per endpoint rather than per address, which is what
+    # separates two instances sharing an address on different ports. Keys are
+    # strings so this survives a round trip through the JSON export.
+    served_endpoints = {}
     for host, port in local_ends:
         if host and port and port in listening:
             served_on[host] = served_on.get(host, 0) + 1
+            key = "%s:%s" % (host, port)
+            served_endpoints[key] = served_endpoints.get(key, 0) + 1
     return {"states": states, "pending": pending, "served_on": served_on,
+            "served_endpoints": served_endpoints,
             "listen_ports": sorted(listening), "bound": bound, "peers": peers,
             "outbound_destinations": len(dest_counts),
             "outbound_worst_dest": f"{worst[0][0]}:{worst[0][1]}" if worst else None,
@@ -5636,6 +5650,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # serves rather than owns. Both reframe how every measurement
                   # below should be read, and neither is a fault.
                   "service_address_present", "bound_to_source_address",
+                  # Serving clients while connected to nothing. Two ordinary
+                  # boxes look identical here, so it names both and judges
+                  # neither.
+                  "no_upstream_sessions",
                   "baseline_changes", "icmp_filtered", "tcp_flow_sample_partial",
                   # Both say "this looked like an outage and is not" - context
                   # that stops something else being misread, never a fault.
@@ -6088,6 +6106,9 @@ RAW_STAGE = {
     # Which addresses this box holds, which of them it serves rather than
     # owns, and which one this run left from.
     "own_addresses": "address", "service_addresses": "address",
+    # One row per thing this box serves. The ports stage, because that is
+    # where what this box offers is judged.
+    "service_instances": "ports",
     "source_address": "address", "source_address_held": "address",
     "neigh_table": "address",
     "ping_gateway": "gateway",
@@ -8056,32 +8077,205 @@ def _check_own_tls(raw, findings, quick=False):
     if quick:
         return
     sockets = raw.get("sockets") or {}
+    # Keyed on the address as well as the port. Keyed on the port alone, a box
+    # running several instances behind several addresses on 443 - which is the
+    # ordinary shape of a front end, not an exotic one - had exactly one of them
+    # checked and the rest silently skipped, so the certificate expiry this
+    # exists to catch was being read off one instance and assumed of the others.
     seen, listening = set(), []
     for addr, port in (sockets.get("bound") or []):
-        if port.isdigit() and int(port) in TLS_PORTS and port not in seen:
-            seen.add(port)
-            listening.append((_listener_address(addr), int(port)))
+        if not port.isdigit() or int(port) not in TLS_PORTS:
+            continue
+        key = (_listener_address(addr), int(port))
+        if key not in seen:
+            seen.add(key)
+            listening.append(key)
     if not listening:
         return
     results = []
-    for addr, port in listening[:OWN_TLS_MAX_PORTS]:
+    for addr, port in listening[:OWN_TLS_MAX_LISTENERS]:
         res = cmd_own_tls(port, address=addr)
         results.append(res)
         _own_tls_findings(res, port, findings)
+    skipped = len(listening) - len(results)
     if results:
+        lines = [
+            f"{r['host']}:{r['port']:<6} " + (
+                f"{r.get('tls_version', '?')}  {r.get('verified_as', '?')}  "
+                f"expires {r.get('expires', '?')}"
+                + (f"  ({r['days_left']}d)" if r.get("days_left") is not None else "")
+                if r.get("ok") else
+                f"not listening on {r['host']}" if r.get("unreachable_locally")
+                else f"handshake failed: {r.get('error', '?')}")
+            for r in results]
+        if skipped:
+            # Said out loud. A cap that trims quietly reads as full coverage,
+            # and "every certificate here is good for 200 days" is exactly the
+            # sentence that must not be built on a partial reading.
+            lines.append(f"({skipped} more listener(s) not checked, "
+                         f"limit {OWN_TLS_MAX_LISTENERS} per run)")
         raw["own_tls"] = {
             "ok": any(r.get("ok") for r in results), "cmd": "tls handshake (own listeners)",
-            "stderr": "", "code": 0, "listeners": results,
-            "stdout": "\n".join(
-                f"{r['port']:<6} " + (
-                    f"{r.get('tls_version', '?')}  {r.get('verified_as', '?')}  "
-                    f"expires {r.get('expires', '?')}"
-                    + (f"  ({r['days_left']}d)" if r.get("days_left") is not None else "")
-                    if r.get("ok") else
-                    f"not listening on {r['host']}" if r.get("unreachable_locally")
-                    else f"handshake failed: {r.get('error', '?')}")
-                for r in results),
+            "stderr": "", "code": 0, "listeners": results, "not_checked": skipped,
+            "stdout": "\n".join(lines),
         }
+
+
+def _check_upstream_sessions(raw, findings):
+    """A box serving clients while connected to nothing itself.
+
+    The shape this is for: something that only exists to relay, brokering
+    between the clients in front of it and whatever it forwards to, holding a
+    session to its control plane the whole time it is enrolled. Lose that and
+    the box keeps its address, keeps its listener, keeps accepting, and every
+    connection it accepts fails on the far side. Nothing else here notices,
+    because everything else here is measuring a box that is up.
+
+    Context and not a fault, deliberately, because one reading cannot separate
+    two ordinary states: a service that answers from itself is supposed to hold
+    no outbound sessions, and there is nothing in a socket table that says
+    which kind of box this is. The message names both and lets the person who
+    knows decide, which is the same bargain the service-address findings make.
+
+    Silent when connections are stuck in SYN_SENT. That is a box trying and
+    failing rather than a box not trying, syn_sent_backlog already says so, and
+    two findings for one condition is how a report stops being a verdict.
+    """
+    sockets = raw.get("sockets") or {}
+    if not sockets.get("ok"):
+        return
+    inbound = sockets.get("inbound") or 0
+    outbound = sockets.get("outbound") or 0
+    if outbound or inbound < SERVING_INBOUND_MIN:
+        return
+    if (sockets.get("states") or {}).get("SYN_SENT", 0) >= SYN_SENT_WARN:
+        return
+    findings.append({
+        "severity": "ok",
+        "code": "no_upstream_sessions",
+        "layer": 4,
+        "message": f"This box has {inbound} connection(s) from clients and holds no "
+                   f"outbound connection to anything. A service that answers from "
+                   f"itself is supposed to look like this. Anything that relays, "
+                   f"brokers or proxies is not: its upstream is gone, and every "
+                   f"connection those clients are making is failing on the far side "
+                   f"of this box while everything measured here stays healthy.",
+    })
+
+
+def _build_service_instances(raw):
+    """One row per thing this box is serving, from readings already taken.
+
+    A box running several instances behind several addresses has no single
+    "is the service up" answer, and every check here produced one anyway: a
+    certificate read off one listener, a connection count for the whole box. A
+    row per endpoint is what makes them separable.
+
+    Up and serving are kept apart on purpose, in two columns rather than one
+    light. An instance that has just started, or one behind a load balancer
+    that has not sent it anything yet, is up and not serving, and collapsing
+    those into a single red would make the table lie about the commonest
+    harmless state there is.
+
+    The name comes off the certificate the instance serves, which is the name
+    its clients actually use. There is deliberately no reverse-DNS fallback:
+    a PTR lookup is a network call, and this runs on boxes whose DNS is the
+    thing being diagnosed, where it would hang the run to add a name that is
+    stale as often as not. Without a certificate the address is the name.
+    """
+    sockets = raw.get("sockets") or {}
+    bound = sockets.get("bound") or []
+    if not bound:
+        return
+    endpoints = sockets.get("served_endpoints") or {}
+    served_on = sockets.get("served_on") or {}
+    # Kept apart rather than merged into one dict per endpoint. Both probes can
+    # run against the same listener and they answer different questions, so
+    # merging let the HTTP attempt's failure overwrite a successful handshake
+    # and report a healthy instance as unreachable.
+    def by_endpoint(key):
+        return {(r.get("host"), r.get("port")): r
+                for r in ((raw.get(key) or {}).get("listeners") or [])}
+    tls_probe, http_probe = by_endpoint("own_tls"), by_endpoint("own_service")
+
+    rows, seen = [], set()
+    for addr, port in bound:
+        if not str(port).isdigit():
+            continue
+        port = int(port)
+        clean = (addr or "").strip("[]")
+        wildcard = clean in _WILDCARD_BINDS
+        if (clean, port) in seen:
+            continue
+        seen.add((clean, port))
+
+        # A wildcard listener answers on every address the box holds, so its
+        # traffic is whatever arrived on that port anywhere, not on one address.
+        if wildcard:
+            traffic = sum(count for key, count in endpoints.items()
+                          if key.rsplit(":", 1)[-1] == str(port))
+            where = "*:%d" % port
+        else:
+            traffic = endpoints.get("%s:%d" % (clean, port),
+                                    served_on.get(clean, 0) if not endpoints else 0)
+            where = "%s:%d" % (clean, port)
+
+        key = (_listener_address(addr), port)
+        # Whichever actually reached the service wins, TLS first: a handshake
+        # says more than a request, and a plain HTTP instance simply has no
+        # handshake to give. Both failing keeps the TLS answer, which names the
+        # more specific reason.
+        res = tls_probe.get(key) or {}
+        alt = http_probe.get(key) or {}
+        if not res.get("ok") and (alt.get("ok") or not res):
+            res = alt or res
+        name = res.get("verified_as") or (res.get("names") or [None])[0]
+        rows.append({
+            "endpoint": where, "address": clean, "port": port,
+            "wildcard": wildcard,
+            "name": name or where,
+            "named_from": "certificate" if name else "the address",
+            "up": _instance_up(res),
+            "traffic": traffic,
+            "expires": res.get("expires"), "days_left": res.get("days_left"),
+            # Whether this is worth a line in the report. Every row stays in
+            # the data - what is listening is a fact and the export keeps it -
+            # but an ordinary workstation holds a dozen wildcard listeners it
+            # got from its own operating system, and a table of those saying
+            # "listening, nothing arriving" buries the two rows that matter.
+            #
+            # Something is notable when anything was actually learned about it:
+            # a probe reached it, traffic is arriving on it, or somebody bound
+            # it to one specific address, which is a decision rather than a
+            # default and is how a deliberate instance is configured.
+            "notable": bool(res) or bool(traffic) or not wildcard,
+        })
+    if rows:
+        raw["service_instances"] = sorted(rows, key=lambda r: (r["port"], r["address"]))
+
+
+def _instance_up(res):
+    """Up, as far as anything actually looked.
+
+    "listening" is not a weaker "ok", it is a different claim: the socket is
+    open and nothing opened a connection to it this run, because the port is
+    not one conventionally used for TLS or HTTP. Reporting that as ok would be
+    a pass nobody earned, and as a fault it would be a fault nobody has.
+    """
+    if not res:
+        return "listening"
+    if res.get("unreachable_locally"):
+        return "not on this address"
+    if not res.get("ok"):
+        return "failed"
+    days = res.get("days_left")
+    if days is not None and days < 0:
+        return "certificate expired"
+    if days is not None and days <= CERT_EXPIRY_WARN_DAYS:
+        return "expires in %dd" % days
+    if res.get("verified") is False:
+        return "certificate not verified"
+    return "ok"
 
 
 def _check_own_service(raw, findings, quick=False):
@@ -8094,15 +8288,21 @@ def _check_own_service(raw, findings, quick=False):
     if quick:
         return
     sockets = raw.get("sockets") or {}
+    # Address and port, for the reason the TLS check above carries the same
+    # comment: several instances behind several addresses on one port is the
+    # ordinary shape here, and keying on the port checked one of them.
     seen, targets = set(), []
     for addr, port in (sockets.get("bound") or []):
-        if port in SERVING_PORTS and port not in seen:
-            seen.add(port)
-            targets.append((_listener_address(addr), int(port)))
+        if port not in SERVING_PORTS:
+            continue
+        key = (_listener_address(addr), int(port))
+        if key not in seen:
+            seen.add(key)
+            targets.append(key)
     if not targets:
         return
     results = []
-    for addr, port in targets[:OWN_TLS_MAX_PORTS]:
+    for addr, port in targets[:OWN_TLS_MAX_LISTENERS]:
         res = cmd_own_http(port, address=addr, tls=int(port) in TLS_PORTS)
         results.append(res)
         _own_service_findings(res, port, findings)
@@ -10783,6 +10983,11 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _check_idle(raw, findings)
     _check_own_tls(raw, findings, quick)
     _check_own_service(raw, findings, quick)
+    # After both, so the rows carry whatever those two learned. It reads what
+    # is already there and probes nothing itself, which is why it runs even
+    # under --quick, where the up column simply says less.
+    _build_service_instances(raw)
+    _check_upstream_sessions(raw, findings)
 
     say("querying each configured DNS resolver")
     dns_failed = _check_dns(raw, findings, target, inet_loss, quick)
@@ -13060,6 +13265,30 @@ def render_text_report(report, color=False, width=None):
             rows.append(row)
         for r in rows:
             out.append("  " + "   ".join(r))
+        out.append("")
+
+    # Only when there is more than one. A box serving a single thing is already
+    # described by the findings above, and a one-row table is furniture.
+    instances = [i for i in ((report.get("raw") or {}).get("service_instances") or [])
+                 if i.get("notable")]
+    if len(instances) > 1:
+        out.append("SERVICE INSTANCES")
+        name_w = min(max(len(i["name"]) for i in instances), max(width - 46, 16))
+        out.append(f"  {'name':<{name_w}}  {'endpoint':<22}{'up':<20}serving")
+        for inst in instances:
+            name = inst["name"]
+            if len(name) > name_w:
+                name = name[:name_w - 1] + "…"
+            served = inst["traffic"]
+            # "serving" is a count and not a verdict. Nothing is arriving is a
+            # fact about right now; whether that is wrong depends on what this
+            # instance is for, which the findings above are where to say.
+            state = "ok" if inst["up"] == "ok" else (
+                "warning" if inst["up"] in ("listening", "not on this address")
+                else "critical")
+            out.append(f"  {name:<{name_w}}  {inst['endpoint']:<22}"
+                       + tint(f"{inst['up']:<20}", state)
+                       + (f"{served} connection(s)" if served else "nothing arriving"))
         out.append("")
 
     out.append("FINDINGS")

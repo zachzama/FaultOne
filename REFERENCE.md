@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 159
+difference is which one it puts at the top, and that is the whole product: 160
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1342,11 +1342,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **159** | Distinct conclusions it can reach and state in plain language. 134 are faults; 25 are context, like which switch port you're on. |
+| **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1018 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1040 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 159 findings are the useful figure** if you want to know what the tool can
+**The 160 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1671,6 +1671,79 @@ is not something a report pasted into a ticket should carry; which of its own
 addresses they arrived on is a property of the box, and its addresses are in
 the report already.
 
+## One row per thing this box serves
+
+A box running several instances behind several addresses has no single answer
+to "is the service up", and every check here produced one anyway: a certificate
+read off one listener, a connection count for the whole box. `SERVICE
+INSTANCES` is a row per endpoint, printed whenever there is more than one,
+since a box serving a single thing is already described by the findings and a
+one-row table is furniture.
+
+```
+SERVICE INSTANCES
+  name                  endpoint              up                  serving
+  broker-a.example.com  10.0.0.200:443        ok                  5 connection(s)
+  broker-b.example.com  10.0.0.201:443        expires in 9d       nothing arriving
+```
+
+A row earns its line by having had something learned about it: a probe reached
+it, traffic is arriving on it, or somebody bound it to one specific address,
+which is a decision rather than a default and is how a deliberate instance is
+configured. An ordinary machine holds a dozen wildcard listeners it got from
+its own operating system, and a table of those all reading "listening, nothing
+arriving" buries the two rows that matter. Every listener stays in the export
+either way, because what is listening is a fact.
+
+**Up and serving are two columns, not one light.** An instance that has just
+started, or one a load balancer has not sent anything to yet, is up and not
+serving. Collapsing those into a single red would make the table lie about the
+commonest harmless state there is. `serving` is a count, not a verdict:
+whether nothing arriving is wrong depends on what the instance is for, and the
+findings above are where that gets said.
+
+**The name comes off the certificate the instance serves**, which is the name
+its clients actually use. There is deliberately no reverse-DNS fallback. A PTR
+lookup is a network call, this runs on boxes whose DNS is the thing being
+diagnosed, and it would hang the run to add a name that is stale as often as
+not. Without a certificate the address is the name.
+
+`up` distinguishes `listening` from `ok`. They are different claims, not
+strengths of the same one: `listening` means the socket is open and nothing
+opened a connection to it this run, because the port is not one conventionally
+used for TLS or HTTP. Reporting that as `ok` would be a pass nobody earned.
+
+### Every instance is looked at
+
+The listener checks used to dedupe on the port alone. A box running several
+instances behind several addresses on 443, which is the ordinary shape of a
+front end rather than an exotic one, had exactly one of them checked: the
+certificate expiry those checks exist to catch was read off one instance and
+assumed of the rest. They key on address and port now.
+
+`OWN_TLS_MAX_LISTENERS` bounds the cost at twelve, because each one is a
+handshake or a request against a service that is probably logging connections.
+Anything past the limit is named as not checked rather than dropped, since a
+cap that trims quietly reads as full coverage.
+
+## Serving clients while connected to nothing
+
+The shape this is for: something that only exists to relay, brokering between
+the clients in front of it and whatever it forwards to, holding a session to
+that the whole time it is working. Lose it and the box keeps its address, its
+listener and its clients, every connection it accepts fails on the far side,
+and nothing else here notices, because everything else here is measuring a box
+that is up.
+
+`no_upstream_sessions` is context and never a fault, because one reading cannot
+separate two ordinary states. A service that answers from itself is supposed to
+hold no outbound sessions, and nothing in a socket table says which kind of box
+this is. The message names both readings and lets the person who knows decide.
+
+It stays silent while connections are stuck in `SYN_SENT`. That is a box trying
+and failing rather than a box not trying, `syn_sent_backlog` already says so,
+and two findings for one condition is how a report stops being a verdict.
+
 **What this does not do** is sweep a subnet. A range cannot be shown
 serviceable by probing it: a silent address in the range is the normal case,
 not a fault, so the sweep returns a list to interpret rather than a verdict,
@@ -1805,7 +1878,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1018 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1040 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -1892,7 +1965,7 @@ can say what the bar was rather than "the tool said so".
 | `FD_PRESSURE_PCT` | **80** | share of the system-wide file descriptor ceiling in use before a serving box is in danger of not accepting |
 | `ABORT_TIMEOUT_PCT` | **2.0** | share of connections handled that ended with the peer having stopped answering before it stops looking like people leaving and starts looking like a path |
 | `SYN_RECV_HIGH` | **256** | half-open connections before the backlog is worth reporting. A busy server always has some |
-| `OWN_TLS_MAX_PORTS` | **3** | TLS listeners of our own tested per run. Each costs a handshake against a service that is probably logging connections |
+| `OWN_TLS_MAX_LISTENERS` | **12** | Listeners of our own tested per run, counted per address and port rather than per port. Each costs a handshake or a request against a service that is probably logging connections. Anything past the limit is reported as not checked |
 | `BACKEND_MIN_CONNECTIONS` | **2** | connections to one peer before `--target auto` treats it as a dependency rather than a passing conversation |
 | `BACKEND_MIN_SHARE` | **0.15** | and the share of outbound connections it must hold. A count alone cannot tell a dependency from a busy destination |
 | `FORWARDER_DESTINATIONS` | **50** | distinct outbound destinations above which a box is forwarding traffic rather than consuming a few services |
@@ -2553,7 +2626,7 @@ the one that takes the site down when it expires, and nothing was looking at
 it. A proxy could be two days from an outage and the report read healthy.
 
 On every full run, for each TLS port this box is **already listening on** (at
-most `OWN_TLS_MAX_PORTS`, and only ports conventionally used for TLS, so this
+most `OWN_TLS_MAX_LISTENERS`, and only ports conventionally used for TLS, so this
 never becomes a probe):
 
 | | |
@@ -3191,7 +3264,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1018 tests, no dependencies, no network, a few seconds, so they run
+1040 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3270,7 +3343,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 159 findings with readable rules instead of
+> way out - and who owns it. Ranks 160 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

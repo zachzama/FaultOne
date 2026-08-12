@@ -8774,6 +8774,293 @@ class TestIsTheServiceAddressActuallyServing(unittest.TestCase):
         self.assertNotIn("198.51.100.7", json.dumps(parsed["served_on"]))
 
 
+class TestOneRowPerThingThisBoxServes(unittest.TestCase):
+    """A box running several instances behind several addresses had no single
+    answer to "is the service up", and every check here produced one anyway: a
+    certificate read off one listener, a connection count for the whole box."""
+
+    IFACES = {"ok": True, "cmd": "ip addr", "stdout":
+              "2: eth0: <BROADCAST,UP> mtu 1500\n"
+              "    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+              "    inet 10.0.0.200/32 scope global eth0\n"
+              "    inet 10.0.0.201/32 scope global eth0\n"}
+
+    def run_box(self, ss, certs=None, quick=True):
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        mod.cmd_interfaces = lambda: self.IFACES
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n" + ss)
+        if certs is not None:
+            mod.cmd_own_tls = lambda port, timeout=5, address="127.0.0.1": (
+                {"ok": True, "host": address, "port": port, "tls_version": "TLSv1.3",
+                 "names": [certs[address][0]], "verified_as": certs[address][0],
+                 "verified": True, "expires": "2027-03-12",
+                 "days_left": certs[address][1]}
+                if address in certs else
+                {"ok": False, "host": address, "port": port,
+                 "unreachable_locally": "refused"})
+        report = mod.diagnose(quick=quick, **scenario_kwargs(kw))
+        return report, (report["raw"].get("service_instances") or [])
+
+    def test_every_listener_gets_its_own_row(self):
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n")
+        self.assertEqual([r["endpoint"] for r in rows],
+                         ["10.0.0.5:22", "10.0.0.200:443", "10.0.0.201:443"])
+
+    def test_traffic_is_counted_per_endpoint_not_per_box(self):
+        """The whole point. One instance busy and one taking nothing is the
+        state worth seeing, and a single box-wide count hides it."""
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.8:51001\n")
+        traffic = {r["endpoint"]: r["traffic"] for r in rows}
+        self.assertEqual(traffic["10.0.0.200:443"], 2)
+        self.assertEqual(traffic["10.0.0.201:443"], 0)
+
+    def test_two_instances_on_one_address_are_told_apart_by_port(self):
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.200:8443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:8443 198.51.100.7:51000\n")
+        traffic = {r["endpoint"]: r["traffic"] for r in rows}
+        self.assertEqual(traffic["10.0.0.200:443"], 0)
+        self.assertEqual(traffic["10.0.0.200:8443"], 1)
+
+    def test_a_wildcard_listener_is_one_row_counting_every_address(self):
+        """It answers on all of them, so splitting it per address would invent
+        instances that do not exist."""
+        _r, rows = self.run_box(
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n"
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.8:51001\n")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["traffic"], 2)
+
+    def test_the_name_comes_off_the_certificate(self):
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n",
+            certs={"10.0.0.200": ("broker-a.example.com", 214),
+                   "10.0.0.201": ("broker-b.example.com", 9)}, quick=False)
+        names = {r["endpoint"]: (r["name"], r["named_from"]) for r in rows}
+        self.assertEqual(names["10.0.0.200:443"], ("broker-a.example.com", "certificate"))
+        self.assertEqual(names["10.0.0.201:443"], ("broker-b.example.com", "certificate"))
+
+    def test_without_a_certificate_the_address_is_the_name(self):
+        """No reverse DNS fallback on purpose: a PTR is a network call, and
+        this runs on boxes whose DNS is the thing being diagnosed."""
+        _r, rows = self.run_box("LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+                                "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n")
+        named = {r["endpoint"]: r["named_from"] for r in rows}
+        self.assertEqual(set(named.values()), {"the address"})
+        src = inspect.getsource(nd._build_service_instances)
+        self.assertNotIn("gethostbyaddr", src)
+
+    def test_a_certificate_near_expiry_shows_on_its_own_row(self):
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n",
+            certs={"10.0.0.200": ("a.example.com", 214),
+                   "10.0.0.201": ("b.example.com", 9)}, quick=False)
+        up = {r["endpoint"]: r["up"] for r in rows}
+        self.assertEqual(up["10.0.0.200:443"], "ok")
+        self.assertEqual(up["10.0.0.201:443"], "expires in 9d")
+
+    def test_a_failed_request_does_not_overwrite_a_good_handshake(self):
+        """Both probes can run against one listener and they answer different
+        questions. Merged into one result, the HTTP attempt's failure buried a
+        successful handshake and a healthy instance read as unreachable."""
+        _r, rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n",
+            certs={"10.0.0.200": ("a.example.com", 300),
+                   "10.0.0.201": ("b.example.com", 300)}, quick=False)
+        self.assertEqual({r["up"] for r in rows}, {"ok"},
+                         "a good handshake was overwritten by a failed request")
+
+    def test_a_workstations_own_system_listeners_are_not_a_table(self):
+        """An ordinary machine holds a dozen wildcard listeners it got from its
+        operating system. A table of those saying "listening, nothing arriving"
+        buries the rows that matter, so a row earns its line by having had
+        something learned about it."""
+        report, rows = self.run_box(
+            "LISTEN 0 128 0.0.0.0:88 0.0.0.0:*\n"
+            "LISTEN 0 128 0.0.0.0:445 0.0.0.0:*\n"
+            "LISTEN 0 128 0.0.0.0:3689 0.0.0.0:*\n"
+            "LISTEN 0 128 0.0.0.0:62324 0.0.0.0:*\n")
+        self.assertEqual(len(rows), 4, "the data should keep every listener")
+        self.assertEqual([r["notable"] for r in rows], [False] * 4)
+        self.assertNotIn("SERVICE INSTANCES",
+                         nd.render_text_report(report, color=False, width=88))
+
+    def test_a_listener_on_one_specific_address_is_always_notable(self):
+        """Binding to one address is a decision rather than a default, and is
+        how a deliberate instance is configured."""
+        _r, rows = self.run_box("LISTEN 0 128 10.0.0.200:9999 0.0.0.0:*\n"
+                                "LISTEN 0 128 10.0.0.201:9999 0.0.0.0:*\n")
+        self.assertEqual([r["notable"] for r in rows], [True, True])
+
+    def test_traffic_alone_makes_a_row_notable(self):
+        _r, rows = self.run_box(
+            "LISTEN 0 128 0.0.0.0:9999 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.5:9999 198.51.100.7:51000\n")
+        self.assertTrue(rows[0]["notable"])
+
+    def test_one_instance_prints_no_table(self):
+        """A box serving a single thing is already described by the findings,
+        and a one-row table is furniture."""
+        report, rows = self.run_box("LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n")
+        self.assertEqual(len(rows), 1)
+        text = nd.render_text_report(report, color=False, width=88)
+        self.assertNotIn("SERVICE INSTANCES", text)
+
+    def test_several_instances_print_a_table_naming_each(self):
+        report, _rows = self.run_box(
+            "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+            "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n"
+            "ESTAB 0 0 10.0.0.200:443 198.51.100.7:51000\n")
+        text = nd.render_text_report(report, color=False, width=88)
+        self.assertIn("SERVICE INSTANCES", text)
+        self.assertIn("10.0.0.200:443", text)
+        self.assertIn("10.0.0.201:443", text)
+        self.assertIn("nothing arriving", text)
+
+
+class TestEveryInstanceIsLookedAt(unittest.TestCase):
+    """The dedupe was on the port alone, so a box running several instances
+    behind several addresses on 443 - the ordinary shape of a front end - had
+    exactly one checked. The certificate expiry this exists to catch was read
+    off one instance and assumed of the rest."""
+
+    def probed(self, ss, quick=False):
+        seen = []
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n" + ss)
+        mod.cmd_own_tls = lambda port, timeout=5, address="127.0.0.1": (
+            seen.append((address, port)) or
+            {"ok": True, "host": address, "port": port, "tls_version": "TLSv1.3",
+             "names": ["x.example.com"], "verified_as": "x.example.com",
+             "verified": True, "days_left": 300})
+        mod.diagnose(quick=quick, **scenario_kwargs(kw))
+        return seen
+
+    def test_each_address_on_one_port_is_checked(self):
+        seen = self.probed("LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+                           "LISTEN 0 128 10.0.0.201:443 0.0.0.0:*\n"
+                           "LISTEN 0 128 10.0.0.202:443 0.0.0.0:*\n")
+        self.assertEqual(sorted(a for a, _p in seen),
+                         ["10.0.0.200", "10.0.0.201", "10.0.0.202"])
+
+    def test_the_request_check_separates_them_too(self):
+        """The same dedupe, in the other probe. Port 80 takes the HTTP path and
+        no handshake, so a fix applied only to the TLS side would leave every
+        plain instance but the first unasked."""
+        seen = []
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                     "LISTEN 0 128 10.0.0.200:80 0.0.0.0:*\n"
+                     "LISTEN 0 128 10.0.0.201:80 0.0.0.0:*\n")
+        mod.cmd_own_http = lambda port, timeout=5, address="127.0.0.1", tls=False: (
+            seen.append((address, port)) or
+            {"ok": True, "host": address, "port": port, "status": 200})
+        mod.diagnose(quick=False, **scenario_kwargs(kw))
+        self.assertEqual(sorted(a for a, _p in seen), ["10.0.0.200", "10.0.0.201"])
+
+    def test_the_same_listener_is_not_checked_twice(self):
+        seen = self.probed("LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n"
+                           "LISTEN 0 128 10.0.0.200:443 0.0.0.0:*\n")
+        self.assertEqual(len(seen), 1)
+
+    def test_what_the_limit_skipped_is_said_out_loud(self):
+        """A cap that trims quietly reads as full coverage, and "every
+        certificate here is good for 300 days" must not rest on a partial
+        reading."""
+        many = "".join("LISTEN 0 128 10.0.0.%d:443 0.0.0.0:*\n" % (10 + i)
+                       for i in range(nd.OWN_TLS_MAX_LISTENERS + 4))
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n" + many)
+        mod.cmd_own_tls = lambda port, timeout=5, address="127.0.0.1": {
+            "ok": True, "host": address, "port": port, "tls_version": "TLSv1.3",
+            "names": ["x.example.com"], "verified_as": "x.example.com",
+            "verified": True, "days_left": 300}
+        report = mod.diagnose(quick=False, **scenario_kwargs(kw))
+        own = report["raw"]["own_tls"]
+        self.assertEqual(own["not_checked"], 4)
+        self.assertIn("4 more listener(s) not checked", own["stdout"])
+
+
+class TestServingClientsWhileConnectedToNothing(unittest.TestCase):
+    """The shape: something that only exists to relay, holding a session to
+    whatever it forwards to the whole time it is working. Lose that and the box
+    keeps its address, its listener and its clients, every connection it accepts
+    fails on the far side, and nothing else here notices, because everything
+    else here is measuring a box that is up."""
+
+    def codes(self, ss):
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n" + ss)
+        return {f["code"] for f in mod.diagnose(quick=True,
+                                                **scenario_kwargs(kw))["findings"]}
+
+    def clients(self, n, port=443):
+        return "".join("ESTAB 0 0 10.0.0.5:%d 198.51.100.%d:51%02d\n" % (port, i, i)
+                       for i in range(1, n + 1))
+
+    def test_clients_connected_and_nothing_outbound_is_reported(self):
+        codes = self.codes("LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.clients(4))
+        self.assertIn("no_upstream_sessions", codes)
+
+    def test_an_outbound_session_settles_it(self):
+        codes = self.codes("LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.clients(4)
+                           + "ESTAB 0 0 10.0.0.5:51999 203.0.113.9:443\n")
+        self.assertNotIn("no_upstream_sessions", codes)
+
+    def test_a_box_with_no_clients_says_nothing(self):
+        """Nothing is depending on it, so there is nothing to be cut off from."""
+        codes = self.codes("LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.clients(1))
+        self.assertNotIn("no_upstream_sessions", codes)
+
+    def test_it_stays_quiet_while_the_box_is_trying(self):
+        """Connections stuck in SYN_SENT are a box trying and failing rather
+        than a box not trying. syn_sent_backlog already says so, and two
+        findings for one condition is how a report stops being a verdict."""
+        stuck = "".join("SYN-SENT 0 1 10.0.0.5:519%02d 203.0.113.9:443\n" % i
+                        for i in range(1, nd.SYN_SENT_WARN + 1))
+        codes = self.codes("LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+                           + self.clients(4) + stuck)
+        self.assertNotIn("no_upstream_sessions", codes)
+        self.assertIn("syn_sent_backlog", codes)
+
+    def test_it_is_context_and_never_a_fault(self):
+        """One reading cannot separate a relay that lost its upstream from a
+        service that answers from itself, and a warning that fires on every
+        self-contained server is noise."""
+        setup, kw = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                     "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" + self.clients(4))
+        report = mod.diagnose(quick=True, **scenario_kwargs(kw))
+        found = [f for f in report["findings"] if f["code"] == "no_upstream_sessions"]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["severity"], "ok")
+        self.assertIn("no_upstream_sessions", nd.VERDICT_EXEMPT)
+
+
 class TestLeavingFromAChosenAddress(unittest.TestCase):
     """--source. On a box with one address it changes nothing; on a proxy it is
     the difference between measuring the path a client of the service address
@@ -10986,6 +11273,18 @@ def _(nd):
     nd.cmd_interfaces = lambda: _VIP_IFACES
     nd.SOURCE_ADDRESS = "10.0.0.201"
     nd.source_address_is_held = lambda a: False
+
+
+@scenario("no_upstream_sessions")
+def _(nd):
+    # Clients connected and nothing outbound at all. A box that answers from
+    # itself looks exactly like this, which is why the finding is context.
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.7:51000\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.8:51001\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.9:51002\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.10:51003\n")
 
 
 @scenario("service_address_unserved")

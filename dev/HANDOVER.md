@@ -30,7 +30,28 @@ collector immediately. The failing assertion was never captured the first time,
 so the diagnosis above is inference from mechanism and rate, and a second round
 of inference would not be worth much.
 
-## Open: the badge row, which cannot be added until the repo is public
+## Open: four things that are waiting on the repo being public
+
+Not decisions - all four are settled and simply cannot be done yet, because
+each depends on something that only exists for a public repository. Kept
+together so going public is one pass rather than four rediscoveries.
+
+1. **Private vulnerability reporting.** `SECURITY.md` tells a reporter to use
+   Security -> Report a vulnerability. That feature is public-only, and the
+   API refuses to enable it while private, so the policy currently names a
+   route that does not exist yet. It is a toggle in Settings -> Security. No
+   address is published on purpose: an inbox in a public file is a decision
+   that cannot be taken back.
+2. **The badge row**, below.
+3. **macOS in the test matrix.** Left out because it costs ten times Linux
+   while minutes are metered, and it is the machine the suite already runs on
+   daily. Free once public, and then it is one `include:` line.
+4. **CodeQL.** Free for public repositories and worth having here rather than
+   as decoration: the tool shells out with a target and a port list that come
+   from the user, which is the shape its Python queries are for.
+
+### The badge row
+
 
 Three badges were designed for the top of the README and are not there,
 because every one of them 404s against a private repo. Both badge services

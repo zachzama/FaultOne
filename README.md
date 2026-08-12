@@ -3,11 +3,16 @@
 **154 findings it can reach. One line saying which one to fix first.**
 
 ```bash
-python3 faultone.py --report           # full check, ~7 seconds when the path answers
-python3 faultone.py --report --quick   # the essentials, ~2 seconds
+python3 faultone.py --report                    # what's wrong, in this terminal
+python3 faultone.py --report --quick            # the essentials, ~2s
+python3 faultone.py --export report.html        # the same run, as one page
+python3 faultone.py --report --target 10.0.0.20 # aim at a real dependency
 ```
 
-Python 3.7 or newer, and nothing else.
+Python 3.7 or newer, and nothing else. The full check is ~7s where the path
+answers a traceroute. `--target` matters more than it looks: everything
+measured off the box is measured to one host, so aim it at something you
+depend on rather than the public address it falls back to.
 
 You're SSH'd into a box and something is broken. **Is it this box, the way in,
 or the way out?** FaultOne runs the checks you'd run by hand, then does the part
@@ -46,7 +51,7 @@ One Python file. Nothing to install, nothing left behind, no port opened.
 
 ## Use it
 
-The two commands at the top are the whole tool. Everything here is optional.
+The four commands at the top are the whole tool. Everything here is optional.
 
 **What it aims at.** By default (`--target auto`) a box with clients connected
 is diagnosed against **the backend it depends on most** (read off its own open

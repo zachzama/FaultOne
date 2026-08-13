@@ -12543,6 +12543,13 @@ VIEWER_TEMPLATE = r"""<!doctype html>
            was entirely green. They are opposite directions and the heading
            was claiming one of them. -->
       <div id="inboundWrap"></div>
+      <!-- The way out as the connections measure it. The chain below this is a
+           traceroute to the target, which on a proxy is usually not where the
+           work goes: the backends sit on an internal segment the trace never
+           crosses, so a fault there had nowhere on the picture to appear and
+           every node under it stayed green. This is the reading the inbound
+           chain already gives for clients, pointed the other way. -->
+      <div id="outboundWrap"></div>
       <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
     <div class="path-note" id="pathNote" style="display:none;"></div>
       <div id="hopChainWrap"></div>

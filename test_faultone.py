@@ -5716,14 +5716,23 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                  re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S)]
         for name in dict.fromkeys(re.findall(r"^\s*function (\w+)\(", src, re.M)):
             parts.append(block(name))
-        # Enough of a document for the function to write into, and nothing more.
-        stub = ("const els={};function el(id){return els[id]||(els[id]="
-                "{id,style:{},textContent:'',innerHTML:''});}\n"
-                "global.document={getElementById:el,querySelectorAll:()=>[],"
-                "createElement:()=>el('x')};global.window={};\n")
+        # Only the elements the page actually declares, and null for anything
+        # else - which is what a browser does.
+        #
+        # The first version of this conjured an element for any id asked for,
+        # and the whole panel this class exists to test was shipped writing into
+        # an id that was never in the markup. `if(outboundWrap)` was false in
+        # every real browser, nothing rendered, and all five tests here passed
+        # against a stub that had invented the element for them.
+        ids = sorted(set(re.findall(r'id="([A-Za-z0-9_]+)"', src)))
+        stub = ("const REAL=%s;\n" % _json.dumps(ids)
+                + "const els={};function el(id){ if(!REAL.includes(id)) return null;\n"
+                  "  return els[id]||(els[id]={id,style:{},textContent:'',innerHTML:''});}\n"
+                  "global.document={getElementById:el,querySelectorAll:()=>[],"
+                  "createElement:()=>({style:{},innerHTML:''})};global.window={};\n")
         body = ("\nrenderHopChain(%s);\nprocess.stdout.write(JSON.stringify({"
-                "out:document.getElementById('outboundWrap').innerHTML,"
-                "note:document.getElementById('pathNote').textContent}));"
+                "out:(document.getElementById('outboundWrap')||{}).innerHTML,"
+                "note:(document.getElementById('pathNote')||{}).textContent}));"
                 % _json.dumps(report))
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                          encoding="utf-8") as fh:

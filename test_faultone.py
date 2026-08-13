@@ -5624,6 +5624,142 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
+    """The direction counters coloured an arrowhead for two releases without a
+    finding underneath them.
+
+    Nothing was wrong with the measurement - the drawing was right. But the
+    ranked verdict knew nothing about it, so a report could show a broken return
+    leg beside the words "No fault found - this device looks healthy from here",
+    which is the contradiction the diagram exists to prevent. It also meant the
+    corpus had no scenario for it, and none of the three harnesses ever ran it.
+    """
+
+    def report(self, backend, client=(10, 10, 10)):
+        mod = fresh()
+        sided_flows(mod,
+                    sided_sock("203.0.113.9", "443", sent=40_000_000,
+                               timers=client),
+                    sided_sock("10.0.0.90", "44120", sent=30_000_000,
+                               port="5432", timers=backend))
+        return mod, mod.diagnose(quick=False, **scenario_kwargs({}))
+
+    def codes(self, report):
+        return [f["code"] for f in report["findings"]]
+
+    def test_a_silent_backend_side_becomes_a_ranked_finding(self):
+        _, rep = self.report(backend=(10, 9000, 9000))
+        self.assertIn("tcp_return_stalled_backends", self.codes(rep))
+
+    def test_and_it_is_what_the_verdict_names(self):
+        """The point of the whole change. Without this the page drew a fault the
+        verdict would not admit to."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        self.assertEqual(rep["verdict"]["based_on"][0],
+                         "tcp_return_stalled_backends")
+
+    def test_the_drawing_and_the_verdict_now_say_the_same_thing(self):
+        """Read as a stranger would read it: the arrow splits, the box on that
+        side reads as failed, and the sentence at the top agrees with both."""
+        mod, rep = self.report(backend=(10, 9000, 9000))
+        text = mod.render_text_report(rep, color=False, width=100)
+        arrow = [l for l in text.splitlines() if "-->x" in l]
+        self.assertTrue(arrow, "the return leg is not drawn as broken")
+        self.assertNotIn("No fault found", text)
+        self.assertIn("nothing is coming back", rep["verdict"]["headline"])
+
+    def test_a_backend_that_is_only_slow_produces_no_finding(self):
+        """The false positive this rule was rebuilt around. Acknowledgements
+        still arriving means that path is carrying, and a network finding here
+        would send somebody to a carrier over a slow query."""
+        _, rep = self.report(backend=(10, 9000, 10))
+        self.assertNotIn("tcp_return_stalled_backends", self.codes(rep))
+        self.assertNotIn("tcp_return_stalled_clients", self.codes(rep))
+
+    def test_each_side_is_found_on_its_own(self):
+        _, rep = self.report(backend=(10, 10, 10), client=(10, 9000, 9000))
+        self.assertIn("tcp_return_stalled_clients", self.codes(rep))
+        self.assertNotIn("tcp_return_stalled_backends", self.codes(rep))
+
+    def test_each_faces_the_direction_it_describes(self):
+        """A finding about the way out drawn on the way in would put the fault
+        in the wrong box, which is the class of defect the side map exists for."""
+        self.assertEqual(nd.FINDING_SIDE["tcp_return_stalled_backends"], "upstream")
+        self.assertEqual(nd.FINDING_SIDE["tcp_return_stalled_clients"], "downstream")
+
+    def test_loss_on_the_same_side_outranks_it(self):
+        """The ranking decision, written down. A side losing traffic is the
+        nearer cause of a side gone quiet, and the percentage is the more useful
+        sentence - it says how much is getting through, where the stall only
+        says that something is not.
+        """
+        rules = [c for c, _o, _h, _w in nd.VERDICT_RULES]
+        self.assertLess(rules.index("tcp_flow_loss_backends"),
+                        rules.index("tcp_return_stalled_backends"))
+        self.assertLess(rules.index("tcp_flow_loss_clients"),
+                        rules.index("tcp_return_stalled_clients"))
+
+    def test_it_outranks_the_service_findings_below_it(self):
+        """The other half of the placement: a return path carrying nothing is a
+        network fault, and the findings under it are not."""
+        rules = [c for c, _o, _h, _w in nd.VERDICT_RULES]
+        self.assertLess(rules.index("tcp_return_stalled_backends"),
+                        rules.index("own_service_silent"))
+    def finding(self, report, code="tcp_return_stalled_backends"):
+        for f in report["findings"]:
+            if f["code"] == code:
+                return f
+        self.fail("%s did not fire" % code)
+
+    def test_a_side_carrying_nothing_back_is_critical_not_a_warning(self):
+        """A warning cannot headline over a live critical and does not move the
+        exit code, so downgrading this would quietly return it to what it was
+        before it was a finding at all: drawn on the page, absent from the
+        answer a script reads.
+        """
+        _, rep = self.report(backend=(10, 9000, 9000))
+        self.assertEqual(self.finding(rep)["severity"], "critical")
+        self.assertEqual(rep["verdict"]["severity"], "critical")
+
+    def test_it_sits_at_the_layer_it_was_measured_at(self):
+        """Transport, because that is where the counters it is built from live.
+        The layer decides which findings are treated as being about the same
+        thing, so a wrong one silently changes what explains what."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        self.assertEqual(self.finding(rep)["layer"], 4)
+
+    def test_one_held_connection_among_many_says_what_it_carries(self):
+        """The shape the share was added for: a box with one long-lived tunnel
+        out and a handful of short connections beside it. The stalled one is a
+        minority of the count and nearly all of the traffic, and "1 of 4" on its
+        own reads as the tool over-reacting to a single bad connection.
+        """
+        mod = fresh()
+        sided_flows(mod,
+                    sided_sock("203.0.113.9", "443", sent=40_000_000,
+                               timers=(10, 10, 10)),
+                    sided_sock("10.0.0.90", "44120", sent=40_000_000,
+                               port="5432", timers=(10, 9000, 9000)),
+                    sided_sock("10.0.0.91", "44121", sent=60_000,
+                               port="5432", timers=(10, 10, 10)),
+                    sided_sock("10.0.0.92", "44122", sent=60_000,
+                               port="5432", timers=(10, 10, 10)))
+        rep = mod.diagnose(quick=False, **scenario_kwargs({}))
+        msg = self.finding(rep)["message"]
+        self.assertIn("1 of 3", msg)
+        self.assertIn("% of that side's traffic", msg,
+                      "a minority of connections is being reported without the "
+                      "share that makes it worth reporting")
+
+    def test_a_clear_majority_does_not_need_the_share_sentence(self):
+        """The other side of it. Where the count already carries the argument,
+        the extra clause is noise."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        self.assertIn("1 of 1", self.finding(rep)["message"])
+        self.assertNotIn("of that side's traffic", self.finding(rep)["message"])
+
+
+
 class TestASlowFarEndIsNotABrokenReturnPath(unittest.TestCase):
     """The two situations `lastrcv` alone cannot tell apart.
 
@@ -13139,6 +13275,29 @@ def _(nd):
                 sided_sock("203.0.113.10", "443", sent=38_000_000, retrans=1800),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000,
                            retrans=2_400_000, port="5432"))
+
+@scenario("tcp_return_stalled_backends")
+def _(nd):
+    # A proxy still sending to its database and hearing nothing at all back -
+    # no reply, and no acknowledgement either. The client side is deliberately
+    # healthy, so the only thing that can name the direction is the pair of
+    # counters on the backend connection.
+    sided_flows(nd,
+                sided_sock("203.0.113.9", "443", sent=40_000_000,
+                           timers=(10, 10, 10)),
+                sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
+                           timers=(10, 9000, 9000)))
+
+@scenario("tcp_return_stalled_clients")
+def _(nd):
+    # The same shape facing the other way: requests arrived and this box is
+    # answering them, and the answers are not being acknowledged. The way in
+    # works, the service works, and the way back out does not.
+    sided_flows(nd,
+                sided_sock("203.0.113.9", "443", sent=40_000_000,
+                           timers=(10, 9000, 9000)),
+                sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
+                           timers=(10, 10, 10)))
 
 @scenario("service_endpoint_idle")
 def _(nd):

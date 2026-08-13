@@ -249,6 +249,44 @@ has to be sending, recently, and enough to be owed an answer, before its
 silence means anything - `DIR_SENDING_MS`, `DIR_SILENT_MS`,
 `DIR_SILENCE_RATIO`, `DIR_MIN_BYTES`, all in the threshold table.
 
+**The second trap, found later.** `lastrcv` counts data, and an application
+with nothing to say sends none while its kernel goes on acknowledging
+everything that arrives. On `lastsnd` and `lastrcv` alone these two are the
+same reading:
+
+    a database taking nine seconds over a query    lastsnd:10 lastrcv:9000 lastack:10
+    a return path that has stopped carrying        lastsnd:10 lastrcv:9000 lastack:9000
+
+One of them is not a network fault at all, and the first drew a broken return
+leg with a note saying nothing was coming back - which sends somebody after a
+carrier over a slow query. `lastack` was already being parsed and then read by
+nothing. Unlike a reply, an acknowledgement is not the far end's to withhold,
+so it separates them: still arriving means the path back is carrying and the
+far end is holding the request. A kernel that does not report it now claims
+neither direction, because without it the two rows above are genuinely
+indistinguishable and naming one would be a coin toss drawn as a measurement.
+
+The acknowledged-but-unanswered case is counted per side as `unanswered` and
+said in words, deliberately without touching the arrow: an acknowledgement is
+proof that network is carrying, so reddening the return leg would point at a
+carrier for something sitting above it.
+
+**It was an arrowhead with no finding underneath it.** For two releases the
+counters coloured the boundary arrow and the ranked verdict knew nothing about
+them, so a report could draw a broken return leg beside "No fault found - this
+device looks healthy from here". Because the corpus is keyed one scenario per
+finding code, there was also no scenario, and none of the three harnesses ever
+ran the rule - `equivalence` reported "0 differ" on a change that rewrote it.
+Every test that existed was a negative guard that the arrow *does not* split.
+
+`tcp_return_stalled_backends` and `tcp_return_stalled_clients` close it. They
+rank **below** the two sided loss findings, because a side losing traffic is
+the nearer cause of a side gone quiet and the percentage is the more useful
+sentence, and **above** the service findings, because a return path carrying
+nothing is a network fault and those are not. Both are critical, which moves
+their stage to `fail` through the escalation in `build_stages` rather than
+through the fail set.
+
 What is still not measurable: traceroute loss cannot be attributed to a
 direction, because the trace is one-way by construction, and a direction with
 no traffic on it cannot be judged at all. Distinguishing "the acknowledgement

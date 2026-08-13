@@ -5634,6 +5634,29 @@ VERDICT_RULES = [
      "Everything this box depends on is clean, so the service itself is healthy. "
      "The loss is between here and your users - the edge, the load balancer in "
      "front, or the internet path to them."),
+    # Below the loss findings above, deliberately. A side losing traffic is the
+    # nearer cause of a side gone quiet, and where both fire the percentage is
+    # the more useful sentence - it says how much is getting through, where this
+    # only says that something is not. Above the service findings below, because
+    # a return path carrying nothing is a network fault and they are not.
+    #
+    # These are the only findings drawn from lastsnd, lastrcv and lastack, and
+    # they are what the split arrowhead has always been drawn from. It was drawn
+    # without a finding underneath it for long enough that a report could show a
+    # broken return leg over a verdict reading "no fault found".
+    ("tcp_return_stalled_backends", "what this box depends on, or the path back from it",
+     "This box is sending to its backends and nothing is coming back",
+     "The connections are open and this box is still sending on them. Nothing "
+     "has arrived back - no reply and no acknowledgement either, which is what "
+     "separates this from a backend that is merely slow to answer. Traffic is "
+     "leaving here and not returning: look at the segment out to the backend "
+     "named below, and at whether that host is up at all."),
+    ("tcp_return_stalled_clients", "the path back to the people using it",
+     "This box is answering clients and nothing is coming back",
+     "This box is sending responses and the clients are not acknowledging them. "
+     "The requests arrived, so the way in works and the service is answering - "
+     "it is the way back out to your users that has stopped carrying. Look at "
+     "the edge, the load balancer in front, or the path to them."),
     # Above the certificate findings: a service that answers nothing is more
     # broken than one whose certificate is wrong, and a client meets it first.
     ("own_service_silent", "the service on this box, not the network",
@@ -6184,6 +6207,7 @@ TRANSPORT_SYMPTOMS = {
     "retrans_spurious", "tcp_flow_loss_all_peers", "tcp_flow_loss_some_peers",
     "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear", "tcp_flow_loss_backends",
     "tcp_flow_loss_clients",
+    "tcp_return_stalled_backends", "tcp_return_stalled_clients",
     # Services timing out rather than answering wrongly. A resolver that is
     # slow, or a handshake that never completes, is what a degraded path looks
     # like from one layer up - unlike a resolver that answers with the wrong
@@ -6298,6 +6322,7 @@ FINDING_SIDE.update({
     # --- downstream: the way in ------------------------------------------
     # Clients cannot reach the service, or reach it and are turned away.
     "tcp_flow_loss_clients": "downstream",
+    "tcp_return_stalled_clients": "downstream",
     "service_address_unserved": "downstream",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
@@ -6328,6 +6353,7 @@ FINDING_SIDE.update({
 
     # --- upstream: the way out -------------------------------------------
     "tcp_flow_loss_backends": "upstream",
+    "tcp_return_stalled_backends": "upstream",
     "path_jitter_backends": "upstream",
     "queuing_delay_backends": "upstream",
     "queuing_delay": "upstream",
@@ -6431,7 +6457,8 @@ STAGE_RULES = [
     # about a direction this box does not have.
     ("clients", set(),
      {"service_address_unserved", "service_address_idle", "service_endpoint_idle",
-      "tcp_flow_loss_clients", "path_jitter_clients", "queuing_delay_clients",
+      "tcp_flow_loss_clients", "tcp_return_stalled_clients",
+      "path_jitter_clients", "queuing_delay_clients",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure"}),
     # Optics belong to the link stage for the same reason the error counters
@@ -6463,7 +6490,7 @@ STAGE_RULES = [
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
-      "tcp_flow_loss_backends",
+      "tcp_flow_loss_backends", "tcp_return_stalled_backends",
       "queuing_delay", "queuing_delay_backends",
       "path_jitter_backends",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
@@ -9317,6 +9344,50 @@ def _check_flows(raw, findings):
     worst = stats.get("worst_loss_pct")
     basis = "segment counts" if stats.get("basis") == "segments" else "byte counts"
     peers = ", ".join(stats.get("lossy_peers") or [])
+
+    # A side gone quiet, before the loss shapes below and separate from them.
+    # Emitted ahead of the returns further down rather than after, because those
+    # exit the moment a side is found to be losing traffic - and a side can be
+    # both losing traffic and hearing nothing back, which are two findings with
+    # two owners. Which of them headlines is the rule order's decision, not this
+    # function's.
+    #
+    # Written out per side rather than looped, so each code appears as a literal
+    # where the guard that every rule names a real finding can see it. A loop
+    # over (side, code) pairs reads better and is invisible to that check.
+    def _stalled_message(near, where):
+        quiet = near.get("silent_return") or 0
+        seen = near.get("connections") or 0
+        share = near.get("silent_share_pct") or 0
+        # Say which way it became true. A minority of connections carrying most
+        # of the side's traffic is the held-tunnel shape, and "1 of 40" without
+        # that sentence reads as the tool over-reacting to one bad connection.
+        weight = (f", and they carry {share}% of that side's traffic"
+                  if quiet * 2 < seen and share else "")
+        return (f"{quiet} of {seen} connection(s) to {where} have gone quiet in "
+                f"one direction{weight}: this box sent on them within the last "
+                f"second and nothing has come back for seconds - no data and no "
+                f"acknowledgement either. An acknowledgement is not the far end's "
+                f"to withhold, so this is the path back rather than a far end "
+                f"taking its time over a reply.")
+
+    by_side = stats.get("by_side") or {}
+    if (by_side.get("backend") or {}).get("return_stalled"):
+        findings.append({
+            "severity": "critical",
+            "layer": 4,
+            "code": "tcp_return_stalled_backends",
+            "message": _stalled_message(by_side["backend"],
+                                        "what this box depends on"),
+        })
+    if (by_side.get("client") or {}).get("return_stalled"):
+        findings.append({
+            "severity": "critical",
+            "layer": 4,
+            "code": "tcp_return_stalled_clients",
+            "message": _stalled_message(by_side["client"],
+                                        "the clients using it"),
+        })
 
     # On a box that accepts connections, which side the loss is on decides who
     # owns it, and that is a different question from how many destinations are

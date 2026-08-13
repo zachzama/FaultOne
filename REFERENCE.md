@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 162
+difference is which one it puts at the top, and that is the whole product: 164
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1358,11 +1358,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **162** | Distinct conclusions it can reach and state in plain language. 135 are faults; 27 are context, like which switch port you're on. |
-| **Ranked causes** | **135** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1164 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
+| **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1176 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 162 findings are the useful figure** if you want to know what the tool can
+**The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1989,7 +1989,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1164 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1176 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2709,6 +2709,54 @@ On a box with no listening ports every flow is outbound by definition, `side`
 stays `None`, and nothing about this changes. Inventing a side there would be
 a claim the data cannot support.
 
+
+### Which side of the proxy went quiet, and whether that is the network
+
+Loss is a percentage, so it needs traffic to measure. A side that has stopped
+carrying entirely produces no percentage at all, and for a proxy that is the
+worse case: requests going out and nothing coming back.
+
+`ss -ti` prints three timers per connection — `lastsnd`, `lastrcv` and
+`lastack`. This box sending within the last second while nothing has arrived for
+seconds is two counters disagreeing rather than anything inferred, which is why
+it is allowed to colour the two ends of the boundary arrow apart. No loss ratio
+ever is: one number cannot be told apart by direction.
+
+The trap is that `lastrcv` counts **data**, and an application with nothing to
+say sends none while its kernel goes on acknowledging everything that arrives.
+Read on `lastsnd` and `lastrcv` alone, these two are the same reading:
+
+```
+a database taking nine seconds over a query    lastsnd:10 lastrcv:9000 lastack:10
+a return path that has stopped carrying        lastsnd:10 lastrcv:9000 lastack:9000
+```
+
+One of them is not a network fault at all. `lastack` separates them, because
+unlike a reply an acknowledgement is not the far end's to withhold — TCP sends
+it whether or not the application above has anything to add. Still arriving
+means the path back is carrying and the far end is holding the request; stopped
+means nothing is coming back.
+
+| | |
+|---|---|
+| `tcp_return_stalled_backends` | Sending to the backends, nothing returning. Owner: *what this box depends on, or the path back from it*. |
+| `tcp_return_stalled_clients` | Answering clients, nothing acknowledged. Owner: *the path back to the people using it*. The way in works and the service is answering. |
+
+Both rank **below** the two loss findings above: a side losing traffic is the
+nearer cause of a side gone quiet, and the percentage is the more useful
+sentence — it says how much is getting through, where this only says that
+something is not. Both rank **above** the service findings, because a return
+path carrying nothing is a network fault and those are not.
+
+The acknowledged-but-unanswered case is counted per side and said in words, and
+deliberately does not colour the arrow. An acknowledgement is proof that
+network is carrying, so reddening the return leg would point at a carrier for
+something sitting above it.
+
+A kernel that does not report `lastack` gets neither verdict rather than a
+guess. Without it the two rows above are genuinely indistinguishable, and
+naming one of them would be a coin toss drawn as a measurement.
+
 ### Whether the service answers, not just whether it accepts
 
 Every other check here stops at the handshake: the port is open, the TLS
@@ -3427,7 +3475,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1164 tests, no dependencies, no network, a few seconds, so they run
+1176 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3506,7 +3554,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 162 findings with readable rules instead of
+> way out - and who owns it. Ranks 164 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

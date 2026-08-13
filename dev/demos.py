@@ -38,6 +38,11 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# Taken before argv is replaced. The tool reads sys.argv at import time to work
+# out how it was invoked, so this file has to blank it - which silently ate the
+# output directory this script documents, and wrote to the Desktop regardless of
+# what was asked for.
+OUT_DIR = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/Desktop")
 sys.argv = ["demos"]
 os.environ.pop("SSH_CONNECTION", None)      # no operator session to exclude here
 
@@ -108,7 +113,7 @@ DEMOS = [
 
 
 def main():
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/Desktop")
+    out_dir = OUT_DIR
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     wrong = []

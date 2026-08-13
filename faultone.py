@@ -9728,6 +9728,13 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                            f"declining to answer probes.",
             })
         elif lossy and final_loss is not None and final_loss < 5:
+            # Marked on the hops themselves, not only said in the message. The
+            # chain colours a hop from its own loss figure, so 40% at a router
+            # that is rate-limiting replies was drawn as a critical hop directly
+            # beneath a verdict reading "no fault found". The report had already
+            # decided this loss means nothing; the picture had not been told.
+            for lossy_hop in lossy:
+                lossy_hop["cosmetic"] = True
             findings.append({
                 "severity": "ok",
                 "layer": 3,
@@ -12071,6 +12078,11 @@ function hopSeverity(h, probes){
   // is critical does not arrive here and get demoted to a warning.
   if(h.blame) return h.blame.severity === 'critical' ? 'crit' : 'warn';
   if(h.timed_out) return 'crit';
+  // A hop the report has judged cosmetic. Loss at an intermediate router that
+  // clears by the destination is that router rate-limiting its own replies, and
+  // the finding for it is context rather than a fault - so the chain must not
+  // colour it as one. Without this the page said "no fault found" over a red hop.
+  if(h.cosmetic) return 'ok';
   // With mtr we have a real loss percentage; use it. Counting timings is a
   // traceroute-only heuristic (three probes per hop) and mtr reports one
   // representative timing, which would make every hop look lossy.

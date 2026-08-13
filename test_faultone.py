@@ -5302,6 +5302,43 @@ class TestZones(unittest.TestCase):
                 lit = [z for z in rep["sides"] if z["state"] in ("warn", "fail")]
                 self.assertEqual(bool(lit), worst != "ok")
 
+    def test_a_hop_the_report_calls_cosmetic_is_not_drawn_as_a_fault(self):
+        """Loss at an intermediate router that clears by the destination is that
+        router rate-limiting its own replies, and the tool says so in words: the
+        finding is context, the verdict is no-fault. The chain coloured the hop
+        from its own loss figure and knew nothing about that, so 40% at one hop
+        was drawn critical directly beneath a verdict reading no fault found.
+
+        The report deciding something is not a fault has to reach the picture."""
+        setup, kwargs = S["path_loss_cosmetic"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(report["verdict"]["severity"], "ok")
+        lossy = [h for h in report["hops"] if (h.get("loss_pct") or 0) >= 5]
+        self.assertTrue(lossy, "no hop reported loss, so this proves nothing")
+        for hop in lossy:
+            self.assertTrue(hop.get("cosmetic"),
+                            "hop %s reports %s%% loss and is not marked cosmetic, so the "
+                            "chain will colour it a fault under a clean verdict"
+                            % (hop.get("hop"), hop.get("loss_pct")))
+        # And the viewer has to honour the mark rather than only carry it.
+        self.assertIn("if(h.cosmetic) return 'ok';", nd.VIEWER_TEMPLATE)
+
+    def test_real_path_loss_is_still_drawn_as_a_fault(self):
+        """The other side of it. Loss that persists to the destination is real,
+        and marking everything cosmetic would be the same bug pointing the other
+        way - a quiet picture over a critical verdict."""
+        setup, kwargs = S["path_loss"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(report["verdict"]["severity"], "critical")
+        lossy = [h for h in report["hops"] if (h.get("loss_pct") or 0) >= 5]
+        self.assertTrue(lossy)
+        self.assertFalse([h for h in lossy if h.get("cosmetic")],
+                         "loss that reaches the destination was written off as cosmetic")
+
     def test_the_boxes_and_the_strip_never_disagree_about_the_way_in(self):
         """Two drawings of the same finding, and they were contradicting each
         other. The clients box is skipped when nothing is connected, on the

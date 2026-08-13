@@ -622,6 +622,12 @@
       <div id="whereWrap"></div>
       <!-- Inside the direction group on purpose: the path is the detail of
            one of those three zones, not a sixth thing on the page. -->
+      <!-- Traffic in sits above the path-out heading, not under it. It was
+           inside, so a box losing packets from its clients drew a red inbound
+           node beneath a title reading "the path out" and above a path that
+           was entirely green. They are opposite directions and the heading
+           was claiming one of them. -->
+      <div id="inboundWrap"></div>
       <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
       <div id="hopChainWrap"></div>
     </section>
@@ -855,9 +861,11 @@ function hopFlex(deltaMs, totalMs){
 function renderHopChain(data){
   const hops = data.hops || [];
   const pathTitle = document.getElementById('pathTitle');
+  const inboundWrap = document.getElementById('inboundWrap');
   if(hops.length === 0){
     pathTitle.style.display = 'none';
     document.getElementById('hopChainWrap').innerHTML = '';
+    if(inboundWrap) inboundWrap.innerHTML = '';
     return;
   }
   pathTitle.style.display = 'block';
@@ -976,9 +984,10 @@ function renderHopChain(data){
         : 'Connections arrive from many addresses, so this is the spread of real clients rather than one balancer in front.'}</div>
     </div>` : '';
 
-  document.getElementById('hopChainWrap').innerHTML = inboundHtml +
+  if(inboundWrap) inboundWrap.innerHTML = inboundHtml;
+  document.getElementById('hopChainWrap').innerHTML =
     `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
-      escapeHtml(cin ? 'path out — ' + summary : summary)}</div>` +
+      escapeHtml(summary)}</div>` +
     hopRibbon(nodes, TOT) + ribbonBaseline(data.baseline_path, TOT)
     + '<div class="hop-chain">' + nodes.map((n,i) => `
       ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'

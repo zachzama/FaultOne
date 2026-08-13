@@ -5487,8 +5487,18 @@ class TestBothDirections(unittest.TestCase):
                      .split("</script>", 1)[0]
         self.assertIn("client", json.loads(island)["raw"]["tcp_flows"]["by_side"])
         self.assertIn('class="inbound"', html)
-        self.assertIn("innerHTML = inboundHtml +", html)
         self.assertNotIn("</script>", island)
+        # Where it lands, not how it is concatenated. This asserted the literal
+        # `innerHTML = inboundHtml +`, which pinned the one construction that
+        # turned out to be the bug: traffic in was being written into the block
+        # under the heading "the path out, hop by hop", so a box losing packets
+        # from its clients drew a red inbound node beneath a title about the
+        # other direction and above a path that was entirely green.
+        self.assertIn('id="inboundWrap"', html)
+        dom = html.index('id="inboundWrap"'), html.index('id="pathTitle"')
+        self.assertLess(dom[0], dom[1],
+                        "traffic in is still inside the path-out section")
+        self.assertIn("inboundWrap.innerHTML = inboundHtml", html)
 
 
 class TestTargetSelection(unittest.TestCase):

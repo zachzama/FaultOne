@@ -12374,7 +12374,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
   /* The four legs. One column per side, two lanes in each. */
   .pcols{display:grid; grid-template-columns:1fr; gap:14px; margin:6px 0 22px;}
-  @media (min-width: 1100px){ .pcols{grid-template-columns:repeat(3, 1fr);} }
   /* The traced path's hops, inside its own column. A bar per hop for the share
      of the total it added - the one thing the full-width ribbon did that a
      number cannot, which is show proportion without being read. */
@@ -12398,6 +12397,12 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .base{padding:8px 14px; border-top:1px dashed var(--border);
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim); opacity:.8;}
   @media (min-width: 780px){ .pcols{grid-template-columns:1fr 1fr;} }
+  /* After the two-column rule, not before it. Both match above 1100px and they
+     have the same specificity, so source order decides - and with this first,
+     three columns silently became two and the third wrapped underneath the
+     first, which put the probe under "clients and this box" and made a fault on
+     the way out look like one on the way in. */
+  @media (min-width: 1100px){ .pcols{grid-template-columns:repeat(3, 1fr);} }
   .pcol{border:1px solid var(--border); border-radius:9px; background:var(--panel-2);
     overflow:hidden; min-width:0;}
   .pcol.fail{border-color:var(--crit);

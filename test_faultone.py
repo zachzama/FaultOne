@@ -6014,6 +6014,35 @@ class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
                                   "figure invented from a fault elsewhere")
 
 
+class TestTheColumnsSitWhereTheyBelong(unittest.TestCase):
+    """A column that wraps under the wrong neighbour says the wrong thing.
+
+    The three-column rule was written above the two-column one. Both match on a
+    wide window and they have the same specificity, so the narrower rule won:
+    three columns became two and the third wrapped underneath the first, which
+    put the probe to the internet under "clients and this box" and made a fault
+    on the way out look like one on the way in.
+    """
+
+    def rules(self):
+        import re
+        return [(int(m.group(1)), m.group(0)) for m in re.finditer(
+            r"@media \(min-width: (\d+)px\)\{ \.pcols\{[^}]*\}", nd.VIEWER_TEMPLATE)]
+
+    def test_the_wider_layout_is_declared_last(self):
+        widths = [w for w, _ in self.rules()]
+        self.assertEqual(widths, sorted(widths),
+                         "a narrower breakpoint is declared after a wider one, "
+                         "so it wins on a wide window and the columns wrap")
+
+    def test_every_column_count_has_a_rule(self):
+        """One, two and three - the panel carries three columns on a box that
+        relays and two on one that opens nothing."""
+        text = " ".join(r for _, r in self.rules())
+        self.assertIn("1fr 1fr", text)
+        self.assertIn("repeat(3, 1fr)", text)
+
+
 class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
     """The traced path, decided in the report rather than in the page.
 

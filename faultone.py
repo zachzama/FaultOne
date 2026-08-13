@@ -6715,6 +6715,58 @@ def build_stages(findings, raw=None, checked_ports=False, quick=False):
     return stages
 
 
+def path_scope(hops, target, raw=None, findings=None):
+    """What the hop chain actually covers, and what it does not.
+
+    The trace goes to one destination - the target, which defaults to a public
+    address. The connections a verdict is about often go somewhere else
+    entirely, and on a proxy they usually do: the fault is on the segment to a
+    database in another subnet, and the trace never crosses it.
+
+    Drawn without that distinction, "the path out, hop by hop" in green sits
+    directly beneath "the loss is on what this box talks to" in red, and a
+    reader is right to call that a contradiction. Both halves are true and they
+    are about different paths - which is a sentence the page has to say rather
+    than leave the reader to work out.
+
+    The hops themselves stay exactly as measured. Colouring a clean hop amber
+    because something else failed would be inventing a fault on the one part of
+    the page that reports what was actually observed, and a warning that means
+    "something is wrong somewhere else" is not a warning anyone can act on.
+    """
+    raw = raw or {}
+    if not hops:
+        return None
+    traced = [h.get("host") for h in hops if h.get("host")]
+
+    # Destinations a finding named, taken from the flow statistics rather than
+    # parsed back out of message text. Only peers this box has real connections
+    # to; the trace target is excluded because that is the path being drawn.
+    elsewhere = []
+    flows = raw.get("tcp_flows") or {}
+    for peer in (flows.get("lossy_peers") or []):
+        host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
+        if host and host not in traced and host != target and host not in elsewhere:
+            elsewhere.append(host)
+    by_side = flows.get("by_side") or {}
+    for name in ("backend", "client"):
+        near = by_side.get(name) or {}
+        if not near.get("return_stalled"):
+            continue
+        peer = near.get("worst_peer") or ""
+        host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
+        if host and host not in traced and host != target and host not in elsewhere:
+            elsewhere.append(host)
+
+    return {
+        "traced": target,
+        "hops_cover": traced,
+        # Destinations a finding is about that this trace does not reach. Empty
+        # is the ordinary case and means the drawing needs no qualification.
+        "fault_elsewhere": elsewhere,
+    }
+
+
 def build_sides(findings, raw=None):
     """Where the fault is, in the three places it can be.
 
@@ -11770,6 +11822,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         "quick": quick,
         "soak_seconds": soak or None,
         "path_source": path_source,
+        # What the hop chain covers, so a green path cannot be read as a
+        # statement about a segment it never crossed.
+        "path_scope": path_scope(hops, target, raw, findings),
         "call_quality": call_quality,
         "neighbours": neighbours,
         "inventory": inventory_data,
@@ -12040,6 +12095,17 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .stage.warn b{color:var(--warn);}
   .stage.fail b{color:var(--crit);}
   .stage.skip{opacity:0.5;}
+  /* A qualification on the drawing below it, not a fault of its own, so it is
+     marked in the warning colour's ink without the filled ground a finding
+     gets. It says the green underneath is about a different path - which is a
+     limit on what was measured, and stating those is the page's job. */
+  .path-note{
+    font-size:12px; line-height:1.5; margin:-8px 0 16px;
+    padding:8px 10px; border-radius:6px;
+    color:var(--text); border:1px solid var(--border);
+    border-left:3px solid var(--warn);
+    background:color-mix(in srgb, var(--warn) 6%, var(--panel));
+  }
   /* A stage that failed has to look failed from across the room. Colouring only
      the word inside left every chip the same shape, the same border and the same
      background, so a strip with one FAIL in it read as uniformly quiet - which is
@@ -12462,6 +12528,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
            was claiming one of them. -->
       <div id="inboundWrap"></div>
       <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
+    <div class="path-note" id="pathNote" style="display:none;"></div>
       <div id="hopChainWrap"></div>
     </section>
     <section class="grp" id="grpFound">
@@ -12706,7 +12773,34 @@ function renderHopChain(data){
     if(inboundWrap) inboundWrap.innerHTML = '';
     return;
   }
+  // Name the destination. "The path out" reads as *the* way out, so a clean
+  // trace to a public address sat under a red verdict about an internal
+  // segment and looked like the page contradicting itself.
+  const scope = data.path_scope || {};
+  pathTitle.textContent = scope.traced
+    ? `The path out to ${scope.traced}, hop by hop`
+    : 'The path out, hop by hop';
   pathTitle.style.display = 'block';
+
+  // And say plainly when the fault is on a path these hops do not cross.
+  // Without this the reader has to notice that the address in the verdict is
+  // not the address at the end of the chain, which is asking them to audit the
+  // drawing rather than read it.
+  const pathNote = document.getElementById('pathNote');
+  if(pathNote){
+    const away = scope.fault_elsewhere || [];
+    if(away.length){
+      pathNote.textContent =
+        `These hops are the path to ${scope.traced}, and they were measured `
+        + `clean. The connections this report is about go to ${away.join(', ')}, `
+        + `which this path does not cross - so nothing below says anything `
+        + `about that segment.`;
+      pathNote.style.display = 'block';
+    } else {
+      pathNote.textContent = '';
+      pathNote.style.display = 'none';
+    }
+  }
 
   // Path summary stats
   // The most timings any hop on this path reported - the sample size the
@@ -13494,6 +13588,15 @@ def _render_path(report, out, tint, width):
         out.append("  (skipped in --quick mode; drop --quick for the hop-by-hop path)")
     elif not hops:
         out.append("  (no hops parsed - traceroute may be unavailable or blocked)")
+    # Same qualification the page carries, from the same field. A clean path to
+    # the target under a verdict about a different destination is two true
+    # statements about two paths, and the reader is owed the second one.
+    away = (report.get("path_scope") or {}).get("fault_elsewhere") or []
+    if hops and away:
+        out.append(_wrap_note(
+            "these hops were measured clean, and the connections this report is "
+            "about go to %s - a path they do not cross, so nothing below says "
+            "anything about that segment" % ", ".join(away), width))
     demarc = report.get("demarc_hop")
     # The path as a bar, one row per hop, sized by what that hop added. The
     # HTML report has drawn this since the ribbon landed; the text report was

@@ -5663,6 +5663,88 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
+    """A clean trace under a red verdict is not a contradiction, but it reads as
+    one until the page says the two are about different paths.
+
+    On a proxy the fault is usually on the segment to a backend in another
+    subnet, and the trace goes to the target - a public address by default. Both
+    halves are true. Drawn without the distinction, "the path out, hop by hop"
+    in green sits directly beneath "the loss is on what this box talks to" in
+    red, and the reader is right to call that broken.
+    """
+
+    def report(self, code):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        return mod, mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def test_it_names_the_destination_the_hops_go_to(self):
+        _, rep = self.report("tcp_flow_loss_backends")
+        self.assertEqual(rep["path_scope"]["traced"], rep["target"])
+
+    def test_a_fault_the_trace_never_crossed_is_named(self):
+        """The whole point. The loss is on connections to a database in another
+        subnet; the trace goes to the public target and never touches it."""
+        _, rep = self.report("tcp_flow_loss_backends")
+        away = rep["path_scope"]["fault_elsewhere"]
+        self.assertTrue(away, "a fault off the traced path is not being named")
+        for host in away:
+            self.assertNotIn(host, rep["path_scope"]["hops_cover"])
+            self.assertNotEqual(host, rep["target"])
+
+    def test_a_return_stall_off_the_traced_path_is_named_too(self):
+        _, rep = self.report("tcp_return_stalled_backends")
+        self.assertTrue(rep["path_scope"]["fault_elsewhere"])
+
+    def test_a_healthy_box_qualifies_nothing(self):
+        """The note is a qualification, not decoration. Where there is no fault
+        away from the traced path it must not appear at all."""
+        mod, rep = self.report("all_clear")
+        self.assertEqual(rep["path_scope"]["fault_elsewhere"], [])
+        self.assertNotIn("do not cross",
+                         mod.render_text_report(rep, color=False, width=92))
+
+    def test_a_fault_on_the_traced_path_is_not_called_elsewhere(self):
+        """Loss out on the path to the target is exactly what the hop chain is
+        drawing, so qualifying it would be telling the reader to look away from
+        the right place."""
+        _, rep = self.report("path_loss")
+        self.assertEqual(rep["path_scope"]["fault_elsewhere"], [])
+
+    def test_the_terminal_report_carries_the_same_qualification(self):
+        """Both renderers, from the one field. A sentence the page says and the
+        terminal does not is a third version of the report."""
+        mod, rep = self.report("tcp_flow_loss_backends")
+        text = mod.render_text_report(rep, color=False, width=92)
+        self.assertIn("do not cross", text)
+        for host in rep["path_scope"]["fault_elsewhere"]:
+            self.assertIn(host, text)
+
+    def test_the_page_titles_the_chain_with_its_destination(self):
+        src = nd.VIEWER_TEMPLATE
+        self.assertIn("The path out to ${scope.traced}, hop by hop", src,
+                      "the hop chain is still titled without its destination")
+        self.assertIn("pathNote", src)
+
+    def test_no_hop_is_marked_because_something_else_failed(self):
+        """The decision this is built on, written down so it is not quietly
+        reversed. A clean hop stays clean: the hop chain is the part of the page
+        that reports what was actually observed, and amber meaning "something is
+        wrong somewhere else" is not a warning anyone can act on. The fix for a
+        green path under a red verdict is a sentence, not a colour.
+        """
+        _, rep = self.report("tcp_flow_loss_backends")
+        self.assertTrue(rep["path_scope"]["fault_elsewhere"])
+        for hop in rep["hops"]:
+            with self.subTest(hop=hop["hop"]):
+                self.assertFalse(hop.get("timed_out"))
+                self.assertIsNone(hop.get("loss_pct"),
+                                  "a hop measured clean is carrying a loss "
+                                  "figure invented from a fault elsewhere")
+
+
 class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
     """The direction counters coloured an arrowhead for two releases without a
     finding underneath them.

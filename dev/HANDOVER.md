@@ -81,12 +81,120 @@ above can go in under the first line of the README.
 Deliberately three, and deliberately these three. The repo this idea came from
 carries eleven, covering coverage, three OpenSSF checks, a build tool and a
 linter - none of which run here. A badge for a service this project does not
-use is the same stale number the suite spends 963 tests preventing, moved to
+use is the same stale number the suite spends 1071 tests preventing, moved to
 the first thing anyone reads.
 
 A test-count badge was considered and rejected: it would be a number in a URL,
 and the guard that pins every other count in the docs reads prose, not a
 shields path. It would be the one count in the repository free to drift.
+
+## Open: --source measures one address, not every address
+
+`--source ADDR` binds the probes to one of the addresses a box holds. A box
+holding several has one path per address, and there is no way to ask for all of
+them in one run.
+
+The shape it wants: iterate the global-scope addresses only, since link-local
+and loopback are noise; run the box-reading checks once rather than per address;
+report a matrix of source against reachable, loss, latency and port. The
+constraint that decides whether it is worth building is the traceroute. Measured
+on one machine, a quick run is about 7s and a full one about 64s, and nearly all
+of that difference is the trace. Taken per source, twelve addresses is thirteen
+minutes. Taken once from the primary, and again only for a source that actually
+failed, it is about two. The second shape is also the better diagnosis, because
+it traces the path that broke rather than twelve identical ones.
+
+## Open: the ranking decisions nobody has reviewed
+
+The verdict picks the first match walking `VERDICT_RULES` in order, so where two
+findings share a layer the answer is decided purely by which line was written
+first. That surface is large and most of it has never been looked at. This
+prints its size:
+
+```bash
+python3 -c '
+import os, sys, collections; sys.argv=["x"]
+os.environ.pop("SSH_CONNECTION", None)
+import faultone as nd, test_faultone as T
+layer = {}
+for code, (setup, kw) in T.S.items():
+    m = T.fresh(); setup(m)
+    try: r = m.diagnose(quick=True, **T.scenario_kwargs(kw))
+    except Exception: continue
+    for f in r["findings"]:
+        if f["code"] == code: layer[code] = f.get("layer")
+by = collections.defaultdict(list)
+for c, *_ in nd.VERDICT_RULES:
+    if c in layer: by[layer[c]].append(c)
+print(sum(len(v) * (len(v) - 1) // 2 for v in by.values()), "same-layer pairs")'
+```
+
+It answers 823, and a sample of eighty found about 70% of them can occur
+together, so roughly 576 reachable decisions. `deep_e2e.py` pins twenty-seven
+pairs against a declared winner, of which twenty-three are drawn from the
+scenario corpus and four are hand-injected; not all of them are same-layer, so
+the covered share of that 576 is smaller still.
+
+**The cheap yield is spent, and that is the useful part of this note.** The
+first ten pairs examined found a real inversion: two addressing faults ranked
+below the gateway loss they explain. The next twenty found nothing. Three of
+those twenty disagreed with the expectation and all three were the expectation
+being wrong rather than the tool, and eleven could not be composed at all,
+because two scenarios on one box often produce only one finding. Expect roughly
+one bug per fifty pairs at several minutes of thought each, and do not treat the
+remaining 576 as a backlog to burn down.
+
+## Settled: three formal ways to separate cause from symptom, and why none are built
+
+Time-order validation, topological distance and counterfactual invalidation are
+the standard answers to the question this tool exists to answer. All three were
+weighed against what this program actually is.
+
+**Time-order** exists in a coarse form and the finer version is prototyped.
+Eight findings end `_live` and six `_historical`, and the twenty codes in
+`LATENT` are barred from headlining over something actively failing, which is
+what keeps a table near its limit from outranking live retransmits.
+`dev/proto_sequence.py` is onset ordering proper and is deliberately not wired
+in. Two reasons, and the second is the harder one. A default run is a snapshot,
+and `--soak` samples only per-interface throughput, so the cascade the prototype
+is written around has a series for one of its three counters: wiring it in means
+building a new sampler, not connecting an existing one. And where onset ordering
+would help most, separating a latent condition from one that just started, the
+prototype refuses to answer on purpose.
+
+**Topological distance** needs a dependency graph, and this tool measures one
+box. What stands in for a graph is layer for depth, `_sides_can_agree` for
+direction, and `_same_scope` so that two interfaces are two problems. Blast
+radius in the sense meant by cluster tooling needs cluster telemetry.
+
+**Counterfactual invalidation** is absent, and the inversion found this cycle is
+what it would have caught for nothing. The substitute for a single-box snapshot
+is to do the counterfactual once, by hand, and encode it: the paired cases in
+`deep_e2e.py` are exactly that. `--baseline` is the one runtime mechanism that
+approximates it, being a counterfactual with the answer supplied rather than
+computed.
+
+Three public benchmarks for this were evaluated and none can be run against.
+They consume time-series telemetry from clusters and answer which service is at
+fault; this consumes commands on one box and answers whether the fault is here,
+inbound or outbound. An adapter would have to fabricate socket tables out of
+metrics, and would then be testing the fabrication.
+
+## Settled: three rules that are enforced rather than remembered
+
+Each of these was learned once, applied at one call site, and rediscovered
+somewhere else later. They are now tests that read the source, so a collector or
+a counter written next year is held to them without anyone remembering:
+
+- no collector chooses a command on existence alone, without also asking whether
+  it answered
+- every probe that sends off the box names its source when one was given
+- a box with only administrative sessions on it reaches the same findings as a
+  box with none
+
+The third is the one most easily undone, because the counters it protects look
+like ordinary counters. Being logged in used to invent a fault and suppress a
+true one at the same time.
 
 ## Settled: what was done to the README's design, and what was not
 

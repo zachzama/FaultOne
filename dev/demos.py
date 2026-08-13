@@ -34,6 +34,7 @@ collector that the port-exhaustion finding reads its numbers from, which turned
 that page into a box nobody was talking to.
 """
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +93,26 @@ def traffic_both_ways(mod):
     T.serving(mod, sockets(clients(5), backends(4)))
 
 
+def answering_into_silence(mod):
+    """Backends acknowledging nothing, clients healthy, both sides carrying.
+
+    The corpus scenario is two connections, which is enough to name the finding
+    and not enough to draw a proxy. This gives it a load-balanced pair of
+    databases that have both gone quiet and a client side that plainly has not,
+    so the page has to draw the split: traffic leaving here and nothing at all
+    coming back on the way out, while the way in is fine.
+    """
+    T.sided_flows(
+        mod,
+        *[T.sided_sock("198.51.100.%d" % i, "443", sent=40_000_000,
+                       timers=(10, 10, 10))
+          for i in range(1, 6)],
+        *[T.sided_sock("10.0.0.90", "51%03d" % (100 + i), sent=60_000_000,
+                       timers=(10, 9000, 9000))
+          for i in range(4)])
+    T.serving(mod, sockets(clients(5), backends(4)))
+
+
 def relaying_out_of_ports(mod):
     T.serving(mod, sockets(clients(7),
                            ["ESTAB 0 0 10.0.0.5:%d 10.0.0.90:5432" % (32768 + i)
@@ -103,12 +124,71 @@ def serving_but_not_on_the_vip(mod):
     T.serving(mod, sockets(clients(6)))
 
 
+# ---- addressing -----------------------------------------------------------
+# The corpus puts everything on one flat 10.0.0.0/24 because a fixture only has
+# to be consistent. A demo has to be *read*, and a reader who cannot tell which
+# address is the database from which is the default gateway cannot tell whether
+# the verdict above them is the right one.
+#
+# So the pages are renumbered onto the shape almost every reader has actually
+# deployed: one VPC, the box in an application subnet, its database in a
+# separate data subnet, the resolver on the reserved address at the base of the
+# range, and clients arriving from the internet.
+#
+# Done as a rewrite over whatever the scenario produced rather than by editing
+# the scenarios, because the scenarios are the test corpus - shared with 1,176
+# tests that have nothing to do with how a demo reads. This layer only renames
+# things; it cannot change which findings fire, and if it ever did the check
+# that each demo's verdict still names its own scenario would say so.
+RENUMBER = (
+    ("10.0.0.53", "10.0.0.2"),      # the resolver, on the address AWS reserves
+    ("10.0.0.90", "10.0.2.40"),     # the managed database, in the data subnet
+    ("10.0.0.5",  "10.0.1.20"),     # this box, in the application subnet
+    ("10.0.0.1",  "10.0.1.1"),      # the subnet router
+    ("10.0.0.0",  "10.0.1.0"),      # and the subnet itself
+)
+
+
+def renumber(value):
+    """Rewrite addresses anywhere in a collector's answer - stdout, parsed
+    fields, peer names, nested lists. Word-bounded, because a plain replace of
+    10.0.0.5 turns 10.0.0.53 into 10.0.1.203."""
+    if isinstance(value, str):
+        for old, new in RENUMBER:
+            value = re.sub(r"\b%s\b" % re.escape(old), new, value)
+        return value
+    if isinstance(value, dict):
+        return {renumber(k): renumber(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [renumber(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(renumber(v) for v in value)
+    return value
+
+
+def on_a_vpc(mod):
+    """Wrap every collector on this module so its answer comes back renumbered.
+
+    Wrapping rather than replacing keeps each scenario's own arrangement intact:
+    a collector that was stubbed to fail still fails, one that returns parsed
+    flow statistics still returns them, and only the addresses inside change.
+    """
+    for name in dir(mod):
+        if not name.startswith("cmd_"):
+            continue
+        fn = getattr(mod, name)
+        if not callable(fn):
+            continue
+        setattr(mod, name, (lambda f: lambda *a, **k: renumber(f(*a, **k)))(fn))
+
+
 DEMOS = [
     ("1-inbound-loss",    "tcp_flow_loss_clients",    traffic_both_ways),
     ("2-outbound-loss",   "tcp_flow_loss_backends",   None),
     ("3-port-exhaustion", "ephemeral_ports_low",      relaying_out_of_ports),
     ("4-egress-blocked",  "egress_blocked",           None),
     ("5-service-address", "service_address_unserved", serving_but_not_on_the_vip),
+    ("6-return-stalled",  "tcp_return_stalled_backends", answering_into_silence),
 ]
 
 
@@ -127,6 +207,7 @@ def main():
         setup(mod)
         if arrange:
             arrange(mod)
+        on_a_vpc(mod)
         report = mod.diagnose(quick=False, **T.scenario_kwargs(kwargs))
         named = (report["verdict"].get("based_on") or ["-"])[0]
         path = os.path.join(out_dir, "faultone-demo-%s.html" % slug)

@@ -234,6 +234,26 @@
   .stage.warn b{color:var(--warn);}
   .stage.fail b{color:var(--crit);}
   .stage.skip{opacity:0.5;}
+  /* A stage that failed has to look failed from across the room. Colouring only
+     the word inside left every chip the same shape, the same border and the same
+     background, so a strip with one FAIL in it read as uniformly quiet - which is
+     the opposite of what the strip is for, it being the line someone acts on.
+     Same treatment as the verdict panel: tinted edge, tinted ground, and the
+     state's colour carried on the chip rather than on six characters of it.
+     The flat declaration comes first so a browser without color-mix still gets
+     the edge, rather than falling back to no marking at all. */
+  .stage.fail{
+    color:var(--text); border-color:var(--crit);
+    border-color:color-mix(in srgb, var(--crit) 45%, var(--border));
+    border-left:3px solid var(--crit);
+    background:color-mix(in srgb, var(--crit) 10%, var(--panel));
+  }
+  .stage.warn{
+    color:var(--text); border-color:var(--warn);
+    border-color:color-mix(in srgb, var(--warn) 45%, var(--border));
+    border-left:3px solid var(--warn);
+    background:color-mix(in srgb, var(--warn) 10%, var(--panel));
+  }
   .changes{
     border:1px solid var(--border); border-radius:8px; background:var(--panel);
     padding:11px 14px; margin-bottom:16px; font-size:12.5px;

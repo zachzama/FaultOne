@@ -5356,6 +5356,45 @@ class TestZones(unittest.TestCase):
                 self.assertIn(".zarrow.%s{" % state, src,
                               "an arrow in state %r has no colour of its own" % state)
 
+    def test_a_failing_stage_is_marked_on_the_chip_not_just_the_word_inside(self):
+        """The strip is the line someone acts on, and for a long time the only
+        difference between a passing stage and a failed one was the colour of a
+        four-letter word inside an otherwise identical chip - same border, same
+        background, same dimmed text. A strip with one FAIL in it read as
+        uniformly quiet from any distance at all.
+
+        Asserted on the rule rather than on a rendered pixel: what matters is
+        that the state reaches the chip's own border and ground, which is how
+        every other fault marking on the page works.
+        """
+        src = nd.VIEWER_TEMPLATE
+        for state in ("fail", "warn"):
+            with self.subTest(state=state):
+                i = src.find(".stage.%s{" % state)
+                self.assertNotEqual(i, -1,
+                                    "a %r stage has no rule of its own" % state)
+                rule = src[i:src.index("}", i)]
+                self.assertIn("border", rule,
+                              "a %r stage is not marked on its own edge" % state)
+                self.assertIn("background", rule,
+                              "a %r stage is not marked on its own ground" % state)
+
+    def test_the_strip_keeps_a_marking_without_color_mix(self):
+        """The tint is a colour-mix, which an older browser drops on the floor.
+        Each rule states a flat colour first so what survives is a plain
+        coloured edge rather than no marking at all."""
+        src = nd.VIEWER_TEMPLATE
+        for state, var in (("fail", "--crit"), ("warn", "--warn")):
+            with self.subTest(state=state):
+                i = src.find(".stage.%s{" % state)
+                rule = src[i:src.index("}", i)]
+                flat = rule.index("border-color:var(%s)" % var)
+                mixed = rule.index("color-mix")
+                self.assertLess(flat, mixed,
+                                "the %r stage states its mix before its "
+                                "fallback, so a browser without color-mix is "
+                                "left with no marking" % state)
+
     def test_the_heads_split_only_where_two_counters_disagree(self):
         """This guard used to say the heads must never be coloured apart, and it
         was right for as long as the only evidence was a retransmit ratio, which

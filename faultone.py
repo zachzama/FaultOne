@@ -6769,10 +6769,19 @@ def path_scope(hops, target, raw=None, findings=None):
     # "hop 2". So it collapses to a line when quiet and draws in full when not.
     notable = any(h.get("timed_out") or h.get("blame")
                   or (h.get("loss_pct") or 0) >= 5 for h in hops)
+    # The one line a quiet chain is worth. Built here so the column that hosts
+    # it does not have to wait for the hop chain to be drawn - and once it is a
+    # line rather than a panel, there is nowhere else for it to live.
+    reached = [h for h in hops if not h.get("timed_out") and h.get("avg_ms")]
+    summary = "%d hop%s to %s" % (len(hops), "" if len(hops) == 1 else "s", target)
+    if reached:
+        summary += ", %.1fms" % reached[-1]["avg_ms"]
+    summary += ", nothing marked" if not notable else ""
     return {
         "traced": target,
         "hops_cover": traced,
         "notable": notable,
+        "summary": summary,
         # Destinations a finding is about that this trace does not reach. Empty
         # is the ordinary case and means the drawing needs no qualification.
         "fault_elsewhere": elsewhere,
@@ -12283,6 +12292,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
   .phops .ph{display:inline-block; margin-right:6px;}
   .phops .ph.gone{color:var(--crit);}
+  /* Observations about this side that are not a leg. */
+  .pnotes{padding:10px 14px; border-top:1px dashed var(--border);
+    font-size:11.5px; line-height:1.55; color:var(--text-dim);}
+  .pnotes div + div{margin-top:4px;}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -13173,6 +13186,17 @@ function renderHopChain(data){
   const notable = scope.notable !== undefined
     ? !!scope.notable
     : hops.some(h => h.timed_out || h.blame);
+  // A quiet chain has no section at all now: its one line moved to the foot of
+  // the column the probe leaves from. It keeps the section wherever there is no
+  // such column - a box with no backends has nowhere to put the line, and on
+  // one of those the probe to the target really is the way out.
+  const hosted = (data.path_legs || []).some(sd => sd.side === 'backend');
+  if(!notable && hosted){
+    pathTitle.style.display = 'none';
+    if(pathNote){ pathNote.textContent = ''; pathNote.style.display = 'none'; }
+    document.getElementById('hopChainWrap').innerHTML = '';
+    return;
+  }
   const summaryLine = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
       escapeHtml(summary)}</div>`;
   document.getElementById('hopChainWrap').innerHTML = !notable ? summaryLine :
@@ -13398,6 +13422,29 @@ function renderDiagnosis(data, opts){
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');
+    // Observations that belong to this side, at the foot of its column.
+    //
+    // The probe to the target used to be a titled section of its own with a bar
+    // and a row of nodes; on a quiet report that had already collapsed to a
+    // heading over one line, which is still a section. A line is a line, and it
+    // belongs under the side it leaves from rather than in a panel of its own.
+    // When the chain has something to say it keeps its section - a hop that is
+    // marked needs the hops around it.
+    const sc = data.path_scope || {};
+    const notes = [];
+    if(sc.summary && !sc.notable){
+      notes.push('probe to ' + escapeHtml(sc.traced) + ': '
+                 + escapeHtml(sc.summary.replace(/^\d+ hops? to \S+?, /, ''))
+                 + ' — a reachability check, not the traffic this box carries');
+    }
+    const away = sc.fault_elsewhere || [];
+    if(away.length && !sc.notable){
+      notes.push('that probe does not cross '
+                 + escapeHtml(away.join(', ')) + ', so it says nothing about it');
+    }
+    const noteHtml = (notes.length && side.side === 'backend')
+      ? `<div class="pnotes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : '';
+
     // The traced segment, when this side is the one that was traced. Only the
     // backend gets one, and only when a finding named it.
     const bp = data.backend_path;
@@ -13409,7 +13456,7 @@ function renderDiagnosis(data, opts){
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
-        ${lanes}${traced}</div>`;
+        ${lanes}${traced}${noteHtml}</div>`;
   }).join('') + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml

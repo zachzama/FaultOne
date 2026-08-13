@@ -5827,15 +5827,35 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
             self.assertNotIn("% loss", lane,
                              "a leg is carrying a loss figure, which claims a "
                              "direction a retransmit ratio does not have")
-    def test_a_quiet_traced_path_collapses_to_its_summary(self):
-        """The bar and the row of nodes are the largest thing on that panel and
-        the last one, and 150 of the 164 scenarios draw every hop on them clean.
-        Drawn at the size of an answer, a picture of a path nobody asked about
-        is what a reader finds when they look for the conclusion."""
+    def test_a_quiet_traced_path_gets_no_section_at_all(self):
+        """It collapsed to a heading over one line first, and a heading over one
+        line is still a section. The line moved to the foot of the column the
+        probe leaves from, which is where an observation about that side
+        belongs, and nothing is left behind."""
         drawn = self.render(self.report("tcp_return_stalled_backends"))
-        self.assertNotIn('class="hop-chain"', drawn["chain"],
-                         "a clean traced path is still drawing its full chain")
-        self.assertIn("hops", drawn["chain"], "the summary line went too")
+        self.assertEqual(drawn["chain"], "",
+                         "a quiet traced path is still drawing something")
+        self.assertFalse(drawn["note"])
+        self.assertIn("probe to 8.8.8.8", drawn["out"],
+                      "the line went nowhere rather than into the column")
+
+    def test_the_observation_lands_on_one_side_only(self):
+        """It is about the probe out of this box, so it belongs under the side
+        that probe leaves from. Printed on both columns it would read as a fact
+        about the clients too, which it is not - and would be the third time on
+        this page that a true sentence ended up under the wrong heading."""
+        drawn = self.render(self.report("tcp_flow_loss_backends"))
+        _, clients = self.column(drawn["out"], "client")
+        _, backends = self.column(drawn["out"], "backend")
+        self.assertIn("probe to", backends)
+        self.assertNotIn("probe to", clients)
+
+    def test_a_box_with_no_backends_keeps_the_section(self):
+        """There is no column to host the line on a box that opens nothing, and
+        on one of those the probe to the target really is the way out."""
+        drawn = self.render(self.report("service_address_unserved"))
+        self.assertIn("hop", drawn["chain"],
+                      "the only path this box has was dropped entirely")
 
     def test_a_path_with_a_marked_hop_still_draws_in_full(self):
         """Why it collapses rather than goes. A routing loop, a latency wall,
@@ -5855,13 +5875,13 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         self.assertTrue(loud["notable"])
 
     def test_a_clean_chain_says_what_it_is_not(self):
-        """150 of the 164 scenarios draw every hop on this chain clean. That
-        makes green the ordinary state rather than a result - and it is the
-        largest thing on the panel and the last, which is where a reader looks
-        for the conclusion. On a box that relays, it has to say that the traffic
-        it carries is not what this measured."""
+        """150 of the 164 scenarios draw every hop on this chain clean. It is
+        one line's worth of news, and it now sits at the foot of the column the
+        probe leaves from rather than under a heading of its own - but it still
+        has to say that the traffic this box carries is not what it measured."""
         drawn = self.render(self.report("queuing_delay_backends"))
-        self.assertIn("not the traffic this box carries", drawn["note"] or "")
+        self.assertIn("not the traffic this box carries", drawn["out"])
+        self.assertIn("reachability check", drawn["out"])
 
     def test_the_clean_line_is_only_for_a_box_that_relays(self):
         """On a box with no backends the probe to the target really is the way
@@ -5872,8 +5892,8 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
 
     def test_a_fault_off_the_path_still_says_where_it_is(self):
         drawn = self.render(self.report("tcp_flow_loss_backends"))
-        self.assertIn("does not cross", drawn["note"] or "")
-        self.assertIn("10.0.0.90", drawn["note"] or "")
+        self.assertIn("does not cross", drawn["out"])
+        self.assertIn("10.0.0.90", drawn["out"])
 
     def test_a_path_that_is_itself_the_fault_is_not_qualified(self):
         """The one in seven where the chain earns its place. Qualifying it would

@@ -6703,8 +6703,102 @@ class TestOwnTlsListener(unittest.TestCase):
                          ["api.internal.example"])
         self.assertEqual(nd._cert_names(b"zz *.example.org zz"), ["example.org"])
 
+    def test_names_come_from_the_fields_not_from_the_bytes_around_them(self):
+        """The scan is a good fallback and was a poor primary. Key material
+        reads as text often enough that a random `v.RD` once became the name a
+        box was verified against, and a seven-character `g-ev.ox` is
+        indistinguishable in shape from a real `x9-k.io`, so no pattern
+        separates them. The fields that hold names are read first now."""
+        saved = nd._cert_names_from_fields
+        try:
+            nd._cert_names_from_fields = lambda der: ["real.example.org"]
+            self.assertEqual(nd._cert_names(b"zz junk.example zz"),
+                             ["real.example.org"])
+        finally:
+            nd._cert_names_from_fields = saved
+
+    def test_the_scan_still_answers_when_the_fields_cannot_be_read(self):
+        """An old interpreter, a build without the private decoder, a temporary
+        directory that cannot be written, a certificate that will not decode:
+        every one of those has to fall through rather than lose the name."""
+        saved = nd._cert_names_from_fields
+        try:
+            nd._cert_names_from_fields = lambda der: None
+            self.assertEqual(nd._cert_names(b"zz api.internal.example zz"),
+                             ["api.internal.example"])
+        finally:
+            nd._cert_names_from_fields = saved
+
+    def test_reading_the_fields_leaves_no_file_behind(self):
+        """The decoder takes a path rather than bytes, so a certificate is
+        written out and removed again. A tool whose pitch is that it leaves
+        nothing behind has to be held to it, including on the failure path."""
+        import glob
+        import tempfile as _tempfile
+        before = set(glob.glob(os.path.join(_tempfile.gettempdir(), "*.pem")))
+        nd._cert_names_from_fields(b"not a certificate at all")
+        nd._cert_names_from_fields(b"")
+        after = set(glob.glob(os.path.join(_tempfile.gettempdir(), "*.pem")))
+        self.assertEqual(after - before, set())
+
+    def der_for(self, subject, san=None):
+        """A real certificate's DER, the way getpeercert hands it over."""
+        import shutil as _shutil
+        import subprocess
+        import tempfile as _tempfile
+        if not _shutil.which("openssl"):
+            self.skipTest("openssl not available to make a certificate")
+        base = _tempfile.mkdtemp()
+        self.addCleanup(_shutil.rmtree, base, True)
+        key, crt = os.path.join(base, "k.pem"), os.path.join(base, "c.pem")
+        cmd = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key,
+               "-out", crt, "-days", "30", "-nodes", "-subj", subject]
+        if san:
+            cmd += ["-addext", "subjectAltName=" + san]
+        subprocess.run(cmd, capture_output=True)
+        return subprocess.run(["openssl", "x509", "-in", crt, "-outform", "DER"],
+                              capture_output=True).stdout
+
+    def test_a_certificate_with_no_san_still_gives_up_its_common_name(self):
+        """Asserted against the parse directly, because the scan would find the
+        name in the bytes and hide the parse having dropped it. That masking is
+        good behaviour and a bad test."""
+        der = self.der_for("/CN=api.internal.example")
+        self.assertEqual(nd._cert_names_from_fields(der), ["api.internal.example"])
+
+    def test_a_concrete_name_is_preferred_over_a_wildcard_beside_it(self):
+        """A wildcard cannot be handed back as the name to verify against, and
+        the bare domain underneath one is not necessarily covered by it."""
+        der = self.der_for("/CN=*.example.org",
+                           "DNS:*.example.org,DNS:www.example.org")
+        self.assertEqual(nd._cert_names_from_fields(der), ["www.example.org"])
+
+    def test_a_wildcard_alone_is_reduced_rather_than_returned(self):
+        """Only when it is all the certificate offers, which is what the scan
+        did too - verifying against a literal asterisk fails for a reason that
+        has nothing to do with the certificate."""
+        der = self.der_for("/CN=*.example.org", "DNS:*.example.org")
+        self.assertEqual(nd._cert_names_from_fields(der), ["example.org"])
+
+    def test_every_san_is_kept_and_the_san_comes_before_the_subject(self):
+        der = self.der_for("/CN=api.internal.example",
+                           "DNS:one.example.org,DNS:two.example.org")
+        self.assertEqual(nd._cert_names_from_fields(der)[:2],
+                         ["one.example.org", "two.example.org"])
+
+    def test_a_certificate_that_will_not_decode_says_nothing(self):
+        """None, not an exception and not a guess, so the caller falls through
+        to the scan."""
+        self.assertIsNone(nd._cert_names_from_fields(b""))
+        self.assertIsNone(nd._cert_names_from_fields(b"\x00\x01\x02 not der"))
+
     def test_the_name_scan_is_stable_across_many_certificates(self):
-        """Ten fresh certificates, no junk names on any of them."""
+        """Ten fresh certificates, no junk names on any of them.
+
+        This read as a flaky test for weeks and was not one: it was catching a
+        real defect at a low rate, and the run that finally captured the
+        assertion named `g-ev.ox` - key material shaped exactly like a hostname.
+        Reading the certificate's own fields is what makes it deterministic."""
         import ssl as _ssl
         seen = set()
         for _ in range(10):

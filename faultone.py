@@ -66,6 +66,7 @@ import re
 import shutil
 import socket
 import ssl
+import tempfile
 import struct
 import subprocess
 import sys
@@ -1336,8 +1337,81 @@ def _cert_name(entry):
 OWN_TLS_MAX_LISTENERS = 12
 
 
+def _cert_names_from_fields(der):
+    """The names a certificate actually carries, or None if they cannot be read.
+
+    Read out of SubjectAltName and the common name, which are the fields that
+    hold names, rather than guessed from the bytes around them. Unverified on
+    purpose: this runs before anything has been trusted, which is the whole
+    reason the scan below existed.
+
+    Costs, both real and both why the scan is kept behind this. The decoder
+    takes a path rather than bytes, so a certificate is written to a temporary
+    file and removed again - a tool that leaves nothing behind should own that
+    plainly. And it is a private entry point in the ssl module: long-lived, not
+    contracted, and absent on a build that ships without it. Every one of those
+    routes returns None and falls through.
+    """
+    decode = getattr(getattr(ssl, "_ssl", None), "_test_decode_cert", None)
+    if decode is None or not der:
+        return None
+    try:
+        pem = ssl.DER_cert_to_PEM_cert(der)
+    except (ValueError, TypeError):
+        return None
+    path = None
+    try:
+        handle = tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False,
+                                             encoding="utf-8")
+        path = handle.name
+        with handle:
+            handle.write(pem)
+        info = decode(path)
+    except (OSError, ValueError, TypeError, ssl.SSLError):
+        return None
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    names = []
+    for kind, value in info.get("subjectAltName") or ():
+        if kind == "DNS" and value and value not in names:
+            names.append(value)
+    for rdn in info.get("subject") or ():
+        for key, value in rdn:
+            if key == "commonName" and value and value not in names:
+                names.append(value)
+    if not names:
+        return None
+    # A wildcard cannot be handed back as the name to verify against, and the
+    # bare domain beneath one is not necessarily covered by it - so a concrete
+    # entry is preferred where the certificate offers one, and the wildcard is
+    # only reduced when it is all there is. That is what the scan did too.
+    concrete = [n for n in names if not n.startswith("*.")]
+    return concrete or [n.lstrip("*.") for n in names]
+
+
 def _cert_names(der):
-    """Hostnames a certificate appears to be for, best first.
+    """Hostnames a certificate is for, best first.
+
+    Its own fields when they can be read, and the printable runs when they
+    cannot. The scan is a good fallback and a poor primary: key material reads
+    as text often enough that a random `v.RD` once became the name a box was
+    verified against, and a seven-character `g-ev.ox` is indistinguishable in
+    shape from a real `x9-k.io`, so no filter separates them. Tightening the
+    pattern has already been tried once and only lowered the rate.
+    """
+    parsed = _cert_names_from_fields(der)
+    if parsed:
+        return parsed
+    return _cert_names_scanned(der)
+
+
+def _cert_names_scanned(der):
+    """Hostnames a certificate appears to be for, guessed from its bytes.
 
     Read out of the printable runs rather than by parsing ASN.1 - the same
     deliberate choice der_strings documents. A name that is wrong simply fails

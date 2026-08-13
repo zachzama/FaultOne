@@ -3451,16 +3451,30 @@ def flow_direction(flow):
     anything inferred.
     """
     sent, recv = flow.get("last_send_ms"), flow.get("last_recv_ms")
-    if sent is None or recv is None:
+    ack = flow.get("last_ack_ms")
+    if sent is None or recv is None or ack is None:
         return None                      # an older ss, or a kernel not reporting
     # Written as what has to be true rather than as a run of rejections, so each
     # threshold is compared at or beyond the value the reference documents.
     owed_a_reply = (flow.get("bytes_sent") or 0) >= DIR_MIN_BYTES
     still_sending = sent <= DIR_SENDING_MS
     gone_quiet = recv >= DIR_SILENT_MS and recv >= sent * DIR_SILENCE_RATIO
-    if owed_a_reply and still_sending and gone_quiet:
+    if not (owed_a_reply and still_sending and gone_quiet):
+        return None
+    # lastrcv counts data, and a far end that is merely slow sends none while
+    # still acknowledging everything it receives. Read on data alone, a database
+    # taking nine seconds over a query looked exactly like a return path that had
+    # stopped carrying anything - opposite situations, one of them a network
+    # fault and one of them not, and the first reading sends somebody to chase a
+    # carrier over a slow query.
+    #
+    # The acknowledgement is what separates them, because unlike a reply it is
+    # not the far end's choice to send. Still arriving means the path back is
+    # carrying and the far end is holding our request; stopped means nothing is
+    # coming back at all.
+    if ack >= DIR_SILENT_MS and ack >= sent * DIR_SILENCE_RATIO:
         return "return"
-    return None
+    return "unanswered"
 
 
 def side_return_stalled(group):
@@ -3605,6 +3619,15 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # forty, and the reader is owed the denominator.
                 "silent_return": sum(1 for f in group
                                      if flow_direction(f) == "return"),
+                # The other half of that question. These are connections the far
+                # end is acknowledging and not answering: its network is
+                # carrying and it is holding the request, which is a slow
+                # service rather than a broken path. Kept apart from the count
+                # above rather than summed into one silence, because the two
+                # have different owners and only one of them is a network
+                # fault.
+                "unanswered": sum(1 for f in group
+                                  if flow_direction(f) == "unanswered"),
                 # The decision itself, made once here rather than twice in the
                 # two renderers. A threshold written out in both Python and the
                 # page's JavaScript is two copies of a rule and two chances for
@@ -13910,6 +13933,17 @@ def render_text_report(report, color=False, width=None):
                              f"acknowledged as already arrived")
             else:
                 line += tint("  <-->  ", sev[leg["state"]]) + cells[i]
+            # The far end is acknowledging and not answering. Deliberately does
+            # not touch the arrow: its network is carrying, which is what an
+            # acknowledgement proves, so colouring the return leg would point at
+            # a carrier for something sitting above it. Said in words instead,
+            # because the reader still needs to know their request went nowhere.
+            waiting = near.get("unanswered") or 0
+            if total and waiting and not stalled:
+                notes.append(f"{waiting} of {total} connections to "
+                             f"{zname[leg['side']]} are being acknowledged and "
+                             f"not answered - the path back is carrying, so this "
+                             f"is that service taking its time, not the network")
             if total and stalled and confirmed:
                 notes.append(f"the way out to {zname[leg['side']]} is confirmed "
                              f"delivered ({arrived} of {total}), so the fault is "

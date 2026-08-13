@@ -5548,9 +5548,17 @@ class TestWhichDirectionStopped(unittest.TestCase):
     """
 
     def flow(self, **kw):
-        """A connection that has just sent, is owed a reply, and heard none."""
+        """A connection that has just sent, is owed a reply, and heard nothing
+        at all - no reply and no acknowledgement either.
+
+        The acknowledgement tracks lastrcv rather than sitting at a literal, so
+        a case that moves the silence moves both counters together and goes on
+        meaning "nothing is coming back". A test wanting the other case - a far
+        end still acknowledging - passes last_ack_ms itself.
+        """
         f = {"last_send_ms": 10, "last_recv_ms": 9000, "bytes_sent": 5_000_000}
         f.update(kw)
+        f.setdefault("last_ack_ms", f["last_recv_ms"])
         return f
 
     def test_two_counters_disagreeing_names_the_return_path(self):
@@ -5614,6 +5622,134 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction(self.flow(last_recv_ms=None)))
         self.assertIsNone(nd.flow_direction(self.flow(last_send_ms=None)))
         self.assertIsNone(nd.flow_direction({}))
+
+
+class TestASlowFarEndIsNotABrokenReturnPath(unittest.TestCase):
+    """The two situations `lastrcv` alone cannot tell apart.
+
+    A database taking nine seconds over a query and a return path carrying
+    nothing both leave a connection that sent recently and has heard no data
+    since. Read on data alone they are the same reading, and one of them is not
+    a network fault at all - so the arrow split sent somebody to chase a carrier
+    over a slow query.
+
+    The acknowledgement separates them because, unlike a reply, it is not the
+    far end's choice to send: TCP acknowledges what arrives whether or not the
+    application above it has anything to say.
+    """
+
+    def flow(self, ack, **kw):
+        f = {"last_send_ms": 10, "last_recv_ms": 9000,
+             "bytes_sent": 5_000_000, "last_ack_ms": ack}
+        f.update(kw)
+        return f
+
+    def test_a_far_end_still_acknowledging_is_not_the_return_path(self):
+        """The false positive this rule exists to remove."""
+        self.assertEqual(nd.flow_direction(self.flow(ack=10)), "unanswered")
+
+    def test_nothing_coming_back_at_all_is_the_return_path(self):
+        self.assertEqual(nd.flow_direction(self.flow(ack=9000)), "return")
+
+    def test_the_two_readings_differ_only_by_the_acknowledgement(self):
+        """Stated as one assertion so the pair cannot drift apart: everything
+        else about these two connections is identical."""
+        stalled, slow = self.flow(ack=9000), self.flow(ack=10)
+        self.assertEqual({k: v for k, v in stalled.items() if k != "last_ack_ms"},
+                         {k: v for k, v in slow.items() if k != "last_ack_ms"})
+        self.assertNotEqual(nd.flow_direction(stalled), nd.flow_direction(slow))
+
+    def test_a_kernel_that_does_not_report_it_claims_neither(self):
+        """Refusing to guess. Without the discriminator the two cases above are
+        genuinely indistinguishable, and naming one of them would be a coin
+        toss drawn as a measurement."""
+        f = self.flow(ack=9000)
+        del f["last_ack_ms"]
+        self.assertIsNone(nd.flow_direction(f))
+
+    def test_the_acknowledgement_is_judged_at_its_documented_edge(self):
+        """Against the constants, not literals, so editing a threshold moves
+        this test rather than silently moving the rule underneath it."""
+        self.assertEqual(
+            nd.flow_direction(self.flow(ack=nd.DIR_SILENT_MS,
+                                        last_send_ms=1,
+                                        last_recv_ms=nd.DIR_SILENT_MS)),
+            "return")
+        self.assertEqual(
+            nd.flow_direction(self.flow(ack=nd.DIR_SILENT_MS - 1,
+                                        last_send_ms=1,
+                                        last_recv_ms=nd.DIR_SILENT_MS)),
+            "unanswered")
+
+    def test_it_is_judged_against_how_recently_the_box_sent(self):
+        """An acknowledgement long in absolute terms is not stale if the box
+        has been quiet for nearly as long - the same ratio the data silence is
+        held to, for the same reason."""
+        sent = nd.DIR_SENDING_MS
+        self.assertEqual(
+            nd.flow_direction(self.flow(ack=sent * nd.DIR_SILENCE_RATIO - 1,
+                                        last_send_ms=sent,
+                                        last_recv_ms=sent * nd.DIR_SILENCE_RATIO)),
+            "unanswered")
+
+    def test_a_slow_far_end_never_splits_the_arrow(self):
+        """What the whole change is for. `side_return_stalled` is the only
+        thing that colours the return arrow, and it counts stalls alone."""
+        slow = [self.flow(ack=10) for _ in range(9)]
+        self.assertEqual(nd.side_return_stalled(slow)[0], False)
+        self.assertEqual(nd.side_return_stalled(slow)[1], 0)
+
+    def render(self, timers):
+        """A proxy whose backends carry these timers, rendered the whole way to
+        the text a reader actually gets."""
+        mod = fresh()
+        sided_flows(mod,
+                    sided_sock("203.0.113.9", "443", sent=40_000_000),
+                    sided_sock("10.0.0.90", "44120", sent=30_000_000,
+                               port="5432", timers=timers))
+        report = mod.diagnose(quick=False, **scenario_kwargs({}))
+        return mod.render_text_report(report, color=False, width=100)
+
+    def test_a_backend_still_acknowledging_is_named_as_a_slow_service(self):
+        """Rendered end to end rather than asserted on the counter, because the
+        counter was already right - it was the sentence built from it that told
+        the reader to go and open a carrier ticket."""
+        text = self.render((10, 9000, 10))
+        self.assertIn("acknowledged and not answered", text)
+        self.assertIn("not the network", text)
+        self.assertNotIn("nothing coming back", text)
+
+    def test_a_backend_gone_silent_is_still_named_as_the_return_path(self):
+        """The other half. The fix must not have bought its accuracy by going
+        quiet on the case the rule was written for."""
+        text = self.render((10, 9000, 9000))
+        self.assertIn("nothing coming back", text)
+        self.assertNotIn("acknowledged and not answered", text)
+
+    def test_the_two_reports_do_not_read_alike(self):
+        """What the whole change is worth, stated as one assertion: the same
+        shape of silence, told apart in the output a reader is handed."""
+        self.assertNotEqual(self.render((10, 9000, 10)),
+                            self.render((10, 9000, 9000)))
+
+    def test_the_side_records_them_separately_from_stalls(self):
+        """Counted and carried in the report rather than folded into the
+        silence, so a reader can tell a slow service from a broken path without
+        re-deriving it."""
+        def sock(ack, peer):
+            """Through the real parser, so the field names this depends on are
+            the ones ss actually prints rather than a dict I chose."""
+            return (f"ESTAB  0      0        10.0.0.5:51234        {peer}:443\n"
+                    "\t cubic rto:220 rtt:12.4/3.1 mss:1460 pmtu:1500 cwnd:10 "
+                    "bytes_sent:5000000 bytes_acked:5000000 bytes_retrans:0 "
+                    f"lastsnd:10 lastrcv:9000 lastack:{ack} "
+                    "busy:5000ms rcv_space:14600 minrtt:11.9\n")
+        parsed = nd.parse_tcp_flows(
+            SS_HEADER + sock(10, "10.0.0.1") + sock(10, "10.0.0.1")
+            + sock(9000, "10.0.0.2"))
+        side = nd.analyze_tcp_flows(parsed, listen_ports={80})["by_side"]["backend"]
+        self.assertEqual(side["unanswered"], 2)
+        self.assertEqual(side["silent_return"], 1)
 
 
 class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
@@ -5853,12 +5989,16 @@ class TestOneSessionCanBeTheWholeSide(unittest.TestCase):
     """
 
     def quiet(self, sent):
-        """A connection that is sending and hearing nothing back."""
-        return {"last_send_ms": 10, "last_recv_ms": 9000, "bytes_sent": sent}
+        """A connection sending into silence, with nothing coming back at all -
+        the acknowledgement has stopped along with the data, which is what makes
+        it the return path rather than a far end that is merely slow."""
+        return {"last_send_ms": 10, "last_recv_ms": 9000,
+                "last_ack_ms": 9000, "bytes_sent": sent}
 
     def busy(self, sent):
         """A healthy one: it sent, and it heard back just as recently."""
-        return {"last_send_ms": 10, "last_recv_ms": 10, "bytes_sent": sent}
+        return {"last_send_ms": 10, "last_recv_ms": 10,
+                "last_ack_ms": 10, "bytes_sent": sent}
 
     def test_a_majority_of_connections_still_counts(self):
         """Deliberately carrying almost none of the traffic, so the count is
@@ -12725,7 +12865,7 @@ def R(server, ok=True, ms=12.0, answers=("192.0.2.4",), hijack=False):
 SS_HEADER = "State  Recv-Q Send-Q   Local Address:Port   Peer Address:Port  Process\n"
 
 def ss_flow(peer, sent=0, retrans=0, segs=0, retrans_segs=None,
-            rwnd=None, sndbuf=None, port="443", received=None):
+            rwnd=None, sndbuf=None, port="443", received=None, timers=None):
     """One socket the way `ss -tin` prints it: a state line and its detail block."""
     detail = ["cubic wscale:7,7 rto:220 rtt:12.4/3.1 ato:40 mss:1460 pmtu:1500 cwnd:10"]
     if sent:
@@ -12743,6 +12883,12 @@ def ss_flow(peer, sent=0, retrans=0, segs=0, retrans_segs=None,
     # has to tell "carried nothing" from "could not be measured".
     if received is not None:
         detail.append(f"bytes_received:{received}")
+    # lastsnd/lastrcv/lastack, as "10/9000/9000". Left out unless a scenario
+    # asks, for the same reason as bytes_received above: a fixture that always
+    # carried them would hide the case where no direction can be claimed.
+    if timers is not None:
+        snd, rcv, ack = timers
+        detail.append(f"lastsnd:{snd} lastrcv:{rcv} lastack:{ack}")
     detail.append("busy:5000ms rcv_space:14600 minrtt:11.9")
     return (f"ESTAB  0      0        10.0.0.5:51234        {peer}:{port}\n"
             f"\t {' '.join(detail)}\n")

@@ -2119,6 +2119,39 @@ class TestNoVendorNames(unittest.TestCase):
         self.assertIsNone(nd.looks_intercepted(["DigiCert Global Root CA"]))
 
 
+class TestTheSuiteCleansUpAfterItself(unittest.TestCase):
+    """Properties of the suite rather than of the tool.
+
+    A test that leaves a thread running, or reaches the network, produces a
+    result that depends on where it ran. This suite is what decides whether a
+    release goes out, so those are worth pinning rather than noticing later.
+    """
+
+    def test_every_listener_thread_survives_its_socket_closing(self):
+        """A helper starts a thread that sits in accept(), and cleanup closes
+        the socket underneath it. On Windows that raises WinError 10038 - an
+        operation on something that is not a socket - and the thread dies
+        printing a traceback into an otherwise green run.
+
+        Linux never showed it, which is exactly how it lasted: the noise only
+        appeared on the runner nobody reads unless it has already failed. Three
+        of the four accept loops guarded for this and the fourth was a bare
+        comprehension, so this pins the rule rather than the instance.
+        """
+        with open(__file__, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        bare = []
+        for i, line in enumerate(lines, 1):
+            if ".accept()" not in line or "def test_" in line:
+                continue
+            window = "\n".join(lines[max(0, i - 12):i + 12])
+            if "except OSError" not in window and "except Exception" not in window:
+                bare.append("%d: %s" % (i, line.strip()[:60]))
+        self.assertEqual(bare, [],
+                         "an accept loop with nothing to catch the socket being "
+                         "closed under it: " + "; ".join(bare))
+
+
 class TestNoSecondCopy(unittest.TestCase):
     """Judgements that must exist in exactly one place.
 
@@ -6611,8 +6644,20 @@ class TestOwnTlsListener(unittest.TestCase):
         sock.listen(8)
         self.addCleanup(sock.close)
         if not tls:
-            threading.Thread(target=lambda: [sock.accept()[0].close() for _ in range(4)],
-                             daemon=True).start()
+            # Guarded the way the TLS branch below already was. This one was a
+            # bare comprehension, so when addCleanup closed the socket while the
+            # thread sat in accept(), Windows raised WinError 10038 - an
+            # operation on something that is not a socket - and the thread died
+            # printing a traceback into a green run. Linux never showed it,
+            # which is how it survived: the noise only appeared on the runner
+            # nobody reads unless it fails.
+            def accept_plain():
+                for _ in range(4):
+                    try:
+                        sock.accept()[0].close()
+                    except OSError:
+                        return
+            threading.Thread(target=accept_plain, daemon=True).start()
             return port
         d = tempfile.mkdtemp()
         key, crt = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")

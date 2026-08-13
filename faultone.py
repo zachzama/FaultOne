@@ -12453,12 +12453,33 @@ const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
 function boundaryArrow(sides, i, flows){
   const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
   const near = (flows || {})[leg.side === 'downstream' ? 'client' : 'backend'] || {};
-  const quiet = near.silent_return || 0;
-  if(quiet && near.connections && quiet * 2 >= near.connections){
-    return `<div class="zarrow split" title="${escapeHtml(
-      quiet + ' of ' + near.connections + ' connections: this box is sending, '
-      + 'nothing is coming back')}">`
-      + '<span class="pass">→</span><span class="fail">←</span></div>';
+  const total = near.connections || 0;
+  // Two counters, each carrying one direction and nothing about the other.
+  //
+  // lastsnd against lastrcv: this box sending and nothing coming back says the
+  // return leg has stalled. It says nothing about the way out - the sending is
+  // what makes the silence mean anything in the first place.
+  //
+  // A DSACK is the far end saying it already had a segment this box resent,
+  // which is proof the original arrived. That is evidence about the way out,
+  // and the only kind there is: it makes the affirmative claim that whatever
+  // those retransmits were, they were not the forward path dropping packets.
+  //
+  // A head with no counter behind it keeps the leg's own colour rather than
+  // inventing one. The earlier version of this hardcoded the outbound head to
+  // pass whenever the return stalled, which read as "the way out is fine" on
+  // no evidence at all.
+  const stalled = (near.silent_return || 0) * 2 >= total && (near.silent_return || 0) > 0;
+  const arrived = (near.delivered_anyway || 0) * 2 >= total && (near.delivered_anyway || 0) > 0;
+  if(total && (stalled || arrived)){
+    const why = [];
+    if(arrived) why.push(near.delivered_anyway + ' of ' + total
+      + ' connections: the far end confirmed data this box resent had arrived');
+    if(stalled) why.push(near.silent_return + ' of ' + total
+      + ' connections: this box is sending, nothing is coming back');
+    return `<div class="zarrow split" title="${escapeHtml(why.join(' · '))}">`
+      + `<span class="${arrived ? 'pass' : leg.state}">→</span>`
+      + `<span class="${stalled ? 'fail' : leg.state}">←</span></div>`;
   }
   return `<div class="zarrow ${leg.state}" title="${
     escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
@@ -13543,17 +13564,34 @@ def render_text_report(report, color=False, width=None):
             leg = sides[i - 1] if sides[i]["side"] == "local" else sides[i]
             near = flows.get("client" if leg["side"] == "downstream"
                              else "backend") or {}
-            quiet, total = near.get("silent_return") or 0, near.get("connections") or 0
-            # The same rule the page splits on, and nothing else: two counters
-            # disagreeing, on at least half the connections. A retransmit ratio
-            # cannot be told apart by direction and must never reach this.
-            if quiet and total and quiet * 2 >= total:
+            total = near.get("connections") or 0
+            quiet = near.get("silent_return") or 0
+            arrived = near.get("delivered_anyway") or 0
+            # The same two counters the page splits on, and nothing else. Each
+            # carries one direction: silence about the way back, a DSACK about
+            # the way out. A retransmit ratio carries neither and must never
+            # reach this.
+            stalled = quiet and quiet * 2 >= total
+            confirmed = arrived and arrived * 2 >= total
+            if total and stalled:
                 line += tint("  -->x  ", "critical") + cells[i]
                 notes.append(f"nothing coming back from {zname[leg['side']]}: "
                              f"{quiet} of {total} connections, while this box "
                              f"is still sending")
+            elif total and confirmed:
+                # The way out is confirmed and the way back is not in question,
+                # so this is the one shape that says something good rather than
+                # something wrong.
+                line += tint("  <==>  ", "ok") + cells[i]
+                notes.append(f"the way out to {zname[leg['side']]} is confirmed: "
+                             f"{arrived} of {total} connections had resent data "
+                             f"acknowledged as already arrived")
             else:
                 line += tint("  <-->  ", sev[leg["state"]]) + cells[i]
+            if total and stalled and confirmed:
+                notes.append(f"the way out to {zname[leg['side']]} is confirmed "
+                             f"delivered ({arrived} of {total}), so the fault is "
+                             f"on the return leg alone")
         out.append("  " + line)
         # The page puts this in a tooltip. There is nothing to hover here, and
         # a shape nobody can look up is worse than a sentence.

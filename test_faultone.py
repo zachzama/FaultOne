@@ -5659,6 +5659,22 @@ class TestTheTerminalDrawsTheSameChain(unittest.TestCase):
         self.assertEqual(self.ESC.sub("", lines[0]).count("-->x"), 2)
         self.assertEqual(len([l for l in lines if "nothing coming back" in l]), 2)
 
+    def test_a_confirmed_way_out_gets_its_own_shape(self):
+        lines = self.chain(self.SIDES,
+                           {"client": {"connections": 8, "delivered_anyway": 6}})
+        self.assertIn("<==>", self.ESC.sub("", lines[0]))
+        self.assertTrue(any("way out" in l and "confirmed" in l for l in lines))
+
+    def test_a_stalled_return_over_a_confirmed_way_out_says_both(self):
+        """The most useful thing this can say about a middle box: the data
+        arrived and the answer never came, so the fault is on one leg only."""
+        lines = self.chain(self.SIDES,
+                           {"client": {"connections": 10, "silent_return": 9,
+                                       "delivered_anyway": 8}})
+        self.assertIn("-->x", self.ESC.sub("", lines[0]))
+        self.assertTrue(any("nothing coming back" in l for l in lines))
+        self.assertTrue(any("return leg alone" in l for l in lines))
+
     def test_the_arrow_carries_the_state_of_the_leg_it_spans(self):
         """It used to be printed green whatever the leg was doing, so a box
         with a fault facing its clients drew a healthy arrow to them."""
@@ -5809,6 +5825,39 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
     def test_the_split_says_how_many_of_how_many(self):
         client, _ = self.draw({"client": {"connections": 9, "silent_return": 7}})
         self.assertIn("7 of 9 connections", client)
+
+    def test_a_confirmed_delivery_colours_the_way_out_on_its_own(self):
+        """A DSACK is the far end saying it already had a segment this box
+        resent, so the original arrived. That is evidence about the way out and
+        the only kind there is."""
+        client, _ = self.draw({"client": {"connections": 8, "delivered_anyway": 6}})
+        self.assertIn("split", client)
+        self.assertIn('<span class="pass">→</span>', client)
+        self.assertIn("confirmed data this box resent had arrived", client)
+
+    def test_a_head_with_no_counter_behind_it_keeps_the_legs_colour(self):
+        """The version before this hardcoded the outbound head to pass whenever
+        the return stalled, which read as "the way out is fine" on no evidence.
+        With a warning leg and nothing said about the way out, the outbound head
+        is a warning too."""
+        sides = [{"side": "downstream", "state": "warn"},
+                 {"side": "local", "state": "pass"},
+                 {"side": "upstream", "state": "pass"}]
+        client, _ = self.draw({"client": {"connections": 4, "silent_return": 4}}, sides=sides)
+        self.assertIn('<span class="warn">→</span>', client)
+        self.assertIn('<span class="fail">←</span>', client)
+
+    def test_the_two_directions_are_read_from_their_own_counters(self):
+        """Both at once: the data got there and nothing came back. Two claims
+        from two counters, and the arrow can carry both."""
+        client, _ = self.draw({"client": {"connections": 10, "silent_return": 9,
+                                          "delivered_anyway": 8}})
+        self.assertIn('<span class="pass">→</span>', client)
+        self.assertIn('<span class="fail">←</span>', client)
+
+    def test_a_minority_of_confirmations_claims_nothing(self):
+        client, _ = self.draw({"client": {"connections": 40, "delivered_anyway": 2}})
+        self.assertRelays(client)
 
 
 class TestBothDirections(unittest.TestCase):

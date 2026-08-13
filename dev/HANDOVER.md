@@ -81,7 +81,7 @@ above can go in under the first line of the README.
 Deliberately three, and deliberately these three. The repo this idea came from
 carries eleven, covering coverage, three OpenSSF checks, a build tool and a
 linter - none of which run here. A badge for a service this project does not
-use is the same stale number the suite spends 1071 tests preventing, moved to
+use is the same stale number the suite spends 1079 tests preventing, moved to
 the first thing anyone reads.
 
 A test-count badge was considered and rejected: it would be a number in a URL,
@@ -143,6 +143,94 @@ being wrong rather than the tool, and eleven could not be composed at all,
 because two scenarios on one box often produce only one finding. Expect roughly
 one bug per fifty pairs at several minutes of thought each, and do not treat the
 remaining 576 as a backlog to burn down.
+
+## Settled: the picture had its own bugs, and the suite could not see them
+
+Four contradictions between the ranked verdict and what the page drew, all
+found by reading reports rather than by any test, and all fixed:
+
+1. The clients box read "skipped" while the strip below said the clients stage
+   was warning or failing. Twenty-four scenarios, seven of them hiding a
+   critical. The box is skipped when nothing is connected, on the grounds that
+   green would claim something was checked; the strip never applied that gate.
+2. Traffic in was drawn *inside* the block headed "The path out, hop by hop",
+   so a box losing packets from its clients showed a red inbound node beneath a
+   title about the other direction and above a path that was entirely green.
+3. A hop the report had already decided was cosmetic - loss at a router that
+   rate-limits its own replies, which clears by the destination - was drawn
+   critical under a verdict reading "no fault found".
+4. The boundary arrows were single-headed, drawing a box that relays as a
+   one-way chain.
+
+**Why 1,000 tests did not catch any of them.** The suite tests the data: which
+findings fire, what the verdict names, which stage moves, what survives the
+export. Whether a heading matches the thing under it is a question about the
+rendered page, and almost nothing asked one. `equivalence.py` had the same
+blind spot - it compared findings, verdict and stages across versions but never
+the three boxes, so a panel that moves without a stage moving was invisible to
+it. It compares them now.
+
+The test that came closest to catching the second one asserted the literal
+string `innerHTML = inboundHtml +`, which pinned the defective construction in
+place rather than catching it. A test written against how the code is, rather
+than what it should do, is worse than no test there.
+
+**What the same audit confirmed is not wrong**, so nobody re-opens it: thirteen
+scenarios show a red verdict over a green hop chain, and every one is correct.
+A DNS failure, an expired certificate or a path MTU blackhole leaves the path
+genuinely fine, and colouring it would be inventing a fault. Three findings
+whose stage reads "fail" while their own severity is a warning
+(`duplex_mismatch`, `port_host_unreachable`, `tls_handshake_failed`) are the
+documented design: the strip records whether a stage passed, the severity
+records how bad it is. Left alone deliberately.
+
+## Settled: the return path is measurable after all, for TCP
+
+The tool used to say the return path could not be measured. That was inherited
+from the technique rather than decided: a traceroute is one-way, and a
+retransmit ratio is a single number that cannot say whether the data or the
+acknowledgement went missing.
+
+`ss -ti` was already being run and its whole line already parsed into key and
+value pairs. Seven fields were lifted out and the rest dropped, and among the
+dropped ones were `lastsnd` and `lastrcv`. Sending twenty milliseconds ago and
+having heard nothing for nine seconds is not an inference - it is two counters
+disagreeing. `dsack_dups` is kept for the same reason: the far end saying it
+already had a segment is proof the data arrived.
+
+Each side of a proxy now carries `silent_return` out of `connections`, plus
+`direction_readable` so a silence of zero can be told from a question never
+asked. The boundary arrow splits into a green head out and a red head back only
+where that count carries the side.
+
+**The trap this is built around.** An idle connection has a large `lastrcv` for
+the plainest reason there is: nothing is happening on it. Reading that as a
+stalled return would fire on every quiet socket on a healthy box. So the box
+has to be sending, recently, and enough to be owed an answer, before its
+silence means anything - `DIR_SENDING_MS`, `DIR_SILENT_MS`,
+`DIR_SILENCE_RATIO`, `DIR_MIN_BYTES`, all in the threshold table.
+
+What is still not measurable: traceroute loss cannot be attributed to a
+direction, because the trace is one-way by construction, and a direction with
+no traffic on it cannot be judged at all. Distinguishing "the acknowledgement
+was lost" from "the far end was slow to send it" needs TCP timestamps and is
+not attempted.
+
+## Settled: the demo pages are generated, not kept
+
+`dev/demos.py` writes five report pages to the Desktop. They are not committed
+and should not be: they are build output, and a stale one is a report claiming
+something the tool no longer says.
+
+Every page comes from the test corpus. A report is a map of the network it was
+taken on, so a demo made from a live run would publish the addressing of
+whoever made it, and the banner is pinned to Linux for the reason the README's
+hero image is.
+
+The script asserts each page's verdict names the fault its filename claims, and
+exits non-zero otherwise. That is not defensive: the first version shipped a
+port-exhaustion page whose headline read "no fault found", because it stubbed
+the collector that finding reads its numbers from.
 
 ## Settled: three formal ways to separate cause from symptom, and why none are built
 

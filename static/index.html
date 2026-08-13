@@ -176,6 +176,10 @@
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  .zarrow.pass{color:var(--ok);}
+  .zarrow.warn{color:var(--warn);}
+  .zarrow.fail{color:var(--crit);}
+  .zarrow.skip{color:var(--text-dim); opacity:.55;}
   .zarrow{display:flex; align-items:center; padding:0 10px; color:var(--text-dim);
           font-size:18px;}
   .zone{flex:1 1 180px; min-width:150px; padding:10px 12px; border-radius:8px;
@@ -1069,7 +1073,23 @@ function renderDiagnosis(data, opts){
   const sidesHtml = sides.length ? `
     <div class="zones">
       ${sides.map((z, i) => `
-        ${i ? '<div class="zarrow" aria-hidden="true">→</div>' : ''}
+        ${i ? (() => {
+          // A proxy relays: traffic crosses this boundary in both directions,
+          // and one arrow drew it as a one-way chain. Both heads take the same
+          // colour, from the measured state of the side away from the box,
+          // because that is the leg the arrow spans.
+          //
+          // Deliberately not one head per direction with its own colour. A
+          // retransmit ratio is a single number for a connection and cannot
+          // say whether the data or the returning ack went missing, and the
+          // trace is outbound only - the report says so itself. Colouring a
+          // return arrow separately would be an invented measurement, drawn
+          // with more authority than anything else on the page.
+          const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
+          return `<div class="zarrow ${leg.state}" title="${
+            escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
+            + '<span>⇄</span></div>';
+        })() : ''}
         <div class="zone ${z.state}">
           <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}</div>
           ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}

@@ -5302,6 +5302,40 @@ class TestZones(unittest.TestCase):
                 lit = [z for z in rep["sides"] if z["state"] in ("warn", "fail")]
                 self.assertEqual(bool(lit), worst != "ok")
 
+    def test_the_arrows_between_the_boxes_run_both_ways(self):
+        """A proxy relays. Traffic crosses each boundary in both directions and
+        a single arrowhead drew it as a one-way chain."""
+        setup, kwargs = S["tcp_flow_loss_clients"]
+        mod = fresh()
+        setup(mod)
+        html = nd.render_report_html(mod.diagnose(quick=False, **scenario_kwargs(kwargs)))
+        self.assertIn("⇄", html, "the boundary arrows are still one-way")
+        self.assertNotIn('<div class="zarrow" aria-hidden="true">→</div>', html)
+
+    def test_an_arrow_takes_the_state_of_the_leg_it_spans(self):
+        """Not of the box beside it. The arrow between this box and what it
+        depends on is the outbound leg, so it carries the upstream state, and
+        the one before it carries the downstream state."""
+        src = nd.VIEWER_TEMPLATE
+        self.assertIn("sides[i].side === 'local' ? sides[i - 1] : sides[i]", src)
+        for state in ("pass", "warn", "fail", "skip"):
+            with self.subTest(state=state):
+                self.assertIn(".zarrow.%s{" % state, src,
+                              "an arrow in state %r has no colour of its own" % state)
+
+    def test_the_two_heads_are_never_coloured_apart(self):
+        """The line this must not cross. A retransmit ratio is one number for a
+        connection and cannot say whether the data or the returning ack went
+        missing, and the trace is outbound only - the report says so in its own
+        words. One head green and the other red would be a measurement nobody
+        took, drawn with more authority than anything else on the page."""
+        src = nd.VIEWER_TEMPLATE
+        arrow = src[src.index('${i ? (() => {'):src.index("})() : ''}")]
+        self.assertEqual(arrow.count("class=\"zarrow"), 1,
+                         "the arrow is drawn as more than one element, which is how "
+                         "per-direction colouring would start")
+        self.assertNotIn("sides[i].state", arrow.replace("sides[i].side", ""))
+
     def test_a_hop_the_report_calls_cosmetic_is_not_drawn_as_a_fault(self):
         """Loss at an intermediate router that clears by the destination is that
         router rate-limiting its own replies, and the tool says so in words: the

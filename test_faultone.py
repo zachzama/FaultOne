@@ -6014,6 +6014,106 @@ class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
                                   "figure invented from a fault elsewhere")
 
 
+class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
+    """The traced path, decided in the report rather than in the page.
+
+    This used to be a titled section with a full-width ribbon and a row of hop
+    boxes, and every rule behind it lived in the viewer's JavaScript - which
+    meant a threshold written twice the moment anything else needed to ask, and
+    a guard that had to start a Node process to check a percentage.
+
+    These are the same rules, asked of the report.
+    """
+
+    def probe(self, code):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))["probe_path"]
+
+    def rows(self, code):
+        return {r["hop"]: r for r in self.probe(code)["hops"]}
+
+    def test_a_hop_the_report_blames_takes_the_reports_severity(self):
+        """Not one worked out here. A code that is critical must not arrive and
+        be demoted to a warning by a second opinion."""
+        self.assertEqual(self.rows("latency_wall")[2]["state"], "warn")
+        self.assertEqual(self.rows("egress_blocked")[2]["blame"], "egress blocked")
+
+    def test_a_timeout_is_a_fault_at_that_hop(self):
+        marked = self.rows("trace_stalls")
+        self.assertEqual([h for h, r in marked.items() if r["state"] == "crit"],
+                         [2, 3, 4])
+        self.assertEqual(marked[2]["why"], "no reply")
+
+    def test_real_loss_is_judged_against_its_documented_thresholds(self):
+        """Against the constants, not literals, so moving a threshold moves this
+        rather than silently moving the rule."""
+        for pct, state in ((nd.HOP_LOSS_CRIT_PCT, "crit"),
+                           (nd.HOP_LOSS_CRIT_PCT - 1, "warn"),
+                           (nd.HOP_LOSS_WARN_PCT, "warn"),
+                           (nd.HOP_LOSS_WARN_PCT - 1, "ok")):
+            with self.subTest(loss=pct):
+                col = nd.build_probe_column(
+                    [{"hop": 1, "display": "10.0.0.1", "avg_ms": 1.0,
+                      "loss_pct": pct, "times_ms": [1.0]}], "8.8.8.8")
+                self.assertEqual(col["hops"][0]["state"], state)
+
+    def test_a_hop_the_report_calls_cosmetic_is_not_a_fault(self):
+        """Loss at an intermediate router that clears by the destination is that
+        router rate-limiting its own replies. The report says so in words, and
+        the picture must not contradict it - it did once, drawing a red hop
+        under "no fault found"."""
+        col = self.probe("path_loss_cosmetic")
+        self.assertEqual([r["state"] for r in col["hops"]], ["ok", "ok", "ok"])
+        self.assertEqual(col["state"], "pass")
+
+    def test_a_hop_is_judged_against_what_the_path_actually_returned(self):
+        """Counting against a hardcoded three assumed every source sends three
+        and reports them all. Where a source gives one timing per hop, every hop
+        had fewer than three and the whole path came out marked - a parsing
+        shape drawn as a fault."""
+        one_each = [{"hop": i, "display": "h%d" % i, "avg_ms": float(i),
+                     "times_ms": [float(i)]} for i in (1, 2, 3)]
+        self.assertEqual([r["state"] for r in
+                          nd.build_probe_column(one_each, "8.8.8.8")["hops"]],
+                         ["ok", "ok", "ok"])
+        thin = [{"hop": 1, "display": "a", "avg_ms": 1.0, "times_ms": [1.0, 1.1, 1.2]},
+                {"hop": 2, "display": "b", "avg_ms": 2.0, "times_ms": [2.0]}]
+        self.assertEqual(nd.build_probe_column(thin, "8.8.8.8")["hops"][1]["state"],
+                         "warn")
+
+    def test_every_marked_hop_says_why_in_words(self):
+        """Red and green are the commonest pair a reader cannot tell apart, and
+        this was the one place a severity arrived as a tint and nothing else."""
+        for code in ("path_loss", "trace_stalls", "latency_wall", "egress_blocked"):
+            with self.subTest(code=code):
+                for row in self.probe(code)["hops"]:
+                    if row["state"] != "ok":
+                        self.assertTrue(row["why"],
+                                        "hop %s is marked in colour alone" % row["hop"])
+
+    def test_a_hops_share_is_sized_by_time_not_by_name(self):
+        """The bar is the measurement. A long name must not widen it."""
+        col = nd.build_probe_column(
+            [{"hop": 1, "display": "a-very-long-backbone-name.example.net",
+              "avg_ms": 2.0, "times_ms": [2.0]},
+             {"hop": 2, "display": "x", "avg_ms": 100.0, "times_ms": [100.0]}], "8.8.8.8")
+        self.assertLess(col["hops"][0]["share_pct"], col["hops"][1]["share_pct"])
+
+    def test_the_last_visit_is_carried_only_when_there_was_one(self):
+        """It only exists on runs given --baseline, and a comparison to nothing
+        would be a line that reads as a measurement."""
+        hops = [{"hop": 1, "display": "a", "avg_ms": 10.0, "times_ms": [10.0]}]
+        self.assertIsNone(nd.build_probe_column(hops, "8.8.8.8")["baseline"])
+        was = nd.build_probe_column(hops, "8.8.8.8", baseline_path=[
+            {"hop": 1, "display": "a", "avg_ms": 25.0}])["baseline"]
+        self.assertIn("25.0ms", was)
+
+    def test_a_run_with_no_trace_has_no_column(self):
+        self.assertIsNone(nd.build_probe_column([], "8.8.8.8"))
+
+
 class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
     """One line decides which side a connection is on:
 

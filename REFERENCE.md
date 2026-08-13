@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1213 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1222 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1989,7 +1989,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1213 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1222 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2057,6 +2057,8 @@ can say what the bar was rather than "the tool said so".
 | `QUEUE_RTT_MULTIPLE` | **2.0** | how far a connection's smoothed round trip must sit above its own lowest-ever before the excess counts as queue rather than distance |
 | `QUEUE_DELAY_MS` | **30.0** | and how many milliseconds of excess. Both are needed: the multiple alone fires on a LAN where 0.2ms becomes 2.2ms, the absolute alone fires on a satellite hop whose 45ms of variance is weather |
 | `FLOW_LOSSY_PCT` | **2.0** | retransmit ratio at which one connection is called lossy |
+| `HOP_LOSS_WARN_PCT` | **5** | loss at a single hop before that hop is marked on the traced path. Only mtr reports a per-hop percentage; a traceroute is judged on how many of its probes came back |
+| `HOP_LOSS_CRIT_PCT` | **20** | and where that mark becomes a fault rather than a warning |
 | `SYN_RETRANS_PCT` | **5** | share of connection attempts needing their SYN resent before setup is called the problem |
 | `ATTEMPT_FAIL_PCT` | **10** | share of connection attempts that never establish at all |
 | `CSUM_ERR_PPM` | **1** | segments per million arriving with a bad TCP checksum: should be zero |
@@ -3475,7 +3477,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1213 tests, no dependencies, no network, a few seconds, so they run
+1222 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

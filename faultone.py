@@ -6809,6 +6809,113 @@ def path_scope(hops, target, raw=None, findings=None):
     }
 
 
+# What a hop's own loss percentage has to reach to be drawn as a fault. Only mtr
+# reports one; a traceroute is judged on how many of its probes came back.
+HOP_LOSS_CRIT_PCT = 20
+HOP_LOSS_WARN_PCT = 5
+
+
+def build_probe_column(hops, target, baseline_path=None):
+    """The traced path as a column beside the two measured ones.
+
+    It used to be a titled section with a full-width ribbon and a row of hop
+    boxes. On the 150 reports in 164 where every hop is clean that was the
+    largest thing on the page and the last one - a picture of a path nobody
+    asked about, drawn at the size of an answer.
+
+    One column, always present, because the trace always runs: the hops stay
+    visible on every report rather than only on the fourteen that mark one. What
+    a fault changes is the colour and which row is called out.
+
+    One leg, not two. A traceroute is one way, so there is no return measurement
+    to draw, and drawing one anyway is the mistake the boundary arrow carried
+    for two releases.
+
+    Each hop's state is settled here rather than in the page. It used to live in
+    the viewer as hopSeverity, which is a second copy of a threshold the moment
+    anything else needs to ask - and it meant the only test of it had to run
+    JavaScript.
+    """
+    if not hops:
+        return None
+    rows, run = [], 0.0
+    for hop in hops:
+        avg = hop.get("avg_ms")
+        delta = max(0.0, (avg or 0) - run)
+        if avg is not None:
+            run = avg
+        blame = hop.get("blame") or {}
+        rows.append({
+            "hop": hop.get("hop"),
+            "host": hop.get("display") or hop.get("host") or "*",
+            "ms": round(avg, 1) if avg is not None else None,
+            "delta_ms": round(delta, 1) if delta >= 1 else None,
+            "timed_out": bool(hop.get("timed_out")),
+            "loss_pct": hop.get("loss_pct"),
+            "probes": len(hop.get("times_ms") or []),
+            # A hop the report called cosmetic is loss at an intermediate router
+            # that clears by the destination - context, not a fault, and the
+            # chain must not colour it as one.
+            "cosmetic": bool(hop.get("cosmetic")),
+            "blame": (blame.get("code") or "").replace("_", " ") or None,
+            "_severity": blame.get("severity"),
+            "edge": hop.get("enters_network") or None,
+        })
+
+    most = max((r["probes"] for r in rows), default=0)
+    total = run or 0.0
+    for row in rows:
+        if row["cosmetic"]:
+            row["state"] = "ok"
+        elif row["blame"]:
+            row["state"] = "crit" if row["_severity"] == "critical" else "warn"
+        elif row["timed_out"]:
+            row["state"] = "crit"
+        elif row["loss_pct"] is not None:
+            row["state"] = ("crit" if row["loss_pct"] >= HOP_LOSS_CRIT_PCT
+                            else "warn" if row["loss_pct"] >= HOP_LOSS_WARN_PCT
+                            else "ok")
+        # Fewer timings than the rest of the path returned means probes went
+        # missing here. Only where the path gives a real sample: a source that
+        # reports one timing per hop would otherwise mark every hop on it.
+        elif most >= 3 and row["probes"] and row["probes"] < most:
+            row["state"] = "warn"
+        else:
+            row["state"] = "ok"
+        row.pop("_severity", None)
+        # Every marked hop says why, in words. Red and green are the commonest
+        # pair a reader cannot tell apart, and this was the one place a severity
+        # arrived as a tint and nothing else - the stage chips say FAIL, the
+        # zones say FAULT, a finding carries its severity in its tag.
+        row["why"] = (row["blame"]
+                      or ("no reply" if row["timed_out"] else None)
+                      or ("%g%% loss" % row["loss_pct"]
+                          if row["loss_pct"] and row["state"] != "ok" else None)
+                      or ("fewer replies than the rest of the path"
+                          if row["state"] == "warn" else None))
+        row["share_pct"] = (round(row["delta_ms"] / total * 100)
+                            if row["delta_ms"] and total else None)
+
+    # The same path on the last visit, where there was one. A line rather than a
+    # second ribbon: it is a comparison, not a measurement, and it only exists
+    # on runs given --baseline.
+    was = None
+    if baseline_path:
+        old = [h for h in baseline_path if h.get("avg_ms")]
+        if old:
+            was = "last run: %d hops, %.1fms" % (len(baseline_path), old[-1]["avg_ms"])
+            moved = (old[-1]["avg_ms"] - total) if total else 0
+            was += (" (%+.1fms now)" % -moved) if abs(moved) >= 1 else " - unchanged"
+    return {
+        "target": target,
+        "state": ("fail" if any(r["state"] == "crit" for r in rows)
+                  else "warn" if any(r["state"] == "warn" for r in rows) else "pass"),
+        "hops": rows,
+        "total_ms": round(total, 1) if total else None,
+        "baseline": was,
+    }
+
+
 def build_path_legs(raw=None, sides=None):
     """The path as four legs: out and back, on each side of this box.
 
@@ -12040,6 +12147,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # The path as four legs, decided here so the page and the terminal
         # cannot end up with two versions of which direction stopped.
         "path_legs": build_path_legs(raw, _sides),
+        # The traced path, as the third column. Present whenever a trace ran.
+        "probe_path": build_probe_column(hops, target, baseline_path),
         # The hops out to the backend a finding named, where one was named.
         # The chain to the target is a reachability check on a box that relays;
         # this is the segment the work actually crosses.

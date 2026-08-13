@@ -13,6 +13,7 @@ and the input validation that keeps user-supplied targets out of argv.
 SPDX-License-Identifier: MIT
 """
 
+import ast
 import importlib.util
 import inspect
 import json
@@ -24,6 +25,47 @@ import types
 import unittest
 
 import faultone as nd
+
+
+# Reading source with ast, on every Python this tool supports.
+#
+# Three guards here walk the source, and each of them was written against the
+# interpreter on the desk. That is the same mistake those guards exist to
+# catch, and CI found it: end_lineno and get_source_segment are both 3.8, and
+# 3.7 is a supported runtime. Worse than the two that crashed was the one that
+# passed - a string literal is ast.Str on 3.7 and ast.Constant from 3.8, so its
+# isinstance check matched nothing and the guard quietly examined an empty set.
+_LEGACY_STR = getattr(ast, "Str", ())
+
+
+def ast_literal(node):
+    """The value of a string literal node, whichever class this Python uses."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if _LEGACY_STR and isinstance(node, _LEGACY_STR):
+        return node.s
+    return None
+
+
+def ast_strings(node):
+    """Every string literal inside a node, joined.
+
+    Stands in for get_source_segment, which arrived in 3.8. A finding's message
+    is an f-string or a run of concatenated pieces, and what these guards read
+    is the words in it, so collecting the literal parts is the same answer
+    without the version floor.
+    """
+    parts = [ast_literal(sub) for sub in ast.walk(node)]
+    return " ".join(p for p in parts if isinstance(p, str))
+
+
+def source_of(name):
+    """The source text of a top-level function in the tool.
+
+    inspect rather than slicing the file by line numbers, because the end of a
+    node is only knowable from ast on 3.8 and later.
+    """
+    return inspect.getsource(getattr(nd, name))
 
 
 class TestGatewayParsing(unittest.TestCase):
@@ -9190,11 +9232,6 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
 
         Read off the source rather than asserted from a list, so a collector
         added later is held to the same rule instead of quietly escaping it."""
-        import ast
-        import textwrap
-        src = open(nd.__file__, encoding="utf-8").read()
-        tree = ast.parse(src)
-        lines = src.splitlines()
         # Everything that sends off the box. Delegators are named with what
         # they delegate to, since the binding lives one level down.
         senders = {
@@ -9203,13 +9240,9 @@ class TestLeavingFromAChosenAddress(unittest.TestCase):
             "cmd_check_port": "_connect_once", "cmd_dns_health": "dns_query",
             "cmd_path_mtu": "_dont_fragment_ping",
         }
-        bodies = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                bodies[node.name] = "\n".join(lines[node.lineno - 1:node.end_lineno])
         for name, delegate in senders.items():
             with self.subTest(collector=name):
-                body = bodies[delegate or name]
+                body = source_of(delegate or name)
                 self.assertTrue(
                     any(k in body for k in ("_source_flag", "connect_from",
                                             "_source_for", "SOURCE_ADDRESS")),
@@ -9621,27 +9654,31 @@ class TestNoCollectorPicksOnExistenceAlone(unittest.TestCase):
         go on naming the old flag, and nothing reads those. The advice is the
         part someone actually types.
         """
-        import ast
-        src = open(nd.__file__, encoding="utf-8").read()
+        with open(nd.__file__, encoding="utf-8") as fh:
+            src = fh.read()
         real = set(re.findall(r'ap\.add_argument\(\s*"(--[a-z-]+)"', src))
         self.assertTrue(real, "no flags found, so this guard is looking at nothing")
-        stale = {}
+        stale, seen_any = {}, 0
         for node in ast.walk(ast.parse(src)):
             if not isinstance(node, ast.Dict):
                 continue
             code = message = None
             for key, value in zip(node.keys, node.values):
-                if not isinstance(key, ast.Constant):
-                    continue
-                if key.value == "code" and isinstance(value, ast.Constant):
-                    code = value.value
-                elif key.value == "message":
-                    message = ast.get_source_segment(src, value) or ""
+                if ast_literal(key) == "code":
+                    code = ast_literal(value)
+                elif ast_literal(key) == "message":
+                    message = ast_strings(value)
             if not (code and message):
                 continue
+            seen_any += 1
             for flag in re.findall(r"--[a-z][a-z-]+", message):
                 if flag not in real:
                     stale.setdefault(flag, set()).add(code)
+        # The count is asserted because the first version of this found nothing
+        # on 3.7 - string literals are ast.Str there, so its isinstance check
+        # matched no keys and it passed by examining an empty set.
+        self.assertGreater(seen_any, 20,
+                           "almost no findings were read, so this guard is vacuous")
         self.assertEqual(stale, {},
                          "findings tell people to pass flags that do not exist: %s"
                          % {f: sorted(c) for f, c in stale.items()})
@@ -9654,21 +9691,16 @@ class TestNoCollectorPicksOnExistenceAlone(unittest.TestCase):
         A collector satisfies this by going through one of the two helpers, or
         by reading the exit code itself - both are ways of asking whether the
         command answered rather than whether it exists."""
-        import ast
-        src = open(nd.__file__, encoding="utf-8").read()
-        lines = src.splitlines()
         offenders = []
-        for node in ast.walk(ast.parse(src)):
-            if not (isinstance(node, ast.FunctionDef) and node.name.startswith("cmd_")):
-                continue
-            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        for name in sorted(n for n in dir(nd) if n.startswith("cmd_")):
+            body = source_of(name)
             if "which(" not in body:
                 continue
             handled = any(k in body for k in (
                 "run_first_usable", "run_first_understood", "_answered",
                 'res.get("code")', 'result.get("code")', 'res.get("ok") and'))
             if not handled:
-                offenders.append(node.name)
+                offenders.append(name)
         self.assertEqual(offenders, [],
                          "these ask which() and never ask whether the command "
                          "answered: %s" % offenders)

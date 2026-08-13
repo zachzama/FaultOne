@@ -13413,11 +13413,18 @@ function renderDiagnosis(data, opts){
       // The ends stay put and the arrow turns. Moving both says the same thing
       // twice, and they disagreed: a response going out read "this box <- clients".
       const away = leg.src === side.left;
+      const tip = `<span class="ptip">${away ? '&rarr;' : '&larr;'}</span>`;
+      const line = '<span class="pline"></span>';
+      // The head sits at the end of the leg leaving this box and at the start
+      // of the one coming back, so the two lanes in a column read as a circuit
+      // rather than as two lines pointing at each other. With both heads in the
+      // same place the pair looked like one measurement drawn twice.
+      const track = leg.direction === 'back' ? tip + line : line + tip;
       return `<div class="plane ${leg.state}">
           <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
             <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
           <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
-            <span class="pline"></span><span class="ptip">${away ? '&rarr;' : '&larr;'}</span>
+            ${track}
             <span class="pend">${escapeHtml(side.right)}</span></div>
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;

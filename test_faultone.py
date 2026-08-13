@@ -5839,6 +5839,31 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         self.assertIn("probe to 8.8.8.8", drawn["out"],
                       "the line went nowhere rather than into the column")
 
+    def test_the_head_sits_at_the_end_of_the_leg_it_is_on(self):
+        """At the end of the leg leaving this box, at the start of the one
+        coming back, so a column reads as a circuit rather than as two lines
+        pointing at each other. With both heads in the same place the pair
+        looked like one measurement drawn twice.
+
+        The glyph still follows the traffic - it is the position that moves.
+        """
+        drawn = self.render(self.report("tcp_return_stalled_backends"))
+        for side in ("client", "backend"):
+            _, col = self.column(drawn["out"], side)
+            for lane in col.split('<div class="plane')[1:]:
+                what = re.search(r'pwhat">([^<]+)<', lane).group(1)
+                track = re.search(r'<div class="ptrack">(.*?)</div>', lane, re.S).group(1)
+                head, line = track.index("ptip"), track.index("pline")
+                with self.subTest(leg=what):
+                    if what in ("request in", "response back"):
+                        self.assertLess(head, line,
+                                        "the leg coming back has its head at "
+                                        "the far end of the line")
+                    else:
+                        self.assertLess(line, head,
+                                        "the leg leaving this box has its head "
+                                        "at the near end of the line")
+
     def test_the_observation_lands_on_one_side_only(self):
         """It is about the probe out of this box, so it belongs under the side
         that probe leaves from. Printed on both columns it would read as a fact

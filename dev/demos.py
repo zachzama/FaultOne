@@ -136,14 +136,52 @@ def losing_traffic_and_hearing_nothing(mod):
     T.serving(mod, sockets(clients(5), backends(4)))
 
 
+def healthy_both_ways(mod, clients_n=5, backends_n=4):
+    """Clean traffic on both sides, so the page draws its four legs.
+
+    Several scenarios in the corpus never stub the flow collector - they are
+    fixtures for a finding that has nothing to do with connections, and a
+    fixture only has to carry what its finding needs. A demo has to carry a
+    whole page: with no `by_side` the path panel has nothing to draw and omits
+    itself, which on a demo reads as the panel being broken.
+    """
+    T.sided_flows(
+        mod,
+        *[T.sided_sock("198.51.100.%d" % i, "443", sent=40_000_000,
+                       timers=(10, 10, 10))
+          for i in range(1, clients_n + 1)],
+        *[T.sided_sock("10.0.0.90", "51%03d" % (100 + i), sent=60_000_000,
+                       timers=(10, 10, 10))
+          for i in range(backends_n)])
+
+
 def relaying_out_of_ports(mod):
+    healthy_both_ways(mod, clients_n=7)
     T.serving(mod, sockets(clients(7),
                            ["ESTAB 0 0 10.0.0.5:%d 10.0.0.90:5432" % (32768 + i)
                             for i in range(450)]))
 
 
+def no_way_out_at_all(mod):
+    """Both sides carrying, and no route off this site.
+
+    The one demo where the traced path is the fault rather than a reference, so
+    it keeps its full chain while the four legs read clean - which is the
+    distinction the panel exists to draw.
+    """
+    healthy_both_ways(mod)
+    T.serving(mod, sockets(clients(5), backends(4)))
+
+
 def serving_but_not_on_the_vip(mod):
     mod.cmd_interfaces = lambda: VIP_INTERFACES
+    # Clients only, deliberately. With no backend side there is no column to
+    # host the probe's summary, so this is also the demo where the traced path
+    # keeps a section of its own - on a box that opens nothing, it is the way
+    # out.
+    T.sided_flows(mod, *[T.sided_sock("198.51.100.%d" % i, "443",
+                                      sent=40_000_000, timers=(10, 10, 10))
+                         for i in range(1, 7)])
     T.serving(mod, sockets(clients(6)))
 
 
@@ -209,7 +247,7 @@ DEMOS = [
     ("1-inbound-loss",    "tcp_flow_loss_clients",    traffic_both_ways),
     ("2-outbound-loss",   "tcp_flow_loss_backends",   None),
     ("3-port-exhaustion", "ephemeral_ports_low",      relaying_out_of_ports),
-    ("4-egress-blocked",  "egress_blocked",           None),
+    ("4-egress-blocked",  "egress_blocked",           no_way_out_at_all),
     ("5-service-address", "service_address_unserved", serving_but_not_on_the_vip),
     ("6-return-stalled",  "tcp_return_stalled_backends", answering_into_silence),
     ("7-losing-and-quiet", "tcp_flow_loss_backends", losing_traffic_and_hearing_nothing),

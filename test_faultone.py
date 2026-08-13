@@ -5323,18 +5323,43 @@ class TestZones(unittest.TestCase):
                 self.assertIn(".zarrow.%s{" % state, src,
                               "an arrow in state %r has no colour of its own" % state)
 
-    def test_the_two_heads_are_never_coloured_apart(self):
-        """The line this must not cross. A retransmit ratio is one number for a
-        connection and cannot say whether the data or the returning ack went
-        missing, and the trace is outbound only - the report says so in its own
-        words. One head green and the other red would be a measurement nobody
-        took, drawn with more authority than anything else on the page."""
+    def test_the_heads_split_only_where_two_counters_disagree(self):
+        """This guard used to say the heads must never be coloured apart, and it
+        was right for as long as the only evidence was a retransmit ratio, which
+        is one number and cannot be told apart by direction.
+
+        lastsnd and lastrcv can. This box sending, and nothing arriving for
+        seconds, is two counters disagreeing rather than anything inferred, and
+        that is the only thing allowed to split them. The rule the guard holds is
+        no longer "never" but "only on this".
+        """
         src = nd.VIEWER_TEMPLATE
         arrow = src[src.index('${i ? (() => {'):src.index("})() : ''}")]
-        self.assertEqual(arrow.count("class=\"zarrow"), 1,
-                         "the arrow is drawn as more than one element, which is how "
-                         "per-direction colouring would start")
-        self.assertNotIn("sides[i].state", arrow.replace("sides[i].side", ""))
+        # Code only. The comment beside it explains why a retransmit ratio
+        # cannot be split by direction, and a plain substring search finds that
+        # sentence and calls it the offence it was written to warn against.
+        arrow = "\n".join(l for l in arrow.splitlines() if "//" not in l)
+        self.assertIn("silent_return", arrow,
+                      "the split is not reading the direction counters")
+        for forbidden in ("worst_loss_pct", "retrans", "loss_pct"):
+            self.assertNotIn(forbidden, arrow,
+                             "the heads are being split on %r, which carries no "
+                             "direction" % forbidden)
+
+    def test_a_side_with_no_direction_evidence_keeps_one_arrow(self):
+        """The common case, and the one that must not drift. Where the kernel
+        does not report the counters, or the connections are simply healthy,
+        both heads stay a single colour."""
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        by_side = ((report["raw"] or {}).get("tcp_flows") or {}).get("by_side") or {}
+        for side, data in by_side.items():
+            with self.subTest(side=side):
+                self.assertEqual(data.get("silent_return"), 0,
+                                 "a fixture with no lastrcv is claiming a stalled "
+                                 "return, so the rule is firing on absent data")
 
     def test_a_hop_the_report_calls_cosmetic_is_not_drawn_as_a_fault(self):
         """Loss at an intermediate router that clears by the destination is that

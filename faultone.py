@@ -3230,6 +3230,24 @@ def parse_tcp_flows(text, max_flows=FLOW_MAX):
                               if "/" in rtt_raw else None)
         flow["bytes_sent"] = _flow_num(kv.get("bytes_sent")) or 0.0
         flow["bytes_retrans"] = _flow_num(kv.get("bytes_retrans")) or 0.0
+        # The fields that know which way a connection stopped working. Every one
+        # of these was already in the line this parser reads and was dropped on
+        # the floor, so the tool said the return path could not be measured
+        # while the kernel was handing it over on every socket.
+        #
+        # lastsnd and lastrcv are milliseconds since this box last sent and last
+        # received. Sending now while nothing has come back for seconds is the
+        # return direction stalled, and it is not an inference - it is two
+        # counters disagreeing.
+        #
+        # dsack_dups is the far end saying "I already had that": proof the data
+        # arrived, so whatever those retransmits were, they were not the forward
+        # path losing packets.
+        flow["bytes_acked"] = _flow_num(kv.get("bytes_acked")) or 0.0
+        flow["last_send_ms"] = _flow_num(kv.get("lastsnd"))
+        flow["last_recv_ms"] = _flow_num(kv.get("lastrcv"))
+        flow["last_ack_ms"] = _flow_num(kv.get("lastack"))
+        flow["dsack_dups"] = _flow_num(kv.get("dsack_dups")) or 0.0
         flow["segs_out"] = _flow_num(kv.get("segs_out")) or 0.0
         # retrans:cur/total - the running total is the one worth keeping.
         retrans = kv.get("retrans")
@@ -3295,6 +3313,52 @@ def _queue_summary(flows):
     delay, flow = worst
     return {"queued": count, "queue_ms": round(delay, 1), "queue_peer": flow["peer"],
             "queue_rtt_ms": flow["rtt_ms"], "queue_min_ms": flow["minrtt_ms"]}
+
+
+# Deciding a connection has stopped hearing back. Both halves matter and the
+# second is the one that keeps this honest.
+#
+# A quiet connection has a large lastrcv for the plainest reason there is:
+# nothing is happening on it. Reading that as a stalled return path would fire
+# on every idle socket on a healthy box, which is the false positive this tool
+# has spent its life removing. So the box has to be *sending* - recently, and
+# enough to expect an answer - before its silence means anything.
+DIR_SENDING_MS = 1000        # last send this recent, or the socket is idle
+DIR_SILENT_MS = 5000         # nothing back for this long
+DIR_SILENCE_RATIO = 10       # and that much longer than since it last sent
+DIR_MIN_BYTES = 100_000      # enough traffic that an answer was owed
+
+
+def flow_direction(flow):
+    """Which way this connection stopped working, or None when it cannot say.
+
+    None is the common answer and has to stay comfortable to return. Most
+    connections are fine, most of the rest are ambiguous, and a direction is
+    only claimed on two counters that disagree with each other rather than on
+    anything inferred.
+    """
+    sent, recv = flow.get("last_send_ms"), flow.get("last_recv_ms")
+    if sent is None or recv is None:
+        return None                      # an older ss, or a kernel not reporting
+    # Written as what has to be true rather than as a run of rejections, so each
+    # threshold is compared at or beyond the value the reference documents.
+    owed_a_reply = (flow.get("bytes_sent") or 0) >= DIR_MIN_BYTES
+    still_sending = sent <= DIR_SENDING_MS
+    gone_quiet = recv >= DIR_SILENT_MS and recv >= sent * DIR_SILENCE_RATIO
+    if owed_a_reply and still_sending and gone_quiet:
+        return "return"
+    return None
+
+
+def flow_delivered(flow):
+    """Did the far end confirm data this box thought it had to resend?
+
+    A DSACK is the receiver saying it already had that segment, so the original
+    arrived. It does not prove the acknowledgement was lost rather than late,
+    which is why this reports what it knows - the data got there - instead of
+    naming the return path.
+    """
+    return bool(flow.get("dsack_dups")) and bool(flow.get("bytes_retrans"))
 
 
 def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
@@ -3397,6 +3461,20 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # a queue in front of the backends are two different pieces of
                 # equipment with two different owners.
                 **(queued or {"queued": 0}),
+                # Which way this side stopped working, where the counters can
+                # say. Counted rather than reduced to a verdict: three of forty
+                # connections gone quiet is a different sentence from forty of
+                # forty, and the reader is owed the denominator.
+                "silent_return": sum(1 for f in group
+                                     if flow_direction(f) == "return"),
+                # Connections where the far end confirmed it already had the
+                # data this box resent. Whatever those retransmits were, they
+                # were not the forward path dropping packets.
+                "delivered_anyway": sum(1 for f in group if flow_delivered(f)),
+                # Whether the kernel offered the counters at all, so a silence
+                # of zero can be told from a question never asked.
+                "direction_readable": sum(1 for f in group
+                                          if f.get("last_recv_ms") is not None),
             }
         sides = {"client": [], "backend": []}
         for flow in lossy:
@@ -11507,6 +11585,9 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  .zarrow.split{flex-direction:column; line-height:1; font-size:15px;}
+  .zarrow.split .pass{color:var(--ok);}
+  .zarrow.split .fail{color:var(--crit);}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -12417,6 +12498,21 @@ function renderDiagnosis(data, opts){
           // return arrow separately would be an invented measurement, drawn
           // with more authority than anything else on the page.
           const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
+          // Split the heads only where two counters disagree about direction.
+          // lastsnd against lastrcv: this box sending, and nothing coming back
+          // for seconds. Anywhere else the pair stays one colour, because a
+          // retransmit ratio is a single number and cannot be told apart by
+          // direction, and guessing would be a measurement nobody took drawn
+          // on the diagram people read first.
+          const flows = ((data.raw || {}).tcp_flows || {}).by_side || {};
+          const near = flows[leg.side === 'downstream' ? 'client' : 'backend'] || {};
+          const quiet = near.silent_return || 0;
+          if(quiet && near.connections && quiet * 2 >= near.connections){
+            return `<div class="zarrow split" title="${escapeHtml(
+              quiet + ' of ' + near.connections + ' connections: this box is sending, '
+              + 'nothing is coming back')}">`
+              + '<span class="pass">→</span><span class="fail">←</span></div>';
+          }
           return `<div class="zarrow ${leg.state}" title="${
             escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
             + '<span>⇄</span></div>';

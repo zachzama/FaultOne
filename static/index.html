@@ -176,6 +176,9 @@
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  .zarrow.split{flex-direction:column; line-height:1; font-size:15px;}
+  .zarrow.split .pass{color:var(--ok);}
+  .zarrow.split .fail{color:var(--crit);}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -1086,6 +1089,21 @@ function renderDiagnosis(data, opts){
           // return arrow separately would be an invented measurement, drawn
           // with more authority than anything else on the page.
           const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
+          // Split the heads only where two counters disagree about direction.
+          // lastsnd against lastrcv: this box sending, and nothing coming back
+          // for seconds. Anywhere else the pair stays one colour, because a
+          // retransmit ratio is a single number and cannot be told apart by
+          // direction, and guessing would be a measurement nobody took drawn
+          // on the diagram people read first.
+          const flows = ((data.raw || {}).tcp_flows || {}).by_side || {};
+          const near = flows[leg.side === 'downstream' ? 'client' : 'backend'] || {};
+          const quiet = near.silent_return || 0;
+          if(quiet && near.connections && quiet * 2 >= near.connections){
+            return `<div class="zarrow split" title="${escapeHtml(
+              quiet + ' of ' + near.connections + ' connections: this box is sending, '
+              + 'nothing is coming back')}">`
+              + '<span class="pass">→</span><span class="fail">←</span></div>';
+          }
           return `<div class="zarrow ${leg.state}" title="${
             escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
             + '<span>⇄</span></div>';

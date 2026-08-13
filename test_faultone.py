@@ -5754,6 +5754,7 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         body = ("\nrenderDiagnosis(%s,{});renderHopChain(%s);"
                 "\nprocess.stdout.write(JSON.stringify({"
                 "out:(document.getElementById('pathWrap')||{}).innerHTML,"
+                "chain:(document.getElementById('hopChainWrap')||{}).innerHTML,"
                 "note:(document.getElementById('pathNote')||{}).textContent}));"
                 % (_json.dumps(report), _json.dumps(report)))
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
@@ -5826,6 +5827,33 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
             self.assertNotIn("% loss", lane,
                              "a leg is carrying a loss figure, which claims a "
                              "direction a retransmit ratio does not have")
+    def test_a_quiet_traced_path_collapses_to_its_summary(self):
+        """The bar and the row of nodes are the largest thing on that panel and
+        the last one, and 150 of the 164 scenarios draw every hop on them clean.
+        Drawn at the size of an answer, a picture of a path nobody asked about
+        is what a reader finds when they look for the conclusion."""
+        drawn = self.render(self.report("tcp_return_stalled_backends"))
+        self.assertNotIn('class="hop-chain"', drawn["chain"],
+                         "a clean traced path is still drawing its full chain")
+        self.assertIn("hops", drawn["chain"], "the summary line went too")
+
+    def test_a_path_with_a_marked_hop_still_draws_in_full(self):
+        """Why it collapses rather than goes. A routing loop, a latency wall,
+        loss at an intermediate router and a stalled trace are each findings
+        about a specific hop, and the four legs have no way to say "hop 2"."""
+        drawn = self.render(self.report("latency_wall"))
+        self.assertIn('class="hop-chain"', drawn["chain"])
+        self.assertIn("hop-node", drawn["chain"])
+
+    def test_what_counts_as_worth_drawing_is_decided_once(self):
+        """In the report, not in the page - the same reason the leg states are.
+        A quiet path and a marked one are told apart by whether any hop carries
+        a timeout, a blame or real loss."""
+        quiet = self.report("tcp_return_stalled_backends")["path_scope"]
+        loud = self.report("latency_wall")["path_scope"]
+        self.assertFalse(quiet["notable"])
+        self.assertTrue(loud["notable"])
+
     def test_a_clean_chain_says_what_it_is_not(self):
         """150 of the 164 scenarios draw every hop on this chain clean. That
         makes green the ordinary state rather than a result - and it is the
@@ -11855,12 +11883,22 @@ class TestNothingInAReportCanBecomeMarkup(unittest.TestCase):
 
     def test_a_hostile_hop_name_cannot_become_a_tag(self):
         """Hop names come from reverse DNS, which is the clearest case of a
-        string somebody else chooses appearing in your report."""
+        string somebody else chooses appearing in your report.
+
+        The hop carries loss so the chain draws in full and the hop still
+        renders its name: a quiet chain collapses to its summary line now, and a
+        timed-out hop is drawn as "no reply" with the name dropped. Either way
+        the payload would never reach the document, and a payload that is never
+        rendered proves nothing about escaping - which is what the vacuity check
+        next door caught, twice, while this was being fixed.
+        """
         pre = self._viewer_js("escapeHtml", "renderHopChain", "hopWord", "hopFlex",
                               "hopRibbon", "ribbonBaseline", "sideSeverity", "avgMs",
                               "hopSeverity", "verdictRow")
         writes = self._writes(pre, """
-const data = { hops: [{hop:1, display:%s, avg_ms:1.0, roles:[], zone:%s}],
+const data = { hops: [{hop:1, display:%s, avg_ms:1.0, roles:[], zone:%s,
+                       loss_pct:20}],
+               path_scope:{traced:'10.0.0.1', notable:true},
                target:'10.0.0.1', networks_crossed:[], probes:{} };
 renderHopChain(data, {});
 """ % (json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD)))

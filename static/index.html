@@ -1110,9 +1110,23 @@ function renderHopChain(data){
                 unreached: true, meta: 'not reached by the trace'});
   }
 
-  document.getElementById('hopChainWrap').innerHTML =
-    `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
-      escapeHtml(summary)}</div>` +
+  // A quiet chain collapses to its summary line. The bar and the row of nodes
+  // are the largest thing on this panel and the last one, and on 150 of this
+  // tool's 164 scenarios every hop on them is clean - so a reader looking for
+  // the conclusion was finding a full-width picture of a path nobody asked
+  // about, drawn at the size of an answer.
+  //
+  // It cannot simply go. The fourteen that mark a hop include a routing loop, a
+  // latency wall, loss at an intermediate router and a stalled trace, and each
+  // of those is a finding *about a specific hop* - the four legs above have no
+  // way to say "hop 2".
+  const notable = scope.notable !== undefined
+    ? !!scope.notable
+    : hops.some(h => h.timed_out || h.blame);
+  const summaryLine = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
+      escapeHtml(summary)}</div>`;
+  document.getElementById('hopChainWrap').innerHTML = !notable ? summaryLine :
+    summaryLine +
     hopRibbon(nodes, TOT) + ribbonBaseline(data.baseline_path, TOT)
     + '<div class="hop-chain">' + nodes.map((n,i) => `
       ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'

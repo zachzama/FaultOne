@@ -6758,9 +6758,21 @@ def path_scope(hops, target, raw=None, findings=None):
         if host and host not in traced and host != target and host not in elsewhere:
             elsewhere.append(host)
 
+    # Whether this chain has anything to say. Across this tool's scenarios, 150
+    # of 164 draw every hop clean, and on those the bar and the row of nodes are
+    # the largest thing on the panel and the last - so a reader looking for the
+    # conclusion finds a full-width picture of a path nobody asked about.
+    #
+    # The fourteen that mark a hop are why it cannot simply go: a routing loop, a
+    # latency wall, loss at an intermediate router and a stalled trace are all
+    # findings *about a specific hop*, and the four legs have no way to say
+    # "hop 2". So it collapses to a line when quiet and draws in full when not.
+    notable = any(h.get("timed_out") or h.get("blame")
+                  or (h.get("loss_pct") or 0) >= 5 for h in hops)
     return {
         "traced": target,
         "hops_cover": traced,
+        "notable": notable,
         # Destinations a finding is about that this trace does not reach. Empty
         # is the ordinary case and means the drawing needs no qualification.
         "fault_elsewhere": elsewhere,
@@ -13148,9 +13160,23 @@ function renderHopChain(data){
                 unreached: true, meta: 'not reached by the trace'});
   }
 
-  document.getElementById('hopChainWrap').innerHTML =
-    `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
-      escapeHtml(summary)}</div>` +
+  // A quiet chain collapses to its summary line. The bar and the row of nodes
+  // are the largest thing on this panel and the last one, and on 150 of this
+  // tool's 164 scenarios every hop on them is clean - so a reader looking for
+  // the conclusion was finding a full-width picture of a path nobody asked
+  // about, drawn at the size of an answer.
+  //
+  // It cannot simply go. The fourteen that mark a hop include a routing loop, a
+  // latency wall, loss at an intermediate router and a stalled trace, and each
+  // of those is a finding *about a specific hop* - the four legs above have no
+  // way to say "hop 2".
+  const notable = scope.notable !== undefined
+    ? !!scope.notable
+    : hops.some(h => h.timed_out || h.blame);
+  const summaryLine = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
+      escapeHtml(summary)}</div>`;
+  document.getElementById('hopChainWrap').innerHTML = !notable ? summaryLine :
+    summaryLine +
     hopRibbon(nodes, TOT) + ribbonBaseline(data.baseline_path, TOT)
     + '<div class="hop-chain">' + nodes.map((n,i) => `
       ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'

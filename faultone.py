@@ -6767,6 +6767,127 @@ def path_scope(hops, target, raw=None, findings=None):
     }
 
 
+def build_path_legs(raw=None, sides=None):
+    """The path as four legs: out and back, on each side of this box.
+
+    A box that relays has two sides and two directions on each, and until now
+    the page drew a chain per side and left the directions to an arrowhead. The
+    four legs are what a reader is actually asking about - the request arrived,
+    the request went out, the answer came back, the answer went out - and each
+    one has its own evidence.
+
+    Grouped by side rather than run end to end, because the two sides are
+    different equipment with different owners. That split is already in the
+    data: `by_side` exists for exactly this reason.
+
+    Nothing here is new measurement. It is the same fields the arrow and the two
+    chains were reading, arranged the way the question is asked.
+    """
+    flows = ((raw or {}).get("tcp_flows") or {})
+    by_side = flows.get("by_side") or {}
+    # The state the three boxes already give this side. Taken rather than worked
+    # out again: a column heading that disagrees with the box above it is the
+    # contradiction this whole panel replaced.
+    zone = {"client": "downstream", "backend": "upstream"}
+    zoned = {z.get("side"): z.get("state") for z in (sides or [])}
+    out = []
+    for name, near, out_first in (("client", by_side.get("client"), False),
+                                  ("backend", by_side.get("backend"), True)):
+        if not near:
+            continue
+        total = near.get("connections") or 0
+        stalled = bool(near.get("return_stalled"))
+        confirmed = (near.get("delivered_anyway") or 0)
+        waiting = near.get("unanswered") or 0
+        readable = near.get("volume_readable")
+
+        def volume(key):
+            # "Carried nothing" and "could not be measured" are different
+            # answers, and a byte count printed for both would merge them.
+            if not readable:
+                return None
+            return _fmt_bytes(near.get(key) or 0)
+
+        # The leg away from this box. An acknowledgement is proof the data
+        # arrived, so a side that is hearing anything back is a side whose
+        # outbound direction is carrying. When nothing comes back at all, that
+        # proof is exactly what is missing - "my data is arriving and their
+        # replies are not" and "my data is not arriving" look identical from
+        # here - so the leg is unknown rather than either colour.
+        out_ev = []
+        vol = volume("bytes_out")
+        if vol:
+            out_ev.append("%s sent" % vol)
+        if confirmed:
+            out_state = "pass"
+            out_ev.append("%d of %d connections confirmed data resent had "
+                          "already arrived" % (confirmed, total))
+        elif stalled:
+            out_state = "unknown"
+            out_ev.append("arrival cannot be confirmed while nothing is coming "
+                          "back")
+        else:
+            out_state = "pass"
+            out_ev.append("acknowledged, so it is arriving")
+
+        # The leg towards this box.
+        back_ev = []
+        vol = volume("bytes_in")
+        if vol:
+            back_ev.append("%s received" % vol)
+        if stalled:
+            back_state = "fail"
+            back_ev.append("%d of %d connections silent"
+                           % (near.get("silent_return") or 0, total))
+            back_ev.append("no data and no acknowledgement")
+            share = near.get("silent_share_pct")
+            if (near.get("silent_return") or 0) * 2 < total and share:
+                back_ev.append("carrying %d%% of this side's traffic" % share)
+        elif waiting:
+            # Acknowledged and not answered. The path back is carrying, so this
+            # is not a network fault and must not be drawn as one - but it is
+            # the answer to "why is nothing coming back" and the reader needs it.
+            back_state = "warn"
+            back_ev.append("%d of %d acknowledged and not answered" % (waiting, total))
+            back_ev.append("the path back is carrying; the far end is slow")
+        else:
+            back_state = "pass"
+            back_ev.append("answering" if name == "backend" else "arriving")
+
+        peer = str(near.get("worst_peer") or "")
+        far = (peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer) or (
+            "what this box depends on" if name == "backend" else "clients")
+        this = "this box"
+        legs = [
+            {"direction": "out", "state": out_state,
+             "what": "request out" if name == "backend" else "response out",
+             "src": this, "dst": far, "evidence": out_ev},
+            {"direction": "back", "state": back_state,
+             "what": "response back" if name == "backend" else "request in",
+             "src": far, "dst": this, "evidence": back_ev},
+        ]
+        if not out_first:
+            legs.reverse()          # a client's request arrives before we answer
+        out.append({
+            "side": name,
+            "state": zoned.get(zone[name]) or "pass",
+            "title": ("this box and what it depends on" if name == "backend"
+                      else "clients and this box"),
+            "peer": far,
+            # The side's own facts, kept off the legs. A retransmit ratio counts
+            # packets this box had to send again and cannot say which direction
+            # lost them, so putting it on a leg would attribute a direction the
+            # number does not have.
+            "connections": total,
+            "rtt_ms": near.get("rtt_ms"),
+            "loss_pct": near.get("worst_loss_pct"),
+            "left": this if name == "backend" else far,
+            "right": far if name == "backend" else this,
+            "legs": legs,
+        })
+    return out or None
+
+
 def build_sides(findings, raw=None):
     """Where the fault is, in the three places it can be.
 
@@ -10089,6 +10210,39 @@ def collect_trace(target, mtr_cycles):
     return {"raw": res, "hops": hops, "source": "traceroute", "mtr": None}
 
 
+BACKEND_TRACE_CODES = ("tcp_flow_loss_backends", "tcp_return_stalled_backends")
+
+
+def trace_the_failing_backend(findings, raw, quick=False):
+    """Trace the backend a finding named, when one has been named.
+
+    The path chain traces the target, which defaults to a public address. On a
+    box that relays, that is a reachability check rather than the route the work
+    takes - across this tool's own scenarios, 150 of 164 draw every hop on it
+    clean. The segment that fails is the one out to a backend, and it was never
+    traced, so the hops the fault is actually on were the hops nobody had.
+
+    Only when a backend finding has fired. A second trace costs seconds, and
+    spending them on every healthy run to draw a second clean chain is the
+    problem this is meant to fix rather than a second helping of it.
+    """
+    if quick:
+        return None                       # --quick skips the first trace too
+    named = [f for f in findings if f["code"] in BACKEND_TRACE_CODES]
+    if not named:
+        return None
+    near = ((raw.get("tcp_flows") or {}).get("by_side") or {}).get("backend") or {}
+    peer = str(near.get("worst_peer") or "")
+    host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
+    if not host or not valid_target(host):
+        return None
+    res = cmd_traceroute(host)
+    hops = parse_traceroute_hops(res.get("stdout", "")) if res.get("ok") else []
+    if not hops:
+        return None
+    return {"target": host, "hops": hops, "why": named[0]["code"]}
+
+
 def collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles, parallel=True):
     """Gateway ping, target ping and the trace.
 
@@ -11807,10 +11961,14 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
                           < rank.get(baseline["verdict"].get("severity"), 0) else "neutral"),
         })
 
+    # Built once and used twice: the three boxes read it, and the four legs take
+    # each side's state from it so a column heading cannot disagree with the box
+    # sitting directly above it.
+    _sides = build_sides(findings, raw)
     return {
         "verdict": verdict,
         "stages": build_stages(findings, raw, checked_ports=bool(check_ports), quick=quick),
-        "sides": build_sides(findings, raw),
+        "sides": _sides,
         "comparison": comparison,
         "findings": findings,
         "raw": raw,
@@ -11837,6 +11995,13 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # What the hop chain covers, so a green path cannot be read as a
         # statement about a segment it never crossed.
         "path_scope": path_scope(hops, target, raw, findings),
+        # The path as four legs, decided here so the page and the terminal
+        # cannot end up with two versions of which direction stopped.
+        "path_legs": build_path_legs(raw, _sides),
+        # The hops out to the backend a finding named, where one was named.
+        # The chain to the target is a reachability check on a box that relays;
+        # this is the segment the work actually crosses.
+        "backend_path": trace_the_failing_backend(findings, raw, quick),
         "call_quality": call_quality,
         "neighbours": neighbours,
         "inventory": inventory_data,
@@ -12056,6 +12221,56 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      because the two states it sits between - carrying, and broken - are both
      claims, and this head is drawn precisely when neither can be made. */
   .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
+  /* The four legs. One column per side, two lanes in each. */
+  .pcols{display:grid; grid-template-columns:1fr; gap:14px; margin:6px 0 22px;}
+  @media (min-width: 780px){ .pcols{grid-template-columns:1fr 1fr;} }
+  .pcol{border:1px solid var(--border); border-radius:9px; background:var(--panel-2);
+    overflow:hidden; min-width:0;}
+  .pcol.fail{border-color:var(--crit);
+    border-color:color-mix(in srgb, var(--crit) 40%, var(--border));}
+  .pcol.warn{border-color:var(--warn);
+    border-color:color-mix(in srgb, var(--warn) 40%, var(--border));}
+  .pcol-hd{display:flex; justify-content:space-between; align-items:baseline;
+    gap:10px; padding:10px 14px; border-bottom:1px solid var(--border);
+    font-family:var(--mono); font-size:12px;}
+  .pcol-hd .pwho{color:var(--text);}
+  .pcol-hd .pfacts{color:var(--text-dim); font-size:11px; text-align:right;}
+  .plane{padding:13px 14px;}
+  .plane + .plane{border-top:1px solid var(--border);}
+  .plane .ptop{display:flex; justify-content:space-between; align-items:baseline;
+    gap:10px; font-family:var(--mono); font-size:11px;}
+  .plane .pwhat{color:var(--text);}
+  .plane .pverd{color:var(--text-dim); letter-spacing:.06em; white-space:nowrap;}
+  .plane.pass .pverd{color:var(--ok);}
+  .plane.warn .pverd{color:var(--warn);}
+  .plane.fail .pverd{color:var(--crit);}
+  .ptrack{display:flex; align-items:center; gap:8px; margin:9px 0 7px;
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);}
+  .ptrack .pend{white-space:nowrap;}
+  .ptrack .pline{flex:1; height:2px; border-radius:2px; background:var(--border);
+    min-width:24px;}
+  .plane.pass .ptrack .pline{background:var(--ok);}
+  .plane.warn .ptrack .pline{background:var(--warn);}
+  .plane.fail .ptrack .pline{background:var(--crit);}
+  /* Not measured is not a colour. Dashed, so it cannot be mistaken for either
+     of the two claims it sits between. */
+  .plane.unknown .ptrack .pline{opacity:.55;
+    background:repeating-linear-gradient(90deg, var(--text-dim) 0 5px,
+      transparent 5px 10px);}
+  .ptrack .ptip{font-size:14px; line-height:1;}
+  .plane.pass .ptrack .ptip{color:var(--ok);}
+  .plane.warn .ptrack .ptip{color:var(--warn);}
+  .plane.fail .ptrack .ptip{color:var(--crit);}
+  .plane.unknown .ptrack .ptip{color:var(--text-dim); opacity:.55;}
+  .plane .pev{font-family:var(--mono); font-size:10.5px; color:var(--text-dim);
+    opacity:.85; line-height:1.55;}
+  /* The hops out to the backend, where one was traced. Inside the column it
+     belongs to rather than as a second chain elsewhere on the page: the whole
+     point of tracing it is that this is the segment the work crosses. */
+  .phops{padding:10px 14px; border-top:1px dashed var(--border);
+    font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
+  .phops .ph{display:inline-block; margin-right:6px;}
+  .phops .ph.gone{color:var(--crit);}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -12542,14 +12757,15 @@ VIEWER_TEMPLATE = r"""<!doctype html>
            node beneath a title reading "the path out" and above a path that
            was entirely green. They are opposite directions and the heading
            was claiming one of them. -->
-      <div id="inboundWrap"></div>
-      <!-- The way out as the connections measure it. The chain below this is a
-           traceroute to the target, which on a proxy is usually not where the
-           work goes: the backends sit on an internal segment the trace never
-           crosses, so a fault there had nowhere on the picture to appear and
-           every node under it stayed green. This is the reading the inbound
-           chain already gives for clients, pointed the other way. -->
-      <div id="outboundWrap"></div>
+      <!-- The path, as four legs in two columns: one column per side of this
+           box, each carrying the leg out and the leg back.
+
+           This replaced a chain per side with the directions left to an
+           arrowhead. The two sides are different equipment with different
+           owners - the split is the data's own, `by_side` exists for it - and
+           out-and-back is the pair a reader compares when the question is which
+           direction stopped. -->
+      <div id="pathWrap"></div>
       <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
     <div class="path-note" id="pathNote" style="display:none;"></div>
       <div id="hopChainWrap"></div>
@@ -12789,13 +13005,11 @@ function hopFlex(deltaMs, totalMs){
 function renderHopChain(data){
   const hops = data.hops || [];
   const pathTitle = document.getElementById('pathTitle');
-  const inboundWrap = document.getElementById('inboundWrap');
   if(hops.length === 0){
     pathTitle.style.display = 'none';
     document.getElementById('hopChainWrap').innerHTML = '';
-    if(inboundWrap) inboundWrap.innerHTML = '';
-    const ow = document.getElementById('outboundWrap');
-    if(ow) ow.innerHTML = '';
+    const pw = document.getElementById('pathWrap');
+    if(pw) pw.innerHTML = '';
     return;
   }
   // Name the destination. "The path out" reads as *the* way out, so a clean
@@ -12934,61 +13148,6 @@ function renderHopChain(data){
                 unreached: true, meta: 'not reached by the trace'});
   }
 
-  // The other direction, as far as it can honestly be drawn: one hop. A
-  // traceroute goes one way, and nothing here can observe the route a client's
-  // packets took to arrive - so there is no inbound chain, and inventing one
-  // would be worse than leaving it out. What is drawn instead is the kernel's
-  // own measurement of the connections clients actually have open.
-  const inbound = ((data.raw || {}).tcp_flows || {}).by_side || {};
-  const cin = inbound.client;
-  const inboundHtml = cin ? `
-    <div class="inbound">
-      <div class="inbound-title">clients in — measured on their own connections, not probed</div>
-      <div class="hop-chain">
-        <div class="hop-node ${sideSeverity(data, 'downstream')}">
-          <div class="hop-label">clients${cin.via ? ' · via ' + escapeHtml(cin.via) : ''}</div>
-          <div class="hop-sub">${cin.connections} connection${cin.connections === 1 ? '' : 's'}</div>
-          <div class="hop-meta">${[cin.rtt_ms != null ? cin.rtt_ms + 'ms rtt' : '',
-              cin.worst_loss_pct != null ? cin.worst_loss_pct + '% loss' : '']
-              .filter(Boolean).join(' · ')}</div>
-        </div>
-        <div class="hop-arrow">→</div>
-        <div class="hop-node ok"><div class="hop-label">this box</div>
-          <div class="hop-sub">${escapeHtml(data.hostname || 'here')}</div></div>
-      </div>
-      <div class="inbound-note">${cin.via
-        ? `This box cannot see past ${escapeHtml(cin.via)} to the client. A clean reading here means clean as far as ${escapeHtml(cin.via)} — not clean to whoever is complaining.`
-        : 'Connections arrive from many addresses, so this is the spread of real clients rather than one balancer in front.'}</div>
-    </div>` : '';
-
-  // The backends, measured the same way and from the same field. Drawn as a
-  // chain of its own rather than folded into the traced path, because they are
-  // two measurements of two different destinations: that one is a probe to the
-  // target, this is the traffic this box is actually carrying.
-  const cout = inbound.backend;
-  const outboundHtml = cout ? `
-    <div class="inbound">
-      <div class="inbound-title">backends out — measured on this box's own connections, not probed</div>
-      <div class="hop-chain">
-        <div class="hop-node ok"><div class="hop-label">this box</div>
-          <div class="hop-sub">${escapeHtml(data.hostname || 'here')}</div></div>
-        <div class="hop-arrow">→</div>
-        <div class="hop-node ${sideSeverity(data, 'upstream')}">
-          <div class="hop-label">what this box depends on${
-            cout.worst_peer ? ' · ' + escapeHtml(String(cout.worst_peer).replace(/:\d+$/, '')) : ''}</div>
-          <div class="hop-sub">${cout.connections} connection${cout.connections === 1 ? '' : 's'}</div>
-          <div class="hop-meta">${[cout.rtt_ms != null ? cout.rtt_ms + 'ms rtt' : '',
-              cout.worst_loss_pct != null ? cout.worst_loss_pct + '% loss' : '',
-              cout.return_stalled ? cout.silent_return + ' of ' + cout.connections + ' silent' : '']
-              .filter(Boolean).join(' · ')}</div>
-        </div>
-      </div>
-      <div class="inbound-note">These are the connections this box opened, not a probe. The traced path below goes to the target and does not cross this segment, so it says nothing about it either way.</div>
-    </div>` : '';
-  const outboundWrap = document.getElementById('outboundWrap');
-  if(outboundWrap) outboundWrap.innerHTML = outboundHtml;
-
-  if(inboundWrap) inboundWrap.innerHTML = inboundHtml;
   document.getElementById('hopChainWrap').innerHTML =
     `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
       escapeHtml(summary)}</div>` +
@@ -13183,6 +13342,54 @@ function renderDiagnosis(data, opts){
   // picture used to sit above the verdict, so the reader met a hop-by-hop
   // diagram before being told what the answer was.
   document.getElementById('answerWrap').innerHTML = verdictHtml;
+  // The path, as four legs in two columns. Everything the two chains drew is
+  // here, plus the direction that used to live only in an arrowhead.
+  //
+  // The states are not decided here. They come from the report, where the same
+  // fields the arrow reads are turned into legs once - a threshold written in
+  // Python and again in this file is two copies of a rule and two chances for
+  // them to disagree about the same report.
+  const LEGWORD = {pass:'OK', warn:'SLOW', fail:'FAULT', unknown:'NOT MEASURABLE'};
+  const legSides = data.path_legs || [];
+  const pathHtml = legSides.length ? '<div class="pcols">' + legSides.map(side => {
+    const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
+                   side.rtt_ms != null ? side.rtt_ms + 'ms rtt' : '',
+                   // A retransmit ratio counts packets this box had to send
+                   // again and cannot say which direction lost them, so it sits
+                   // on the side and never on a leg.
+                   side.loss_pct != null ? side.loss_pct + '% loss' : ''
+                  ].filter(Boolean).join(' \u00b7 ');
+    const lanes = (side.legs || []).map(leg => {
+      // The ends stay put and the arrow turns. Moving both says the same thing
+      // twice, and they disagreed: a response going out read "this box <- clients".
+      const away = leg.src === side.left;
+      return `<div class="plane ${leg.state}">
+          <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
+            <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
+          <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
+            <span class="pline"></span><span class="ptip">${away ? '&rarr;' : '&larr;'}</span>
+            <span class="pend">${escapeHtml(side.right)}</span></div>
+          <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
+        </div>`;
+    }).join('');
+    // The traced segment, when this side is the one that was traced. Only the
+    // backend gets one, and only when a finding named it.
+    const bp = data.backend_path;
+    const traced = (bp && side.side === 'backend') ? `<div class="phops">
+        hops to ${escapeHtml(bp.target)}:
+        ${(bp.hops || []).map(h => `<span class="ph ${h.timed_out ? 'gone' : ''}">${
+          escapeHtml(h.display || String(h.hop))}</span>`).join('&rarr; ')}
+      </div>` : '';
+    return `<div class="pcol ${side.state}">
+        <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
+          <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
+        ${lanes}${traced}</div>`;
+  }).join('') + '</div>' : '';
+  const pathWrap = document.getElementById('pathWrap');
+  if(pathWrap) pathWrap.innerHTML = pathHtml
+    ? '<div class="section-title">The path, out and back on each side</div>' + pathHtml
+    : '';
+
   document.getElementById('whereWrap').innerHTML = sides.length
     ? '<div class="section-title">Which direction the fault is on</div>' + sidesHtml : '';
   document.getElementById('ranWrap').innerHTML = stageHtml

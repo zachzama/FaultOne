@@ -5676,16 +5676,14 @@ class TestWhichDirectionStopped(unittest.TestCase):
 
 
 class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
-    """The page drew the clients' side from the connections and the backends'
-    side not at all.
+    """The path drawn as four legs: out and back, on each side of this box.
 
-    What stood in for it was a traceroute to the target, which on a proxy is
-    usually not where the work goes: the backends sit on an internal segment the
-    trace never crosses. So a fault there had nowhere on the picture to appear,
-    every node under it stayed green, and the reader was left holding a red
-    verdict over a drawing with no red in it.
+    Before this there was a chain per side with the directions left to an
+    arrowhead, and for a while no chain for the backends at all - so a fault on
+    the segment to a database had nowhere on the picture to appear and every
+    node stayed green under a red verdict.
 
-    Run through the viewer's own renderHopChain rather than read off the
+    Run through the viewer's own renderDiagnosis rather than read off the
     template, because the question is what the page ends up showing.
     """
 
@@ -5714,6 +5712,11 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
 
         parts = [m.group(0) for m in
                  re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S)]
+        # The element handles the render functions close over. Without these,
+        # renderDiagnosis reaches for `output` and there is nothing there.
+        parts += [m.group(0) for m in
+                  re.finditer(r"^const \w+ = document\.getElementById\([^;]*;$",
+                              src, re.M)]
         for name in dict.fromkeys(re.findall(r"^\s*function (\w+)\(", src, re.M)):
             parts.append(block(name))
         # Only the elements the page actually declares, and null for anything
@@ -5725,15 +5728,34 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         # every real browser, nothing rendered, and all five tests here passed
         # against a stub that had invented the element for them.
         ids = sorted(set(re.findall(r'id="([A-Za-z0-9_]+)"', src)))
+        # A stub element that answers to whatever the viewer calls on it, but
+        # only for ids the template actually declares - null for the rest, the
+        # way a browser does. An earlier version conjured an element for any id
+        # asked for, and a whole panel shipped writing into one that was never
+        # in the markup with every test here still green.
         stub = ("const REAL=%s;\n" % _json.dumps(ids)
-                + "const els={};function el(id){ if(!REAL.includes(id)) return null;\n"
-                  "  return els[id]||(els[id]={id,style:{},textContent:'',innerHTML:''});}\n"
-                  "global.document={getElementById:el,querySelectorAll:()=>[],"
-                  "createElement:()=>({style:{},innerHTML:''})};global.window={};\n")
-        body = ("\nrenderHopChain(%s);\nprocess.stdout.write(JSON.stringify({"
-                "out:(document.getElementById('outboundWrap')||{}).innerHTML,"
+                + "const cl={add(){},remove(){},toggle(){},contains(){return false}};\n"
+                  "function mk(id){return new Proxy({id,style:{},dataset:{},"
+                  "classList:cl,textContent:'',innerHTML:'',children:[],value:''},{\n"
+                  "  get(t,k){ if(k in t) return t[k];\n"
+                  "    if(typeof k==='symbol') return undefined;\n"
+                  "    return ()=>mk('sub'); },\n"
+                  "  set(t,k,v){ t[k]=v; return true; }});}\n"
+                  "const els={};function el(id){ if(!REAL.includes(id)) return null;\n"
+                  "  return els[id]||(els[id]=mk(id));}\n"
+                  "global.document={getElementById:el,querySelectorAll:()=>[],\n"
+                  "  querySelector:()=>mk('q'),createElement:()=>mk('x'),\n"
+                  "  body:mk('body'),documentElement:mk('html'),addEventListener(){}};\n"
+                  "global.window={matchMedia:()=>({matches:false,addEventListener(){}}),\n"
+                  "  addEventListener(){}};\n"
+                  "global.localStorage={getItem:()=>null,setItem(){}};\n"
+                  "global.getComputedStyle=()=>({getPropertyValue:()=>''});\n"
+                  "global.requestAnimationFrame=f=>f();\n")
+        body = ("\nrenderDiagnosis(%s,{});renderHopChain(%s);"
+                "\nprocess.stdout.write(JSON.stringify({"
+                "out:(document.getElementById('pathWrap')||{}).innerHTML,"
                 "note:(document.getElementById('pathNote')||{}).textContent}));"
-                % _json.dumps(report))
+                % (_json.dumps(report), _json.dumps(report)))
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                          encoding="utf-8") as fh:
             fh.write(stub + "\n".join(parts) + body)
@@ -5751,15 +5773,22 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         setup(mod)
         return mod.diagnose(quick=False, **scenario_kwargs(kwargs))
 
-    def severity(self, html):
-        m = re.search(r'hop-node (\w+)">\s*<div class="hop-label">what this box', html)
-        return m.group(1) if m else None
+    def column(self, html, side):
+        """The column for one side, as the page built it."""
+        for m in re.finditer(r'<div class="pcol (\w+)">(.*?)(?=<div class="pcol |$)',
+                             html, re.S):
+            if (side == "backend") == ("depends on" in m.group(2)):
+                return m.group(1), m.group(2)
+        return None, ""
+
+    def severity(self, html, side="backend"):
+        return self.column(html, side)[0]
 
     def test_a_lossy_backend_is_drawn_as_a_fault(self):
         """The case that started this: 8% loss to a database in another subnet,
         and every node on the page green because the trace went elsewhere."""
         drawn = self.render(self.report("tcp_flow_loss_backends"))
-        self.assertEqual(self.severity(drawn["out"]), "crit")
+        self.assertEqual(self.severity(drawn["out"]), "fail")
 
     def test_it_names_the_destination_and_what_was_measured(self):
         drawn = self.render(self.report("tcp_flow_loss_backends"))
@@ -5769,20 +5798,34 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
 
     def test_a_stalled_return_shows_on_it_too(self):
         drawn = self.render(self.report("tcp_return_stalled_backends"))
-        self.assertEqual(self.severity(drawn["out"]), "crit")
-        self.assertIn("silent", drawn["out"])
+        self.assertEqual(self.severity(drawn["out"]), "fail")
+        _, col = self.column(drawn["out"], "backend")
+        self.assertIn("silent", col)
+        # The direction is on the picture now, not only in a tooltip: the leg
+        # back failed and the leg out says it cannot be confirmed.
+        self.assertIn("FAULT", col)
+        self.assertIn("NOT MEASURABLE", col)
 
     def test_a_clean_way_out_is_drawn_clean(self):
         """The other direction of the same rule. Demo 1's fault is inbound, and
         marking the backends there would be the mirror of the bug."""
         drawn = self.render(self.report("tcp_flow_loss_clients"))
-        self.assertEqual(self.severity(drawn["out"]), "ok")
+        self.assertEqual(self.severity(drawn["out"]), "pass")
 
-    def test_it_says_it_is_measured_rather_than_probed(self):
-        """The distinction the whole panel rests on. These are the connections
-        this box opened; the chain below is a probe to somewhere else."""
+    def test_loss_sits_on_the_side_and_never_on_a_leg(self):
+        """A retransmit ratio counts packets this box had to send again and
+        cannot say which direction lost them. Putting it on a leg would give it
+        a direction the number does not have - the same mistake as splitting the
+        arrow on it, which the guard next door has forbidden since the arrow
+        existed."""
         drawn = self.render(self.report("tcp_flow_loss_backends"))
-        self.assertIn("not a probe", drawn["out"])
+        _, col = self.column(drawn["out"], "backend")
+        head = col.split('<div class="plane', 1)[0]
+        self.assertIn("% loss", head, "the side is not carrying its loss figure")
+        for lane in col.split('<div class="plane')[1:]:
+            self.assertNotIn("% loss", lane,
+                             "a leg is carrying a loss figure, which claims a "
+                             "direction a retransmit ratio does not have")
     def test_a_clean_chain_says_what_it_is_not(self):
         """150 of the 164 scenarios draw every hop on this chain clean. That
         makes green the ordinary state rather than a result - and it is the
@@ -6031,6 +6074,66 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         _, rep = self.report(backend=(10, 9000, 9000))
         self.assertIn("1 of 1", self.finding(rep)["message"])
         self.assertNotIn("of that side's traffic", self.finding(rep)["message"])
+
+    def test_the_backend_that_failed_is_the_one_traced(self):
+        """The chain to the target is a reachability check on a box that
+        relays - 150 of this tool's 164 scenarios draw every hop on it clean.
+        The segment that fails is the one out to a backend, and it was never
+        traced, so the hops the fault is on were the hops nobody had."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        bp = rep["backend_path"]
+        self.assertEqual(bp["target"], "10.0.0.90")
+        self.assertTrue(bp["hops"])
+        self.assertEqual(bp["why"], "tcp_return_stalled_backends")
+
+    def test_a_healthy_box_is_not_traced_twice(self):
+        """A second trace costs seconds. Spending them on every healthy run to
+        draw a second clean chain is the problem this fixes, served twice."""
+        _, rep = self.report(backend=(10, 9000, 10))
+        self.assertIsNone(rep["backend_path"])
+
+    def test_quick_mode_traces_nothing(self):
+        mod = fresh()
+        sided_flows(mod,
+                    sided_sock("203.0.113.9", "443", sent=40_000_000,
+                               timers=(10, 10, 10)),
+                    sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
+                               timers=(10, 9000, 9000)))
+        rep = mod.diagnose(quick=True, **scenario_kwargs({}))
+        self.assertIsNone(rep["backend_path"])
+
+    def test_the_four_legs_agree_with_the_box_above_them(self):
+        """The column takes its state from the same place the three boxes do.
+        A heading that disagreed with the box directly above it would be the
+        contradiction this panel was built to remove, reintroduced one element
+        further down."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        zone = {z["side"]: z["state"] for z in rep["sides"]}
+        for side in rep["path_legs"]:
+            with self.subTest(side=side["side"]):
+                self.assertEqual(
+                    side["state"],
+                    zone["upstream" if side["side"] == "backend" else "downstream"])
+
+    def test_the_leg_out_is_never_claimed_on_a_stalled_side(self):
+        """Same rule as the arrowhead, in the panel that replaced it: proof the
+        data arrived is something coming back, and that is what has stopped."""
+        _, rep = self.report(backend=(10, 9000, 9000))
+        backend = [s for s in rep["path_legs"] if s["side"] == "backend"][0]
+        out = [l for l in backend["legs"] if l["direction"] == "out"][0]
+        back = [l for l in backend["legs"] if l["direction"] == "back"][0]
+        self.assertEqual(out["state"], "unknown")
+        self.assertEqual(back["state"], "fail")
+
+    def test_a_far_end_acknowledging_is_a_slow_side_not_a_broken_one(self):
+        """The distinction the acknowledgement bought, carried onto the picture:
+        warn, not fail, and the words say the path is carrying."""
+        _, rep = self.report(backend=(10, 9000, 10))
+        backend = [s for s in rep["path_legs"] if s["side"] == "backend"][0]
+        back = [l for l in backend["legs"] if l["direction"] == "back"][0]
+        self.assertEqual(back["state"], "warn")
+        self.assertIn("the path back is carrying; the far end is slow",
+                      back["evidence"])
 
 
 
@@ -6865,7 +6968,6 @@ class TestBothDirections(unittest.TestCase):
         island = html.split('type="application/json"', 1)[1].split(">", 1)[1] \
                      .split("</script>", 1)[0]
         self.assertIn("client", json.loads(island)["raw"]["tcp_flows"]["by_side"])
-        self.assertIn('class="inbound"', html)
         self.assertNotIn("</script>", island)
         # Where it lands, not how it is concatenated. This asserted the literal
         # `innerHTML = inboundHtml +`, which pinned the one construction that
@@ -6873,11 +6975,20 @@ class TestBothDirections(unittest.TestCase):
         # under the heading "the path out, hop by hop", so a box losing packets
         # from its clients drew a red inbound node beneath a title about the
         # other direction and above a path that was entirely green.
-        self.assertIn('id="inboundWrap"', html)
-        dom = html.index('id="inboundWrap"'), html.index('id="pathTitle"')
-        self.assertLess(dom[0], dom[1],
-                        "traffic in is still inside the path-out section")
-        self.assertIn("inboundWrap.innerHTML = inboundHtml", html)
+        #
+        # Both directions on both sides now, as four legs in two columns, and
+        # the ordering guard is the same one: the measured path comes before the
+        # probe to the target, which is a different destination entirely.
+        self.assertIn('id="pathWrap"', html)
+        self.assertLess(html.index('id="pathWrap"'), html.index('id="pathTitle"'),
+                        "the measured path is inside the probe's section")
+        legs = json.loads(island)["path_legs"]
+        self.assertEqual({s["side"] for s in legs}, {"client", "backend"})
+        for side in legs:
+            with self.subTest(side=side["side"]):
+                self.assertEqual({l["direction"] for l in side["legs"]},
+                                 {"out", "back"},
+                                 "a side is drawn with only one direction")
 
 
 class TestTargetSelection(unittest.TestCase):
@@ -11881,14 +11992,18 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         which is loss - drew green beside a zone reading DEGRADED. A threshold
         in the picture is a second copy of one in the analysis."""
         template = nd.VIEWER_TEMPLATE
-        inbound = template.split('<div class="inbound-title">', 1)[1].split("</div>`", 1)[0]
-        self.assertNotIn("worst_loss_pct >=", inbound,
-                         "the inbound node still judges for itself")
-        self.assertIn("sideSeverity(data, 'downstream')", inbound)
-        # The readings stay - they are measurements, not a verdict.
-        self.assertIn("worst_loss_pct", inbound)
-        fn = template.split("function sideSeverity(data, side){", 1)[1].split("\n}", 1)[0]
-        self.assertIn("s.side === side", fn)
+        panel = template.split("const legSides = data.path_legs", 1)[1] \
+                        .split("const pathWrap", 1)[0]
+        self.assertNotIn("worst_loss_pct >=", panel,
+                         "the path panel still judges for itself")
+        self.assertNotIn(">=", panel,
+                         "a threshold has appeared in the panel; the states are "
+                         "decided in build_path_legs and read here")
+        # It renders the state it was handed, and the readings stay because they
+        # are measurements rather than a verdict.
+        self.assertIn("leg.state", panel)
+        self.assertIn("side.state", panel)
+        self.assertIn("loss_pct", panel)
 
     def test_this_device_is_coloured_by_the_conclusion_about_it(self):
         """The first node of the path was given ok outright, so a box with a
@@ -12156,8 +12271,9 @@ process.stdout.write(JSON.stringify({
         import re
         template = nd.VIEWER_TEMPLATE
         chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
-        inbound = template.split('<div class="inbound-title">', 1)[1].split("</div>`", 1)[0]
-        for name, block in (("the path", chain), ("the way in", inbound)):
+        panel = template.split("const legSides = data.path_legs", 1)[1] \
+                        .split("const pathWrap", 1)[0]
+        for name, block in (("the path", chain), ("the four legs", panel)):
             with self.subTest(leg=name):
                 self.assertEqual(
                     re.findall(r"sev\w*\s*:\s*'(ok|warn|crit)'", block), [],

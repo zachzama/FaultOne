@@ -162,6 +162,24 @@ found by reading reports rather than by any test, and all fixed:
 4. The boundary arrows were single-headed, drawing a box that relays as a
    one-way chain.
 
+**A fifth, found the same way and fixed later.** Only the *page's* arrows were
+repaired. The terminal kept a single `->`, always green whatever the leg was
+doing, so one report drew a proxy one way in the browser and both ways over
+SSH - and the README's own hero image showed a green arrow pointing at a
+failing side. It carries `<-->` coloured by the leg now, `-->x` where the
+return has stalled, and `<==>` where the way out is confirmed delivered. The
+split shape has to survive losing its colour: that line gets pasted into
+tickets, and two heads told apart only by an escape sequence become one arrow
+the moment it does.
+
+**And the guard that could not have caught any of it.** The rule about what may
+split the heads was held by searching `VIEWER_TEMPLATE` for the field the code
+was supposed to read. That pins how the code is written, not what it draws -
+the same shape of test as the `innerHTML` one below, which held a defect in
+place. The arrow is `boundaryArrow()` now: a named function returning a string,
+called directly by tests that read what comes back. Eleven cases, and five
+mutations including the heads drawn the wrong way round.
+
 **Why 1,000 tests did not catch any of them.** The suite tests the data: which
 findings fire, what the verdict names, which stage moves, what survives the
 export. Whether a heading matches the thing under it is a question about the
@@ -200,8 +218,29 @@ already had a segment is proof the data arrived.
 
 Each side of a proxy now carries `silent_return` out of `connections`, plus
 `direction_readable` so a silence of zero can be told from a question never
-asked. The boundary arrow splits into a green head out and a red head back only
-where that count carries the side.
+asked.
+
+**Each head of the boundary arrow reads its own counter, and a head with none
+keeps the leg's colour.** The first version hardcoded the outbound head to pass
+whenever the return stalled, which drew "the way out is fine" on no measurement
+at all - the exact thing the return head is careful not to do. Silence carries
+the way back; a DSACK carries the way out, and `delivered_anyway` was being
+computed for every side and read by nothing until it did. An unmeasured
+direction is not a healthy direction.
+
+**Counting connections alone had a hole in it.** A side was called stalled only
+once most of it had gone quiet, and a box holding one long-lived session beside
+forty short ones is an ordinary shape - on it the session that matters is a
+minority of one, so when it died the arrow drew nothing. `side_return_stalled`
+now fires on a majority by count *or* by share of the side's traffic
+(`DIR_SILENT_SHARE`), and both renderers say which of the two applied, because
+"1 of 40" without the share reads as an over-reaction to one bad connection.
+
+The decision is taken once, where the counters are read, and travels in the
+report as `return_stalled`. It was about to be written in Python and again in
+the page's JavaScript, which is two copies of a threshold and two chances to
+disagree about the same report. Reports written before that field exists still
+carry the counts, so both renderers keep the older rule as a fallback.
 
 **The trap this is built around.** An idle connection has a large `lastrcv` for
 the plainest reason there is: nothing is happening on it. Reading that as a
@@ -215,6 +254,71 @@ direction, because the trace is one-way by construction, and a direction with
 no traffic on it cannot be judged at all. Distinguishing "the acknowledgement
 was lost" from "the far end was slow to send it" needs TCP timestamps and is
 not attempted.
+
+## Settled: two readings that are recorded and deliberately not graded
+
+Both are easy to "finish" by adding a finding, and both would then fire on
+healthy boxes. The reasons are here because a reader who sees a number in a
+report and no finding attached to it will assume the finding is missing.
+
+**`app_limited`.** The kernel prints a bare word - no key, no value - saying
+the sending was paced by whatever feeds the socket rather than by the network.
+On a box that inspects traffic that sounds like the most useful thing there is:
+the network is fine and the software is the bottleneck. It is not gradeable.
+Its two siblings, `tcp_flow_receiver_limited` and `tcp_flow_sendbuf_limited`,
+each fire on a *share of active time*, and that share is precisely what keeps
+them quiet on a healthy box. This flag has no such number behind it and is set
+on any connection not filling its window, which is most of them. A finding
+would have nothing holding it back.
+
+**`relay_volume_lopsided`** is a finding, but severity `ok` and never a fault,
+which is the same bargain `no_upstream_sessions` makes. A box that inspects
+traffic is supposed to stop some of it, so a policy refusing requests and a box
+that has quietly stopped forwarding are the same shape in a socket table.
+Nothing available here separates them, so it names both readings and judges
+neither. Its ratio is an order of magnitude rather than a percentage:
+inspection rewrites what it forwards and TLS termination re-frames it, so the
+two sides never match closely and a tight ratio fires on every healthy box.
+
+A test pins the first decision rather than the code, so adding a finding there
+means arguing with something that states why there is not one.
+
+## Settled: the suite opens no sockets, and that is a property to keep
+
+Three port-check tests reached a live host to work out which address family
+gets dialled. One asserted the IPv4 fallback, which only happens where IPv6 is
+broken - so it passed on machines without IPv6 and failed on machines with it,
+reading a property of whatever network the suite was run from rather than
+anything about the code. It had been green on one machine and red on another
+for as long as both existed.
+
+All three are stubbed against documentation addresses now, and two gained the
+assertion they were missing. Checked by running the whole suite with `connect`,
+`connect_ex` and name resolution booby-trapped: nothing reaches past loopback.
+
+The reason to keep it that way is not tidiness. A test that touches the network
+is a test whose result depends on where it ran, and this suite is the thing
+that decides whether a release goes out.
+
+## Settled: a green test is not a tested rule
+
+Three tests written on 2026-08-12 passed against code with the rule they were
+named for deleted. Each fixture was set up the obvious way, satisfied one
+condition, and was refused by a different one - so the test passed for a reason
+other than the one in its name, which is invisible from a green run.
+
+`flow_direction` has four conditions and two tests named its idle-connection
+guard while the ratio clause was doing the refusing. `side_return_stalled` has
+two independent rules and one test per rule, each satisfied by the other. A
+group-size guard in `_check_idle_endpoint` survived every mutation and was
+right to: a group of one cannot hold both a serving and an idle member, so the
+line was dead and came out.
+
+**Copy the two files to a scratch directory, break one clause, run the new test
+class there.** A rule with two independent conditions needs a fixture that
+holds one out of the way while testing the other. A mutation that survives is
+information either way: the test does not isolate what it names, or the code is
+dead, and it is worth finding out which.
 
 ## Settled: the demo pages are generated, not kept
 

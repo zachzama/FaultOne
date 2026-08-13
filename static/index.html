@@ -929,9 +929,16 @@ function renderHopChain(data){
   // trace to a public address sat under a red verdict about an internal
   // segment and looked like the page contradicting itself.
   const scope = data.path_scope || {};
+  // Not "the path out" any more. That name belonged to this when it was the
+  // only thing drawn beyond the box, and it is wrong now that the connections
+  // this box actually opened have a chain of their own directly above: read in
+  // order, "clients in, backends out, the path out" says traffic leaves for the
+  // backends and carries on to the target, and it does not. This is a probe to
+  // a fixed destination, and on a box that relays it is a reachability check
+  // rather than the route the work takes.
   pathTitle.textContent = scope.traced
-    ? `The path out to ${scope.traced}, hop by hop`
-    : 'The path out, hop by hop';
+    ? `The path to ${scope.traced}, hop by hop`
+    : 'The path, hop by hop';
   pathTitle.style.display = 'block';
 
   // And say plainly when the fault is on a path these hops do not cross.
@@ -941,7 +948,20 @@ function renderHopChain(data){
   const pathNote = document.getElementById('pathNote');
   if(pathNote){
     const away = scope.fault_elsewhere || [];
-    if(away.length){
+    // A clean chain, on a box whose traffic does not use it. Across the
+    // scenarios this tool has, 150 of 164 draw every hop here clean - it is the
+    // ordinary state, not a result - and it is the largest thing on the panel
+    // and the last, which is where a reader looks for the conclusion. Left
+    // unsaid, "all green" gets read as "the network is fine" on a report whose
+    // verdict is that it is not.
+    const relays = !!(((data.raw || {}).tcp_flows || {}).by_side || {}).backend;
+    if(!away.length && relays){
+      pathNote.textContent =
+        `This is a probe to ${scope.traced}, not the traffic this box carries - `
+        + `its own connections are in the chain above. Nothing is marked here, `
+        + `which says this box can reach the internet and nothing more.`;
+      pathNote.style.display = 'block';
+    } else if(away.length){
       pathNote.textContent =
         `These hops are the path to ${scope.traced}, and they were measured `
         + `clean. The connections this report is about go to ${away.join(', ')}, `

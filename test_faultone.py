@@ -5783,6 +5783,34 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         this box opened; the chain below is a probe to somewhere else."""
         drawn = self.render(self.report("tcp_flow_loss_backends"))
         self.assertIn("not a probe", drawn["out"])
+    def test_a_clean_chain_says_what_it_is_not(self):
+        """150 of the 164 scenarios draw every hop on this chain clean. That
+        makes green the ordinary state rather than a result - and it is the
+        largest thing on the panel and the last, which is where a reader looks
+        for the conclusion. On a box that relays, it has to say that the traffic
+        it carries is not what this measured."""
+        drawn = self.render(self.report("queuing_delay_backends"))
+        self.assertIn("not the traffic this box carries", drawn["note"] or "")
+
+    def test_the_clean_line_is_only_for_a_box_that_relays(self):
+        """On a box with no backends the probe to the target really is the way
+        out, and telling the reader to look at a chain above that does not exist
+        would be worse than saying nothing."""
+        drawn = self.render(self.report("service_address_unserved"))
+        self.assertNotIn("not the traffic this box carries", drawn["note"] or "")
+
+    def test_a_fault_off_the_path_still_says_where_it_is(self):
+        drawn = self.render(self.report("tcp_flow_loss_backends"))
+        self.assertIn("does not cross", drawn["note"] or "")
+        self.assertIn("10.0.0.90", drawn["note"] or "")
+
+    def test_a_path_that_is_itself_the_fault_is_not_qualified(self):
+        """The one in seven where the chain earns its place. Qualifying it would
+        tell the reader to look away from the right answer."""
+        drawn = self.render(self.report("egress_blocked"))
+        self.assertFalse(drawn["note"],
+                         "the chain carrying the fault is being explained away")
+
 
 
 class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
@@ -5846,8 +5874,11 @@ class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
 
     def test_the_page_titles_the_chain_with_its_destination(self):
         src = nd.VIEWER_TEMPLATE
-        self.assertIn("The path out to ${scope.traced}, hop by hop", src,
+        self.assertIn("The path to ${scope.traced}, hop by hop", src,
                       "the hop chain is still titled without its destination")
+        self.assertNotIn("The path out to ${scope.traced}", src,
+                         "this is still called the way out, which now names the "
+                         "chain above it - the connections this box opened")
         self.assertIn("pathNote", src)
 
     def test_no_hop_is_marked_because_something_else_failed(self):

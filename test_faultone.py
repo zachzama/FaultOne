@@ -5334,7 +5334,8 @@ class TestZones(unittest.TestCase):
         no longer "never" but "only on this".
         """
         src = nd.VIEWER_TEMPLATE
-        arrow = src[src.index('${i ? (() => {'):src.index("})() : ''}")]
+        i = src.index("function boundaryArrow(")
+        arrow = src[i:src.index("\n}", i)]
         # Code only. The comment beside it explains why a retransmit ratio
         # cannot be split by direction, and a plain substring search finds that
         # sentence and calls it the offence it was written to warn against.
@@ -5502,6 +5503,312 @@ class TestZones(unittest.TestCase):
         self.assertIn('class="zones"', html)
         self.assertIn(".zone.fail{", html)
         self.assertNotIn("</script>", island)
+
+
+class TestWhichDirectionStopped(unittest.TestCase):
+    """`flow_direction` is the only thing allowed to split the boundary arrow,
+    so what it refuses to claim matters as much as what it claims.
+
+    Every threshold is compared against its constant rather than a literal.
+    A test that hardcodes 5000 passes when someone edits the constant and the
+    rule silently moves, which is the opposite of what these are for.
+    """
+
+    def flow(self, **kw):
+        """A connection that has just sent, is owed a reply, and heard none."""
+        f = {"last_send_ms": 10, "last_recv_ms": 9000, "bytes_sent": 5_000_000}
+        f.update(kw)
+        return f
+
+    def test_two_counters_disagreeing_names_the_return_path(self):
+        self.assertEqual(nd.flow_direction(self.flow()), "return")
+
+    def test_an_idle_connection_is_not_a_stalled_return(self):
+        """The trap the whole rule is built around. A quiet socket has a large
+        lastrcv for the plainest reason there is - nothing is happening on it -
+        and reading that as a stall would fire on every healthy idle box.
+
+        Every other condition is deliberately satisfied here. Written the
+        obvious way - a big lastsnd against the default lastrcv - the ratio
+        clause refuses it first and the idle guard could be deleted with this
+        test still passing, which is how it was written the first time.
+        """
+        stale = nd.DIR_SENDING_MS * 10
+        self.assertIsNone(nd.flow_direction(self.flow(
+            last_send_ms=stale, last_recv_ms=stale * nd.DIR_SILENCE_RATIO)))
+
+    def test_the_box_has_to_still_be_sending(self):
+        at_edge = nd.flow_direction(self.flow(
+            last_send_ms=nd.DIR_SENDING_MS,
+            last_recv_ms=nd.DIR_SENDING_MS * nd.DIR_SILENCE_RATIO))
+        self.assertEqual(at_edge, "return", "the documented edge must count")
+        # One millisecond past it, with the silence still proportionate, so
+        # this fails on the sending clause and nothing else.
+        over = nd.DIR_SENDING_MS + 1
+        self.assertIsNone(nd.flow_direction(self.flow(
+            last_send_ms=over, last_recv_ms=over * nd.DIR_SILENCE_RATIO)))
+
+    def test_silence_has_to_be_long_enough_to_mean_something(self):
+        self.assertEqual(nd.flow_direction(self.flow(last_recv_ms=nd.DIR_SILENT_MS)),
+                         "return")
+        self.assertIsNone(nd.flow_direction(self.flow(last_recv_ms=nd.DIR_SILENT_MS - 1)))
+
+    def test_silence_is_judged_against_how_recently_it_sent(self):
+        """Absolute silence is not enough on its own: a connection that last
+        sent nine seconds ago and last heard ten is not stalled, it is slow."""
+        # Sent at the latest moment that still counts as sending, so the ratio
+        # is the only thing left deciding - at a smaller value the absolute
+        # silence floor would be what fires and this would test that instead.
+        sent = nd.DIR_SENDING_MS
+        ratio_met = sent * nd.DIR_SILENCE_RATIO
+        self.assertGreaterEqual(ratio_met, nd.DIR_SILENT_MS,
+                                "the floor, not the ratio, would be deciding")
+        self.assertEqual(nd.flow_direction(self.flow(last_send_ms=sent,
+                                                     last_recv_ms=ratio_met)),
+                         "return")
+        self.assertIsNone(nd.flow_direction(self.flow(last_send_ms=sent,
+                                                      last_recv_ms=ratio_met - 1)))
+
+    def test_a_connection_that_sent_almost_nothing_is_owed_no_answer(self):
+        self.assertEqual(nd.flow_direction(self.flow(bytes_sent=nd.DIR_MIN_BYTES)),
+                         "return")
+        self.assertIsNone(nd.flow_direction(self.flow(bytes_sent=nd.DIR_MIN_BYTES - 1)))
+        self.assertIsNone(nd.flow_direction(self.flow(bytes_sent=None)))
+
+    def test_a_kernel_that_does_not_report_is_not_evidence_of_silence(self):
+        """An older ss prints no lastsnd/lastrcv. Absent counters must read as
+        "not asked", never as "nothing came back"."""
+        self.assertIsNone(nd.flow_direction(self.flow(last_recv_ms=None)))
+        self.assertIsNone(nd.flow_direction(self.flow(last_send_ms=None)))
+        self.assertIsNone(nd.flow_direction({}))
+
+
+class TestTheFarEndConfirmedItArrived(unittest.TestCase):
+    """`flow_delivered`: a DSACK is the receiver saying it already had that
+    segment, which is proof the original arrived."""
+
+    def test_a_dsack_against_a_retransmit_says_the_data_got_there(self):
+        self.assertTrue(nd.flow_delivered({"dsack_dups": 3, "bytes_retrans": 4000}))
+
+    def test_a_dsack_with_nothing_resent_proves_nothing(self):
+        self.assertFalse(nd.flow_delivered({"dsack_dups": 3, "bytes_retrans": 0}))
+
+    def test_retransmits_alone_are_not_a_delivery(self):
+        self.assertFalse(nd.flow_delivered({"dsack_dups": 0, "bytes_retrans": 9000}))
+
+    def test_absent_counters_claim_nothing(self):
+        self.assertFalse(nd.flow_delivered({}))
+
+
+class TestTheTerminalDrawsTheSameChain(unittest.TestCase):
+    """The zone chain in the text report. The page grew a second head on these
+    arrows when a relay was found drawn as a one-way chain; the terminal kept a
+    single green "->", so one report said two different things."""
+
+    ESC = re.compile(r"\x1b\[[0-9;]*m")
+
+    def chain(self, sides, flows=None, color=False):
+        rep = {"sides": sides, "findings": [], "stages": [],
+               "raw": {"tcp_flows": {"by_side": flows or {}}}}
+        text = nd.render_text_report(rep, color=color, width=100)
+        return [l for l in text.splitlines()
+                if "clients in" in l or "nothing coming back" in l]
+
+    SIDES = [{"side": "downstream", "state": "pass"},
+             {"side": "local", "state": "pass"},
+             {"side": "upstream", "state": "pass"}]
+
+    def test_a_relay_is_drawn_both_ways(self):
+        line = self.chain(self.SIDES)[0]
+        self.assertIn("<-->", line)
+        self.assertNotIn("  ->  ", line, "still drawing a relay as a one-way chain")
+
+    def test_a_stalled_return_changes_the_shape_not_just_the_colour(self):
+        """Colour is the first thing lost - this line gets pasted into tickets
+        and piped into files. Two heads told apart only by an escape sequence
+        become one arrow the moment that happens."""
+        lines = self.chain(self.SIDES, {"client": {"connections": 6, "silent_return": 6}})
+        plain = self.ESC.sub("", lines[0])
+        self.assertIn("-->x", plain)
+        self.assertNotIn("<-->", plain.split("this box")[0])
+
+    def test_the_split_says_how_many_of_how_many(self):
+        lines = self.chain(self.SIDES, {"client": {"connections": 9, "silent_return": 7}})
+        self.assertTrue(any("7 of 9 connections" in l for l in lines),
+                        "the page puts this in a tooltip; there is nothing to "
+                        "hover in a terminal, so it has to be said")
+
+    def test_a_minority_going_quiet_leaves_the_arrow_alone(self):
+        line = self.chain(self.SIDES,
+                          {"client": {"connections": 40, "silent_return": 3}})[0]
+        self.assertIn("<-->", line)
+
+    def test_each_boundary_reads_its_own_side(self):
+        lines = self.chain(self.SIDES,
+                           {"client": {"connections": 6, "silent_return": 6},
+                            "backend": {"connections": 6, "silent_return": 0}})
+        plain = self.ESC.sub("", lines[0])
+        before, after = plain.split("this box")
+        self.assertIn("-->x", before, "the stalled side is not marked")
+        self.assertIn("<-->", after, "a healthy side was marked as stalled")
+
+    def test_both_ends_can_stall_at_once(self):
+        lines = self.chain(self.SIDES,
+                           {"client": {"connections": 4, "silent_return": 4},
+                            "backend": {"connections": 9, "silent_return": 8}})
+        self.assertEqual(self.ESC.sub("", lines[0]).count("-->x"), 2)
+        self.assertEqual(len([l for l in lines if "nothing coming back" in l]), 2)
+
+    def test_the_arrow_carries_the_state_of_the_leg_it_spans(self):
+        """It used to be printed green whatever the leg was doing, so a box
+        with a fault facing its clients drew a healthy arrow to them."""
+        sides = [{"side": "downstream", "state": "fail"},
+                 {"side": "local", "state": "pass"},
+                 {"side": "upstream", "state": "pass"}]
+        line = self.chain(sides, color=True)[0]
+        arrow = line.split("this box")[0]
+        self.assertIn(nd.SEV_COLOR["critical"], arrow,
+                      "the arrow to a failing side is not coloured as one")
+
+
+class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
+    """The arrows either side of a box that relays, tested by calling the
+    viewer's own function rather than by reading the page source.
+
+    The source-text guard next door holds one rule - that nothing splits the
+    heads except the direction counters - and it cannot tell whether the split
+    ever happens. These run the real function and read what comes back, which
+    is the only way to catch an arrow that is drawn the wrong way round.
+    """
+
+    SIDES = [{"side": "downstream", "state": "pass"},
+             {"side": "local", "state": "pass"},
+             {"side": "upstream", "state": "pass"}]
+
+    def _arrow_js(self):
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+        # The real escapeHtml, and the page's own constants taken from the
+        # page. A test carrying its own copy of ZONE_NAME would pass while the
+        # viewer titled the arrow something else.
+        out = []
+        for m in re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S):
+            out.append(m.group(0))
+        for name in ("escapeHtml", "boundaryArrow"):
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        return node, "\n".join(out)
+
+    def draw(self, flows, sides=None, at=(1, 2)):
+        """The arrows at the named boundaries, as the viewer would build them."""
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        node, src = self._arrow_js()
+        body = (f"const sides = {_json.dumps(sides or self.SIDES)};\n"
+                f"const flows = {_json.dumps(flows)};\n"
+                f"process.stdout.write(JSON.stringify("
+                f"{list(at)}.map(i => boundaryArrow(sides, i, flows))));")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write(src + "\n" + body)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path], capture_output=True, text=True,
+                                 timeout=30, encoding="utf-8")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            _os.unlink(path)
+
+    def assertRelays(self, arrow):
+        self.assertIn("⇄", arrow, "a relay is being drawn as a one-way chain")
+        self.assertNotIn("split", arrow)
+
+    def assertSplit(self, arrow):
+        self.assertIn("split", arrow)
+        self.assertIn('<span class="pass">→</span>', arrow, "no head going out")
+        self.assertIn('<span class="fail">←</span>', arrow, "no head coming back")
+
+    def test_a_relay_draws_both_directions_by_default(self):
+        """The common case. Traffic crosses this boundary both ways and one
+        head drew a box that relays as a one-way chain."""
+        for arrow in self.draw({}):
+            self.assertRelays(arrow)
+
+    def test_a_stalled_return_splits_the_heads(self):
+        client, _ = self.draw({"client": {"connections": 8, "silent_return": 8}})
+        self.assertSplit(client)
+
+    def test_exactly_half_the_connections_is_enough(self):
+        """The documented edge: quiet * 2 >= connections."""
+        client, _ = self.draw({"client": {"connections": 8, "silent_return": 4}})
+        self.assertSplit(client)
+
+    def test_a_minority_going_quiet_is_not_the_side_stalling(self):
+        """Three of forty is a different sentence from forty of forty, and the
+        arrow is the one place on the page with no room for the denominator."""
+        client, _ = self.draw({"client": {"connections": 40, "silent_return": 3}})
+        self.assertRelays(client)
+
+    def test_counters_the_kernel_never_reported_draw_nothing_new(self):
+        """A silence of zero must read as "not asked", never as "all quiet"."""
+        client, _ = self.draw({"client": {"connections": 12, "silent_return": 0,
+                                          "direction_readable": 0}})
+        self.assertRelays(client)
+
+    def test_a_side_with_no_connections_at_all_cannot_stall(self):
+        client, _ = self.draw({"client": {"connections": 0, "silent_return": 0}})
+        self.assertRelays(client)
+
+    def test_each_boundary_reads_its_own_side(self):
+        """The middle box's whole point: the leg to the clients and the leg to
+        the backends are different equipment with different owners, and a
+        stall on one must not colour the other."""
+        client, backend = self.draw({"client": {"connections": 6, "silent_return": 6},
+                                     "backend": {"connections": 6, "silent_return": 0}})
+        self.assertSplit(client)
+        self.assertRelays(backend)
+
+    def test_the_far_side_can_stall_while_the_clients_are_fine(self):
+        client, backend = self.draw({"client": {"connections": 6, "silent_return": 0},
+                                     "backend": {"connections": 6, "silent_return": 5}})
+        self.assertRelays(client)
+        self.assertSplit(backend)
+
+    def test_both_ends_can_stall_at_once(self):
+        """Two faults facing opposite ways. Neither explains the other, and the
+        page has to be able to say both rather than picking one."""
+        client, backend = self.draw({"client": {"connections": 4, "silent_return": 4},
+                                     "backend": {"connections": 9, "silent_return": 7}})
+        self.assertSplit(client)
+        self.assertSplit(backend)
+
+    def test_the_arrow_carries_the_state_of_the_leg_it_spans(self):
+        """An unsplit arrow is not decoration: it takes the colour of the side
+        away from the box, because that is the leg it spans."""
+        sides = [{"side": "downstream", "state": "fail"},
+                 {"side": "local", "state": "pass"},
+                 {"side": "upstream", "state": "warn"}]
+        client, backend = self.draw({}, sides=sides)
+        self.assertIn('class="zarrow fail"', client)
+        self.assertIn('class="zarrow warn"', backend)
+
+    def test_the_split_says_how_many_of_how_many(self):
+        client, _ = self.draw({"client": {"connections": 9, "silent_return": 7}})
+        self.assertIn("7 of 9 connections", client)
 
 
 class TestBothDirections(unittest.TestCase):

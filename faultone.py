@@ -12431,6 +12431,40 @@ function renderHopChain(data){
 const RELATION_LABEL = {cause: 'the cause', corroborates: 'backs it up',
                         explained: 'caused by it', unrelated: 'separate problem'};
 
+const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
+                   upstream: 'what this box depends on'};
+
+// One boundary between two zones. A proxy relays, so traffic crosses this in
+// both directions and a single head drew a box that relays as a one-way chain.
+//
+// Named and returning a string rather than built inline, so a test can call it
+// with a side and read what comes back. The version of this that lived in a
+// template literal could only be checked by searching the page source for the
+// field it was supposed to read, which pins how the code is written rather
+// than what it draws - and that is the shape of test that held a drawing bug
+// in place here once already.
+//
+// Both heads take one colour by default, from the measured state of the leg
+// the arrow spans. Splitting them is allowed on exactly one signal: lastsnd
+// against lastrcv, this box sending and nothing coming back. A retransmit
+// ratio is a single number for a connection and cannot say which direction
+// lost the packet, so colouring a return head from it would be an invented
+// measurement drawn with more authority than anything else on the page.
+function boundaryArrow(sides, i, flows){
+  const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
+  const near = (flows || {})[leg.side === 'downstream' ? 'client' : 'backend'] || {};
+  const quiet = near.silent_return || 0;
+  if(quiet && near.connections && quiet * 2 >= near.connections){
+    return `<div class="zarrow split" title="${escapeHtml(
+      quiet + ' of ' + near.connections + ' connections: this box is sending, '
+      + 'nothing is coming back')}">`
+      + '<span class="pass">→</span><span class="fail">←</span></div>';
+  }
+  return `<div class="zarrow ${leg.state}" title="${
+    escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
+    + '<span>⇄</span></div>';
+}
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -12480,43 +12514,11 @@ function renderDiagnosis(data, opts){
   // zone greys out. Hiding it there restated the strip for a reader who can
   // already read the strip, and withheld it from the one who cannot.
   const sides = data.sides || [];
-  const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
-                     upstream: 'what this box depends on'};
+  const sideFlows = ((data.raw || {}).tcp_flows || {}).by_side || {};
   const sidesHtml = sides.length ? `
     <div class="zones">
       ${sides.map((z, i) => `
-        ${i ? (() => {
-          // A proxy relays: traffic crosses this boundary in both directions,
-          // and one arrow drew it as a one-way chain. Both heads take the same
-          // colour, from the measured state of the side away from the box,
-          // because that is the leg the arrow spans.
-          //
-          // Deliberately not one head per direction with its own colour. A
-          // retransmit ratio is a single number for a connection and cannot
-          // say whether the data or the returning ack went missing, and the
-          // trace is outbound only - the report says so itself. Colouring a
-          // return arrow separately would be an invented measurement, drawn
-          // with more authority than anything else on the page.
-          const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
-          // Split the heads only where two counters disagree about direction.
-          // lastsnd against lastrcv: this box sending, and nothing coming back
-          // for seconds. Anywhere else the pair stays one colour, because a
-          // retransmit ratio is a single number and cannot be told apart by
-          // direction, and guessing would be a measurement nobody took drawn
-          // on the diagram people read first.
-          const flows = ((data.raw || {}).tcp_flows || {}).by_side || {};
-          const near = flows[leg.side === 'downstream' ? 'client' : 'backend'] || {};
-          const quiet = near.silent_return || 0;
-          if(quiet && near.connections && quiet * 2 >= near.connections){
-            return `<div class="zarrow split" title="${escapeHtml(
-              quiet + ' of ' + near.connections + ' connections: this box is sending, '
-              + 'nothing is coming back')}">`
-              + '<span class="pass">→</span><span class="fail">←</span></div>';
-          }
-          return `<div class="zarrow ${leg.state}" title="${
-            escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
-            + '<span>⇄</span></div>';
-        })() : ''}
+        ${i ? boundaryArrow(sides, i, sideFlows) : ''}
         <div class="zone ${z.state}">
           <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}</div>
           ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
@@ -13518,13 +13520,45 @@ def render_text_report(report, color=False, width=None):
                 # Not "not checked": the socket table was read and there was
                 # nothing coming in. That is an answer, not a gap.
                 "skip": "none connected"}
+        zname = {"downstream": "clients in", "local": "this box",
+                 "upstream": "depends on"}
         cells = []
         for zone in sides:
-            name = {"downstream": "clients in", "local": "this box",
-                    "upstream": "depends on"}[zone["side"]]
             via = f" ({zone['via']})" if zone.get("via") else ""
-            cells.append(f"{name}{via} {tint(word[zone['state']], sev[zone['state']])}")
-        out.append("  " + tint("  ->  ", "ok").join(cells))
+            cells.append(f"{zname[zone['side']]}{via} "
+                         f"{tint(word[zone['state']], sev[zone['state']])}")
+        # A box that relays is not a one-way chain. The page grew a second
+        # head on these arrows when that was found; the terminal kept a single
+        # "->", always green, so the same report drew a proxy one way here and
+        # both ways there. The colour comes from the leg the arrow spans, the
+        # way the page takes it, rather than from a fixed "ok".
+        #
+        # The split shape has to survive losing its colour. This line is what
+        # gets pasted into a ticket, and two heads told apart only by an escape
+        # sequence become one indistinguishable arrow the moment it is.
+        flows = (((report.get("raw") or {}).get("tcp_flows") or {})
+                 .get("by_side")) or {}
+        line, notes = cells[0], []
+        for i in range(1, len(sides)):
+            leg = sides[i - 1] if sides[i]["side"] == "local" else sides[i]
+            near = flows.get("client" if leg["side"] == "downstream"
+                             else "backend") or {}
+            quiet, total = near.get("silent_return") or 0, near.get("connections") or 0
+            # The same rule the page splits on, and nothing else: two counters
+            # disagreeing, on at least half the connections. A retransmit ratio
+            # cannot be told apart by direction and must never reach this.
+            if quiet and total and quiet * 2 >= total:
+                line += tint("  -->x  ", "critical") + cells[i]
+                notes.append(f"nothing coming back from {zname[leg['side']]}: "
+                             f"{quiet} of {total} connections, while this box "
+                             f"is still sending")
+            else:
+                line += tint("  <-->  ", sev[leg["state"]]) + cells[i]
+        out.append("  " + line)
+        # The page puts this in a tooltip. There is nothing to hover here, and
+        # a shape nobody can look up is worse than a sentence.
+        for note in notes:
+            out.append(f"  -> {note}")
         out.append("")
 
     stages = report.get("stages") or []

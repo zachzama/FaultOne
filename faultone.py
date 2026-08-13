@@ -1860,6 +1860,11 @@ def parse_socket_states(text, own_access=(None, None)):
     # client, and a server with clients connected to it right now has a working
     # network however little it can reach on its own.
     listening, established, bound, peers, outbound_dests = set(), [], [], [], []
+    # Closed connections still holding their four-tuple. Kept apart from the
+    # established ones because they are not connections this box has - they
+    # must not reach the inbound and outbound totals, or the per-address
+    # serving counts - and they do still occupy the port.
+    waiting_dests = []
     # Which of this box's own addresses each live connection arrived on. The
     # port was already kept and the address thrown away, which answered "is
     # anyone connected" and could never answer "connected to what". On a box
@@ -1903,6 +1908,15 @@ def parse_socket_states(text, own_access=(None, None)):
             local_ends.append((peer_host(local), peer_port(local)))
             peers.append((peer_host(peer), peer_port(local)))
             outbound_dests.append((peer_host(peer), peer_port(peer)))
+        elif key == "TIME_WAIT" and local:
+            # A connection that has closed still owns its four-tuple until
+            # the timer expires, so the port it used cannot serve another
+            # connection to the same destination yet. On a box that opens
+            # short connections to a small set of places these outnumber the
+            # established ones several times over, and leaving them out
+            # understated the pressure by exactly that factor.
+            if (peer_host(peer), peer_port(local)) != own_access:
+                waiting_dests.append((peer_host(peer), peer_port(peer)))
         if key in ("SYN_SENT", "CLOSE_WAIT") and peer:
             host = peer_host(peer)
             pending.setdefault(key, {})
@@ -1913,10 +1927,13 @@ def parse_socket_states(text, own_access=(None, None)):
     # traffic to thousands of places those two numbers are nothing alike.
     # Counted here and reduced to numbers: the destination list is every place
     # this box has been, and does not belong in a report.
-    dest_counts = {}
-    for host, port in outbound_dests:
+    dest_counts, waiting_counts = {}, {}
+    for host, port in outbound_dests + waiting_dests:
         if host and port and peer_port(f"x:{port}") and port not in listening:
             dest_counts[(host, port)] = dest_counts.get((host, port), 0) + 1
+    for host, port in waiting_dests:
+        if host and port and peer_port(f"x:{port}") and port not in listening:
+            waiting_counts[(host, port)] = waiting_counts.get((host, port), 0) + 1
     worst = max(dest_counts.items(), key=lambda kv: (kv[1], kv[0]), default=None)
     inbound = sum(1 for p in established if p and p in listening)
     # Counted per address, never listed per connection. Who is connected is the
@@ -1939,6 +1956,10 @@ def parse_socket_states(text, own_access=(None, None)):
             "outbound_destinations": len(dest_counts),
             "outbound_worst_dest": f"{worst[0][0]}:{worst[0][1]}" if worst else None,
             "outbound_worst_count": worst[1] if worst else 0,
+            # How much of that is connections already closed. It changes the
+            # advice rather than the number: these drain on their own, and
+            # the fix is the churn making them, not a wider port range.
+            "outbound_worst_waiting": waiting_counts.get(worst[0], 0) if worst else 0,
             "inbound": inbound, "outbound": len(established) - inbound}
 
 
@@ -7480,6 +7501,10 @@ def _check_server_limits(stats, findings, counter_window, raw):
     # headroom, because its connections are spread across all of them.
     total = life.get("ephemeral_total")
     worst = sock.get("outbound_worst_count") or 0
+    # How much of the pressure is already-closed connections waiting out
+    # their timer. Same number of ports held either way, different thing to
+    # go and change.
+    waiting = sock.get("outbound_worst_waiting") or 0
     if total and worst:
         dests = sock.get("outbound_destinations") or 1
         where = sock.get("outbound_worst_dest") or "one destination"
@@ -7497,9 +7522,16 @@ def _check_server_limits(stats, findings, counter_window, raw):
                            f"spread across {dests:,} destination(s). When the range is "
                            f"exhausted for that destination this box cannot open another "
                            f"connection to it, and the failure looks exactly like the far "
-                           f"end refusing it. Widen ip_local_port_range, or find what is "
-                           f"holding the sockets (TIME_WAIT is "
-                           f"{states.get('TIME_WAIT', 0):,}).",
+                           f"end refusing it. "
+                           + (f"{waiting:,} of those have already closed and are only "
+                              f"waiting out their timer. They come back on their own, "
+                              f"so what to change is how quickly this box opens and "
+                              f"closes connections to that one destination - reusing "
+                              f"them, or pooling them - rather than the size of the "
+                              f"range."
+                              if waiting * 2 >= worst else
+                              f"Widen ip_local_port_range, or find what is holding the "
+                              f"sockets (TIME_WAIT is {states.get('TIME_WAIT', 0):,})."),
             })
 
     # File descriptors: at the ceiling a service simply stops accepting.

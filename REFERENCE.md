@@ -88,7 +88,23 @@ different destinations at once. `ephemeral_ports_low` counted every outbound
 socket against the range, which reports exhaustion on a box holding 26,000
 connections spread over 250 destinations, about a hundred per destination, and
 nowhere near a limit. It now measures the busiest single destination, names it,
-and says how many places the rest are spread across:
+and says how many places the rest are spread across.
+
+**A closed connection still holds its port.** A socket in `TIME_WAIT` owns its
+four-tuple until the timer expires, so it is not available for another
+connection to the same destination — and only the established ones were being
+counted. On a box that opens short connections to a small set of places the
+closed ones outnumber the live ones several times over, so the pressure was
+understated by that factor, on exactly the shape of box where the range runs
+out first. They count now, and nowhere else: they are not connections this box
+has, so they stay out of the inbound and outbound totals and the per-address
+serving counts.
+
+Which of the two is holding the ports changes the advice rather than the
+number. Where the closed ones are most of it, they come back on their own and
+what to change is how quickly connections are opened and closed to that one
+destination — reuse, or pooling. Where they are not, the range itself is the
+thing to widen. The finding says whichever applies instead of naming both.
 
 | | old reading | correct reading |
 |---|---|---|
@@ -1344,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **161** | Distinct conclusions it can reach and state in plain language. 134 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1128 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1133 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 161 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1959,7 +1975,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1128 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1133 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3397,7 +3413,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1128 tests, no dependencies, no network, a few seconds, so they run
+1133 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

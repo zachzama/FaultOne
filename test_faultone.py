@@ -5583,6 +5583,71 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestClosedConnectionsStillHoldTheirPort(unittest.TestCase):
+    """A socket in TIME_WAIT owns its four-tuple until the timer runs out, so
+    the port it used cannot serve another connection to the same destination.
+
+    Only the established ones were counted against the range. On a box that
+    opens short connections to a small set of places the closed ones outnumber
+    them several times over, so the pressure was understated by that factor -
+    on exactly the shape of box where the range runs out first.
+    """
+
+    def table(self, estab=0, waiting=0, dest="10.9.9.9", port=5432):
+        rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+                "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*"]
+        rows += [f"ESTAB 0 0 10.0.0.5:{40000 + i} {dest}:{port}" for i in range(estab)]
+        rows += [f"TIME-WAIT 0 0 10.0.0.5:{50000 + i} {dest}:{port}"
+                 for i in range(waiting)]
+        return nd.parse_socket_states("\n".join(rows) + "\n")
+
+    def test_closed_connections_count_against_the_destination(self):
+        got = self.table(estab=4, waiting=30)
+        self.assertEqual(got["outbound_worst_count"], 34,
+                         "closed connections are not being counted against the port range")
+        self.assertEqual(got["outbound_worst_waiting"], 30)
+
+    def test_they_are_not_counted_as_connections_this_box_has(self):
+        """They hold a port and nothing else. Counting them as live traffic
+        would inflate every other number read off this table."""
+        got = self.table(estab=4, waiting=30)
+        self.assertEqual(got["outbound"], 4)
+        self.assertEqual(got["inbound"], 0)
+        self.assertEqual(got["states"]["TIME_WAIT"], 30)
+
+    def test_the_established_count_alone_still_works(self):
+        got = self.table(estab=6)
+        self.assertEqual(got["outbound_worst_count"], 6)
+        self.assertEqual(got["outbound_worst_waiting"], 0)
+
+    def test_a_box_with_only_closed_sockets_still_shows_the_pressure(self):
+        """The end state of the churn this is written for: everything closed,
+        every port still held, and nothing established to count."""
+        got = self.table(waiting=40)
+        self.assertEqual(got["outbound_worst_count"], 40)
+        self.assertEqual(got["outbound"], 0)
+
+    def test_the_advice_changes_when_the_ports_free_themselves(self):
+        """Same number of ports held, different thing to go and change."""
+        def message(estab, waiting):
+            sock = self.table(estab=estab, waiting=waiting)
+            findings = []
+            nd._check_server_limits(
+                {"lifetime": {"ephemeral_low": 32768, "ephemeral_high": 32868,
+                              "ephemeral_total": 100}},
+                findings, None, {"sockets": sock})
+            return next((f["message"] for f in findings
+                         if f["code"] == "ephemeral_ports_low"), "")
+
+        # Over EPHEMERAL_PRESSURE_PCT of the range either way, so the
+        # finding fires in both and only the advice differs.
+        churn = message(estab=5, waiting=85)
+        self.assertIn("waiting out their timer", churn)
+        self.assertNotIn("Widen ip_local_port_range", churn)
+        held = message(estab=85, waiting=5)
+        self.assertIn("Widen ip_local_port_range", held)
+
+
 class TestWhatArrivedAgainstWhatLeft(unittest.TestCase):
     """`relay_volume_lopsided`. Context, never a fault, because a box that
     inspects traffic is supposed to stop some of it - so the shape it reports

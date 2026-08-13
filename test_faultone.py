@@ -5778,7 +5778,7 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         """The column for one side, as the page built it."""
         for m in re.finditer(r'<div class="pcol (\w+)">(.*?)(?=<div class="pcol |$)',
                              html, re.S):
-            if (side == "backend") == ("depends on" in m.group(2)):
+            if (side == "backend") == ("connects out to" in m.group(2)):
                 return m.group(1), m.group(2)
         return None, ""
 
@@ -6012,6 +6012,59 @@ class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
                 self.assertIsNone(hop.get("loss_pct"),
                                   "a hop measured clean is carrying a loss "
                                   "figure invented from a fault elsewhere")
+
+
+class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
+    """One line decides which side a connection is on:
+
+        flow["side"] = "client" if local_port in listen_ports else "backend"
+
+    A connection whose local port is one this box listens on is a client's, and
+    everything else is one this box opened. That is all it means. It says
+    nothing about whether the far end is a database in the next rack or the
+    destination a user asked for - on a forward proxy it is mostly the latter,
+    because a request for a public site becomes an outbound connection from an
+    ephemeral port and lands on exactly the same side as the database does.
+
+    It used to be called "what this box depends on", which reads as
+    infrastructure and undersells it on the box this tool was written for.
+    """
+
+    def test_the_side_is_named_for_the_connections_not_a_guess_at_their_role(self):
+        for code in ("tcp_flow_loss_backends", "tcp_return_stalled_backends",
+                     "path_jitter_backends"):
+            with self.subTest(code=code):
+                owner = dict((c, o) for c, o, _h, _w in nd.VERDICT_RULES)[code]
+                self.assertIn("connects out to", owner)
+                self.assertNotIn("depends on", owner)
+
+    def test_the_picture_and_the_verdict_use_the_same_words(self):
+        """A column headed one thing over a verdict blaming another is the
+        contradiction this page has spent a long time getting rid of."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        backend = [s for s in rep["path_legs"] if s["side"] == "backend"][0]
+        self.assertIn("connects out to", backend["title"])
+        self.assertIn("connects out to", rep["verdict"]["owner"])
+        zone = [z for z in rep["sides"] if z["side"] == "upstream"][0]
+        self.assertIn("connects out to", zone["label"])
+
+    def test_an_internal_segment_is_only_claimed_where_it_is_one(self):
+        """The message asserted "an internal segment, not the internet, and not
+        the carrier" outright. True of a reverse proxy in front of a database,
+        false of a forward proxy whose outbound connections are the public sites
+        its users asked for - and the side tells them apart not at all, because
+        it is decided by the local port. The addresses do."""
+        self.assertIn("internal segment", nd._where_that_is("10.0.0.90:5432"))
+        self.assertIn("out on the internet", nd._where_that_is("203.0.113.9:443"))
+
+    def test_a_mixture_claims_neither(self):
+        """Some private and some public is the ordinary shape of a box with a
+        database and an upstream API, and there is no one sentence for it."""
+        self.assertEqual(nd._where_that_is("10.0.0.90:5432, 203.0.113.9:443"), "")
+        self.assertEqual(nd._where_that_is(""), "")
 
 
 class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):

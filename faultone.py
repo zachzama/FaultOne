@@ -3513,6 +3513,27 @@ def flow_delivered(flow):
     return bool(flow.get("dsack_dups")) and bool(flow.get("bytes_retrans"))
 
 
+def _where_that_is(peers):
+    """Whether "an internal segment" is a claim this is entitled to make.
+
+    It used to say so outright - "an internal segment, not the internet, and not
+    the carrier" - which is true of a reverse proxy in front of a database and
+    false of a forward proxy, where the connections this box opens are the
+    destinations its users asked for. Which side a connection is on is decided
+    by whether its local port was one this box listens on, and that says nothing
+    at all about where the far end sits. The addresses do, so they are asked.
+    """
+    hosts = [p.rsplit(":", 1)[0] if p.count(":") == 1 else p
+             for p in (peers or "").split(", ") if p]
+    if not hosts:
+        return ""
+    if all(is_private_ip(h) for h in hosts):
+        return " - an internal segment, not the internet and not the carrier"
+    if not any(is_private_ip(h) for h in hosts):
+        return " - destinations out on the internet rather than an internal segment"
+    return ""
+
+
 def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
     """Aggregate per-connection statistics into who owns the problem.
 
@@ -5609,7 +5630,7 @@ VERDICT_RULES = [
      "The same connections have been far faster, so this is not the internet "
      "being far away - traffic is waiting somewhere on the way in. A full uplink "
      "and an over-buffered edge device both look like this."),
-    ("path_jitter_backends", "the path between this box and what it depends on",
+    ("path_jitter_backends", "the path between this box and what it connects out to",
      "The delay to the backends will not sit still",
      "Measured on the real connections rather than probes. Nothing needs to be "
      "lost for this to bite: a retransmit timer sized for the worst case is a "
@@ -5624,7 +5645,7 @@ VERDICT_RULES = [
      "The same connections have been far faster. Something on the path is "
      "holding traffic rather than dropping it - the classic signature of a link "
      "running full with a large buffer in front of it."),
-    ("tcp_flow_loss_backends", "the segment between this box and what it depends on",
+    ("tcp_flow_loss_backends", "the segment between this box and what it connects out to",
      "The loss is on what this box talks to, not on what talks to it",
      "Client connections are clean, so the service and the path to your users "
      "are fine. Look at the internal segment between here and the backend named "
@@ -5644,7 +5665,7 @@ VERDICT_RULES = [
     # they are what the split arrowhead has always been drawn from. It was drawn
     # without a finding underneath it for long enough that a report could show a
     # broken return leg over a verdict reading "no fault found".
-    ("tcp_return_stalled_backends", "what this box depends on, or the path back from it",
+    ("tcp_return_stalled_backends", "what this box connects out to, or the path back from it",
      "This box is sending to its backends and nothing is coming back",
      "The connections are open and this box is still sending on them. Nothing "
      "has arrived back - no reply and no acknowledgement either, which is what "
@@ -6877,7 +6898,7 @@ def build_path_legs(raw=None, sides=None):
 
         peer = str(near.get("worst_peer") or "")
         far = (peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer) or (
-            "what this box depends on" if name == "backend" else "clients")
+            "what this box connects out to" if name == "backend" else "clients")
         this = "this box"
         legs = [
             {"direction": "out", "state": out_state,
@@ -6892,7 +6913,7 @@ def build_path_legs(raw=None, sides=None):
         out.append({
             "side": name,
             "state": zoned.get(zone[name]) or "pass",
-            "title": ("this box and what it depends on" if name == "backend"
+            "title": ("this box and what it connects out to" if name == "backend"
                       else "clients and this box"),
             "peer": far,
             # The side's own facts, kept off the legs. A retransmit ratio counts
@@ -6925,7 +6946,7 @@ def build_sides(findings, raw=None):
          "the load balancer, the edge, and the path in"),
         ("local", "this box",
          "its link, its hardware, and its own limits"),
-        ("upstream", "what this box depends on",
+        ("upstream", "what this box connects out to",
          "backends, DNS, and the path out"),
     ]
     rank = {"pass": 0, "warn": 1, "fail": 2}
@@ -9572,7 +9593,7 @@ def _check_flows(raw, findings):
             "layer": 4,
             "code": "tcp_return_stalled_backends",
             "message": _stalled_message(by_side["backend"],
-                                        "what this box depends on"),
+                                        "what this box connects out to"),
         })
     if (by_side.get("client") or {}).get("return_stalled"):
         findings.append({
@@ -9598,8 +9619,8 @@ def _check_flows(raw, findings):
                             f"clients opened to it: {stats['backends_lossy']} backend "
                             f"connection(s) losing traffic (worst {worst}% by {basis}, to "
                             f"{peers}) while every client connection is clean. That puts it "
-                            f"between this box and what it depends on - an internal segment, "
-                            f"not the internet, and not the carrier."),
+                            f"between this box and what it connects out to"
+                            f"{_where_that_is(peers)}."),
             })
             return
         findings.append({
@@ -9629,7 +9650,7 @@ def _check_flows(raw, findings):
         findings.append({
             "severity": "warning", "layer": 3, "code": "queuing_delay_backends",
             "message": _queue_message(sides["backend"],
-                                      "between this box and what it depends on"),
+                                      "between this box and what it connects out to"),
         })
     elif sides.get("client", {}).get("queued"):
         findings.append({
@@ -9666,7 +9687,7 @@ def _check_flows(raw, findings):
         findings.append({
             "severity": "warning", "layer": 3, "code": "path_jitter_backends",
             "message": _jitter_message(sides["backend"],
-                                       "between this box and what it depends on"),
+                                       "between this box and what it connects out to"),
         })
     elif _jitter_bad(sides.get("client") or {}):
         findings.append({
@@ -13224,7 +13245,7 @@ const RELATION_LABEL = {cause: 'the cause', corroborates: 'backs it up',
                         explained: 'caused by it', unrelated: 'separate problem'};
 
 const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
-                   upstream: 'what this box depends on'};
+                   upstream: 'what this box connects out to'};
 
 // One boundary between two zones. A proxy relays, so traffic crosses this in
 // both directions and a single head drew a box that relays as a one-way chain.

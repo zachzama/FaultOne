@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1209 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1213 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1839,7 +1839,7 @@ every address the box holds, so it has no address of its own to compare against.
 
 `relay_volume_lopsided` asks the next question along: not whether the sessions
 exist, but whether anything is crossing them. It compares what arrived from the
-clients this box serves against what left towards what it depends on, both read
+clients this box serves against what left towards what it connects out to, both read
 from `bytes_received` and `bytes_sent` on the connections themselves.
 
 It is context for the same reason, and the reason is sharper here. A box that
@@ -1989,7 +1989,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1209 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1213 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2652,7 +2652,7 @@ other latency reading here is blind to. A ping and a per-hop delta can say how
 long the trip took; neither can say how much of it was queue.
 
 ```
-1 connection(s) between this box and what it depends on are waiting in a queue
+1 connection(s) between this box and what it connects out to are waiting in a queue
 rather than travelling: the worst is 10.0.0.90 at 96.0ms against its own best
 of 8.0ms, so 88.0ms of every round trip is spent buffered.
 ```
@@ -2698,7 +2698,7 @@ A carrier ticket for the inside of your own rack. Now:
 
 | | |
 |---|---|
-| `tcp_flow_loss_backends` | Clients clean, backends lossy. Owner: *the segment between this box and what it depends on*. The service and the path to your users are fine. |
+| `tcp_flow_loss_backends` | Clients clean, backends lossy. Owner: *the segment between this box and what it connects out to*. The service and the path to your users are fine. |
 | `tcp_flow_loss_clients` | Backends clean, clients lossy. Owner: *the path between this box and the people using it*. The service itself is healthy. |
 
 Both rank above every direction-blind loss verdict, because the direction
@@ -2739,7 +2739,7 @@ means nothing is coming back.
 
 | | |
 |---|---|
-| `tcp_return_stalled_backends` | Sending to the backends, nothing returning. Owner: *what this box depends on, or the path back from it*. |
+| `tcp_return_stalled_backends` | Sending to the backends, nothing returning. Owner: *what this box connects out to, or the path back from it*. |
 | `tcp_return_stalled_clients` | Answering clients, nothing acknowledged. Owner: *the path back to the people using it*. The way in works and the service is answering. |
 
 Both rank **below** the two loss findings above: a side losing traffic is the
@@ -3475,7 +3475,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1209 tests, no dependencies, no network, a few seconds, so they run
+1213 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

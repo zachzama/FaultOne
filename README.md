@@ -48,7 +48,7 @@ It fits two shapes of box and tells them apart on its own:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
-  <img alt="A FaultOne report naming a client-side fault: the verdict and who owns it, the three boxes showing clients in FAULT while this box and what it depends on are ok, and the stage strip reading clients FAIL with internet PASS" src="docs/hero-light.svg">
+  <img alt="A FaultOne report naming a client-side fault: the verdict and who owns it, the three boxes showing clients in FAULT while this box and what it connects out to are ok, and the stage strip reading clients FAIL with internet PASS" src="docs/hero-light.svg">
 </picture>
 
 Three boxes and an arrow answer *where* before anything asks you to know what a
@@ -373,7 +373,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1209 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1213 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

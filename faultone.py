@@ -3258,6 +3258,16 @@ def parse_tcp_flows(text, max_flows=FLOW_MAX):
         # the kernel does not offer it, so "nothing arrived" stays separable
         # from "nobody asked" - the same distinction direction_readable makes.
         flow["bytes_received"] = _flow_num(kv.get("bytes_received"))
+        # A bare word rather than a key and a value, so the pair matcher
+        # above cannot see it: the kernel prints "app_limited" or prints
+        # nothing. It means the sending was paced by whatever is feeding the
+        # socket rather than by the network - which is the normal state of
+        # any connection not filling its window, so it is recorded and
+        # deliberately not graded. There is no share of active time behind
+        # it the way there is for the receive window and the send buffer,
+        # and those two use exactly that share to avoid firing on a healthy
+        # box. A finding here would have nothing to hold it back.
+        flow["app_limited"] = bool(re.search(r"\bapp_limited\b", blob))
         # The fields that know which way a connection stopped working. Every one
         # of these was already in the line this parser reads and was dropped on
         # the floor, so the tool said the return path could not be measured
@@ -3535,6 +3545,10 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # than averaged: the question is about the side, not about any
                 # connection on it.
                 "bytes_in": sum((f.get("bytes_received") or 0) for f in group),
+                # Connections the kernel says were waiting on this box to
+                # supply data rather than on the network to carry it.
+                # Reported, never judged: see the parser for why.
+                "app_limited": sum(1 for f in group if f.get("app_limited")),
                 "bytes_out": sum((f.get("bytes_sent") or 0) for f in group),
                 # Whether the kernel offered the received counter at all, so a
                 # side that carried nothing stays separable from one nobody

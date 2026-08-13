@@ -5583,6 +5583,47 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
+    """`app_limited` is a bare word in the socket line, not a key and a value,
+    so the pair matcher cannot see it and it needs its own reading.
+
+    Recorded and never graded. The receive window and the send buffer both come
+    with a share of active time, and both findings built on them use that share
+    to stay quiet on a healthy box. This flag has no such number behind it - the
+    kernel sets it on any connection not filling its window, which is most of
+    them - so there is nothing to hold a finding back.
+    """
+
+    def flow(self, line):
+        return nd.parse_tcp_flows(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "ESTAB 0 0 10.0.0.5:443 203.0.113.9:51234\n\t " + line + "\n")[0]
+
+    def test_the_bare_word_is_read(self):
+        f = self.flow("cubic rtt:3.5/1.2 bytes_sent:120000 app_limited")
+        self.assertIs(f["app_limited"], True)
+
+    def test_its_absence_is_read_too(self):
+        f = self.flow("cubic rtt:3.5/1.2 bytes_sent:120000")
+        self.assertIs(f["app_limited"], False)
+
+    def test_a_longer_word_containing_it_does_not_count(self):
+        """Word boundaries, so a future counter named for it cannot switch this
+        on by accident."""
+        f = self.flow("cubic rtt:3.5/1.2 not_app_limited_really:4")
+        self.assertIs(f["app_limited"], False)
+
+    def test_no_finding_is_built_on_it(self):
+        """The guard on the decision above. If this ever becomes a finding it
+        needs a magnitude first, and this test should be the thing that argues
+        with whoever adds one."""
+        with open(nd.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn('"app_limited": sum', src, "it is no longer recorded at all")
+        self.assertNotIn('"code": "app_limited', src)
+        self.assertNotIn("app_limited", {c for c, *_ in nd.VERDICT_RULES})
+
+
 class TestOneListenerAmongSiblings(unittest.TestCase):
     """`service_endpoint_idle`. The address-level check asks whether traffic
     arrives on an address at all, so an address holding three listeners answers

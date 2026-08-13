@@ -5302,6 +5302,46 @@ class TestZones(unittest.TestCase):
                 lit = [z for z in rep["sides"] if z["state"] in ("warn", "fail")]
                 self.assertEqual(bool(lit), worst != "ok")
 
+    def test_the_boxes_and_the_strip_never_disagree_about_the_way_in(self):
+        """Two drawings of the same finding, and they were contradicting each
+        other. The clients box is skipped when nothing is connected, on the
+        grounds that showing it green would claim something was checked - but
+        the strip below never applied that gate, so a service address nothing
+        accepts on lit the clients stage while the box above it read
+        not-applicable. Eight scenarios did this, one of them with the stage
+        failing rather than warning.
+
+        Skip has to mean "nothing to say". A finding is something to say.
+        """
+        for code in sorted(S):
+            setup, kwargs = S[code]
+            mod = fresh()
+            setup(mod)
+            try:
+                report = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+            except Exception:
+                continue
+            with self.subTest(scenario=code):
+                sides = {z["side"]: z for z in (report.get("sides") or [])}
+                strip = {s["stage"]: s["state"] for s in report["stages"]}
+                if sides.get("downstream", {}).get("state") == "skip":
+                    self.assertNotIn(
+                        strip.get("clients"), ("warn", "fail"),
+                        "the clients box says nothing to report while the strip "
+                        "says the clients stage is %s" % strip.get("clients"))
+
+    def test_a_quiet_box_still_skips_the_way_in_rather_than_passing_it(self):
+        """The other half, and the reason the skip exists at all. A box nothing
+        connects to has no inbound path to report on, and a green box there
+        would be a claim that something was checked and found well."""
+        setup, kwargs = S["all_clear"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+        sides = {z["side"]: z["state"] for z in report["sides"]}
+        self.assertEqual(sides["downstream"], "skip")
+        self.assertEqual(sides["local"], "pass")
+
     def test_the_zones_are_shown_on_every_box_including_one_nothing_reaches(self):
         """Hidden here at first, on the grounds that two boxes and an arrow
         restate a seven-stage strip. That optimises for a reader who can

@@ -6445,8 +6445,16 @@ def build_sides(findings, raw=None):
                  else "warn" if mine else "pass")
         # Nothing connects to this box, so there is no inbound path to report
         # on. Showing it green would claim something was checked.
-        if side == "downstream" and not serving:
-            state, mine = "skip", []
+        #
+        # Unless something inbound-facing did fire. Skip means "nothing to say
+        # here", and a finding is something to say: a service address nothing
+        # accepts on, a backlog overflowing, descriptors running out. Those are
+        # about the way in whether or not enough clients are connected right now
+        # to call the box busy, and the threshold for "serving" is three. The
+        # strip below never applied that gate, so the same stage read warn in
+        # one view and not-applicable in the other, on eight scenarios.
+        if side == "downstream" and not serving and not mine:
+            state = "skip"
         entry = {"side": side, "label": label, "detail": detail, "state": state,
                  "because": sorted(f.get("code") for f in mine),
                  "worst": None}

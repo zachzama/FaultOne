@@ -50,6 +50,11 @@ for code in sorted(T.S):
         "corroborated_by": sorted(v.get("corroborated_by") or []),
         "unrelated": sorted(u["code"] for u in (v.get("unrelated") or [])),
         "stages": {s["stage"]: s["state"] for s in r["stages"]},
+        # The three boxes, which nothing here compared. They are a
+        # user-facing answer to "where is it" and they can move without
+        # a stage moving: the strip and the panel classify a finding by
+        # different rules, so one can change while the other holds.
+        "sides": {z["side"]: z["state"] for z in (r.get("sides") or [])},
     }
 print(json.dumps(out, sort_keys=True))
 '''

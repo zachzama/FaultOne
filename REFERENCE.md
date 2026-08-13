@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 160
+difference is which one it puts at the top, and that is the whole product: 161
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1342,11 +1342,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
+| **Findings** | **161** | Distinct conclusions it can reach and state in plain language. 134 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1121 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1128 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 160 findings are the useful figure** if you want to know what the tool can
+**The 161 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1807,6 +1807,24 @@ It stays silent while connections are stuck in `SYN_SENT`. That is a box trying
 and failing rather than a box not trying, `syn_sent_backlog` already says so,
 and two findings for one condition is how a report stops being a verdict.
 
+`relay_volume_lopsided` asks the next question along: not whether the sessions
+exist, but whether anything is crossing them. It compares what arrived from the
+clients this box serves against what left towards what it depends on, both read
+from `bytes_received` and `bytes_sent` on the connections themselves.
+
+It is context for the same reason, and the reason is sharper here. A box that
+inspects traffic is *supposed* to stop some of it, so a policy refusing requests
+and a box that has quietly stopped forwarding produce the same shape in a socket
+table. Nothing available here separates them, so the message names both and
+judges neither.
+
+The comparison is deliberately crude — an order of magnitude, not a percentage.
+Anything that inspects rewrites what it forwards and anything that terminates
+TLS re-frames it, so the two sides never match closely, and a tight ratio would
+fire on every healthy box of this shape. It also stays silent unless the kernel
+reported `bytes_received` on both sides: a question nobody could answer must not
+read as a side that carried nothing.
+
 **What this does not do** is sweep a subnet. A range cannot be shown
 serviceable by probing it: a silent address in the range is the normal case,
 not a fault, so the sweep returns a list to interpret rather than a verdict,
@@ -1941,7 +1959,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1121 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1128 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2033,6 +2051,8 @@ can say what the bar was rather than "the tool said so".
 | `DIR_SILENCE_RATIO` | **10** | And that many times longer than since it last sent, so the two counters have to disagree by a margin rather than by a moment |
 | `DIR_MIN_BYTES` | **100,000** | Sent on a connection before an answer is owed. Below it there may be nothing to reply to |
 | `DIR_SILENT_SHARE` | **50** | Or the quiet connections carry this much of the side's traffic, however few of them there are. A box holding one long-lived session beside forty short ones is a normal shape, and on it the session that matters is a minority of one — counted alone, a dead one stayed invisible behind its healthy neighbours |
+| `RELAY_MIN_BYTES` | **10,000,000** | Arrived from the clients this box serves before the two sides are worth comparing at all. Below it a lopsided ratio is a quiet box, not a box that stopped relaying |
+| `RELAY_RATIO` | **20** | How many times more arrived on one side than left on the other before it is worth naming. An order of magnitude on purpose: inspection rewrites what it forwards and TLS termination re-frames it, so the two sides never match closely and a tight ratio fires on healthy boxes |
 | `OWN_TLS_MAX_LISTENERS` | **12** | Listeners of our own tested per run, counted per address and port rather than per port. Each costs a handshake or a request against a service that is probably logging connections. Anything past the limit is reported as not checked |
 | `BACKEND_MIN_CONNECTIONS` | **2** | connections to one peer before `--target auto` treats it as a dependency rather than a passing conversation |
 | `BACKEND_MIN_SHARE` | **0.15** | and the share of outbound connections it must hold. A count alone cannot tell a dependency from a busy destination |
@@ -3377,7 +3397,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1121 tests, no dependencies, no network, a few seconds, so they run
+1128 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3456,7 +3476,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 160 findings with readable rules instead of
+> way out - and who owns it. Ranks 161 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

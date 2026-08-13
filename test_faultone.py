@@ -5583,6 +5583,67 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestWhatArrivedAgainstWhatLeft(unittest.TestCase):
+    """`relay_volume_lopsided`. Context, never a fault, because a box that
+    inspects traffic is supposed to stop some of it - so the shape it reports
+    is equally what a working policy looks like."""
+
+    def sides(self, c_in, b_out, readable=True):
+        return {"tcp_flows": {"by_side": {
+            "client": {"bytes_in": c_in, "bytes_out": 0,
+                       "volume_readable": 4 if readable else 0},
+            "backend": {"bytes_in": 0, "bytes_out": b_out,
+                        "volume_readable": 2 if readable else 0}}}}
+
+    def fired(self, raw):
+        out = []
+        nd._check_relay_volume(raw, out)
+        return [f["code"] for f in out]
+
+    def test_traffic_arriving_and_not_leaving_is_reported(self):
+        self.assertEqual(self.fired(self.sides(500_000_000, 1_000_000)),
+                         ["relay_volume_lopsided"])
+
+    def test_it_is_context_and_never_a_fault(self):
+        """A policy refusing requests produces exactly this shape. Grading it
+        as a fault would make the tool wrong on a box doing its job."""
+        out = []
+        nd._check_relay_volume(self.sides(500_000_000, 1_000_000), out)
+        self.assertEqual(out[0]["severity"], "ok")
+        self.assertIn("meant to stop some of it", out[0]["message"])
+
+    def test_a_box_broadly_relaying_says_nothing(self):
+        """Sides never match closely through anything that inspects or
+        re-originates, so most of the way through is all the way through."""
+        self.assertEqual(self.fired(self.sides(500_000_000, 400_000_000)), [])
+
+    def test_the_ratio_is_measured_at_its_documented_edge(self):
+        arrived = nd.RELAY_MIN_BYTES * 10
+        at_edge = arrived / nd.RELAY_RATIO
+        self.assertEqual(self.fired(self.sides(arrived, at_edge)), [],
+                         "at the documented ratio the box is still relaying")
+        self.assertEqual(self.fired(self.sides(arrived, at_edge - 1)),
+                         ["relay_volume_lopsided"])
+
+    def test_a_quiet_box_is_not_a_stopped_one(self):
+        """Below the volume floor a lopsided ratio is two small numbers, and
+        two small numbers are a quiet box rather than a broken one."""
+        self.assertEqual(self.fired(self.sides(nd.RELAY_MIN_BYTES - 1, 0)), [])
+        self.assertEqual(self.fired(self.sides(nd.RELAY_MIN_BYTES, 0)),
+                         ["relay_volume_lopsided"])
+
+    def test_a_kernel_that_cannot_answer_is_not_an_answer(self):
+        """Older kernels print no bytes_received. An unanswerable question
+        must not read as a side that carried nothing."""
+        self.assertEqual(self.fired(self.sides(500_000_000, 0, readable=False)), [])
+
+    def test_a_box_with_only_one_side_is_not_relaying_anything(self):
+        raw = {"tcp_flows": {"by_side": {"client": {"bytes_in": 9e9,
+                                                    "volume_readable": 3}}}}
+        self.assertEqual(self.fired(raw), [])
+        self.assertEqual(self.fired({}), [])
+
+
 class TestOneSessionCanBeTheWholeSide(unittest.TestCase):
     """Counting connections alone had a hole in it.
 
@@ -12360,7 +12421,7 @@ def R(server, ok=True, ms=12.0, answers=("192.0.2.4",), hijack=False):
 SS_HEADER = "State  Recv-Q Send-Q   Local Address:Port   Peer Address:Port  Process\n"
 
 def ss_flow(peer, sent=0, retrans=0, segs=0, retrans_segs=None,
-            rwnd=None, sndbuf=None, port="443"):
+            rwnd=None, sndbuf=None, port="443", received=None):
     """One socket the way `ss -tin` prints it: a state line and its detail block."""
     detail = ["cubic wscale:7,7 rto:220 rtt:12.4/3.1 ato:40 mss:1460 pmtu:1500 cwnd:10"]
     if sent:
@@ -12373,6 +12434,11 @@ def ss_flow(peer, sent=0, retrans=0, segs=0, retrans_segs=None,
         detail.append(f"rwnd_limited:{int(rwnd * 50)}ms({rwnd}%)")
     if sndbuf:
         detail.append(f"sndbuf_limited:{int(sndbuf * 50)}ms({sndbuf}%)")
+    # Left out unless a scenario asks for it: an older kernel does not print
+    # it, and a fixture that always did would hide the case where the tool
+    # has to tell "carried nothing" from "could not be measured".
+    if received is not None:
+        detail.append(f"bytes_received:{received}")
     detail.append("busy:5000ms rcv_space:14600 minrtt:11.9")
     return (f"ESTAB  0      0        10.0.0.5:51234        {peer}:{port}\n"
             f"\t {' '.join(detail)}\n")
@@ -12623,6 +12689,18 @@ def _(nd):
                 sided_sock("203.0.113.10", "443", sent=38_000_000, retrans=1800),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000,
                            retrans=2_400_000, port="5432"))
+
+@scenario("relay_volume_lopsided")
+def _(nd):
+    # Traffic arriving from the clients this box serves, and almost none
+    # leaving it towards what it depends on. A policy refusing requests and a
+    # box that has stopped forwarding look identical from a socket table, so
+    # the finding names both and judges neither.
+    sided_flows(nd,
+                *([sided_sock("203.0.113.9", "443", sent=1_000_000,
+                              received=60_000_000)] * 4),
+                sided_sock("10.0.0.90", "44120", sent=100_000, received=100_000,
+                           port="5432"))
 
 @scenario("tcp_flow_loss_clients")
 def _(nd):

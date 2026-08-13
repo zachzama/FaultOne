@@ -3230,6 +3230,13 @@ def parse_tcp_flows(text, max_flows=FLOW_MAX):
                               if "/" in rtt_raw else None)
         flow["bytes_sent"] = _flow_num(kv.get("bytes_sent")) or 0.0
         flow["bytes_retrans"] = _flow_num(kv.get("bytes_retrans")) or 0.0
+        # What came back the other way. Only the sent side was kept, which is
+        # enough for a box that talks outward and not for one that relays: the
+        # question there is whether what arrives on one side leaves on the
+        # other, and half the pair cannot answer it. None rather than 0.0 when
+        # the kernel does not offer it, so "nothing arrived" stays separable
+        # from "nobody asked" - the same distinction direction_readable makes.
+        flow["bytes_received"] = _flow_num(kv.get("bytes_received"))
         # The fields that know which way a connection stopped working. Every one
         # of these was already in the line this parser reads and was dropped on
         # the floor, so the tool said the return path could not be measured
@@ -3501,6 +3508,18 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # What share of the side's traffic the quiet ones carry, so the
                 # drawing can say which way it became true.
                 "silent_share_pct": side_return_stalled(group)[3],
+                # What crossed this side, each way. A box that relays is meant
+                # to hand what arrives on one side out on the other, and these
+                # are the two numbers that say whether it did. Summed rather
+                # than averaged: the question is about the side, not about any
+                # connection on it.
+                "bytes_in": sum((f.get("bytes_received") or 0) for f in group),
+                "bytes_out": sum((f.get("bytes_sent") or 0) for f in group),
+                # Whether the kernel offered the received counter at all, so a
+                # side that carried nothing stays separable from one nobody
+                # could measure.
+                "volume_readable": sum(1 for f in group
+                                       if f.get("bytes_received") is not None),
                 # Connections where the far end confirmed it already had the
                 # data this box resent. Whatever those retransmits were, they
                 # were not the forward path dropping packets.
@@ -5900,6 +5919,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # boxes look identical here, so it names both and judges
                   # neither.
                   "no_upstream_sessions",
+                  # What arrived on one side against what left on the other.
+                  # A policy refusing requests and a box that stopped
+                  # forwarding look the same here, so it names both.
+                  "relay_volume_lopsided",
                   "baseline_changes", "icmp_filtered", "tcp_flow_sample_partial",
                   # Both say "this looked like an outage and is not" - context
                   # that stops something else being misread, never a fault.
@@ -8417,6 +8440,69 @@ def _check_upstream_sessions(raw, findings):
     })
 
 
+# Enough traffic on a side before its volume says anything, and the ratio at
+# which one side is carrying so much less than the other that it is worth
+# naming. Gross on purpose: a box that inspects rewrites what it forwards, and
+# a box that terminates TLS re-frames it, so the two sides never match closely
+# and a tight ratio would fire on every healthy one.
+RELAY_MIN_BYTES = 10_000_000
+RELAY_RATIO = 20
+
+
+def _check_relay_volume(raw, findings):
+    """What arrived on one side against what left on the other.
+
+    Context and not a fault, for the same reason no_upstream_sessions is. A box
+    that inspects traffic is supposed to stop some of it: policy denying a
+    request looks in a socket table exactly like a box that has stopped
+    relaying, and nothing here can separate them. So this reports the shape and
+    names both readings rather than calling one of them broken.
+
+    The comparison is deliberately crude. Payloads change size on the way
+    through anything that inspects or re-originates, so only an order of
+    magnitude means anything - a side carrying a twentieth of the other is a
+    different claim from a side carrying nine tenths of it.
+    """
+    by_side = ((raw.get("tcp_flows") or {}).get("by_side")) or {}
+    client, backend = by_side.get("client") or {}, by_side.get("backend") or {}
+    if not client or not backend:
+        return                              # not a box with two sides to compare
+    # A kernel that does not report bytes_received leaves this unanswerable,
+    # and an unanswered question must not read as a side carrying nothing.
+    if not client.get("volume_readable") or not backend.get("volume_readable"):
+        return
+    arrived = client.get("bytes_in") or 0
+    forwarded = backend.get("bytes_out") or 0
+    # Written as what has to be true, the way the direction rules are, so each
+    # threshold is compared at or beyond the value the reference documents
+    # rather than one step inside it.
+    enough_to_judge = arrived >= RELAY_MIN_BYTES
+    broadly_relaying = forwarded * RELAY_RATIO >= arrived
+    if not enough_to_judge or broadly_relaying:
+        return
+    findings.append({
+        "severity": "ok",
+        "code": "relay_volume_lopsided",
+        "layer": 4,
+        "message": f"{_fmt_bytes(arrived)} arrived from the clients this box "
+                   f"serves and {_fmt_bytes(forwarded)} left it towards what it "
+                   f"depends on. A box that inspects traffic is meant to stop "
+                   f"some of it, so this is what a policy refusing requests "
+                   f"looks like - and it is also what a box that has stopped "
+                   f"forwarding looks like. Nothing in a socket table separates "
+                   f"the two. If this box is supposed to be relaying most of "
+                   f"what it receives, the far side is where to look.",
+    })
+
+
+def _fmt_bytes(n):
+    """Bytes as something a person reads, at one decimal from megabytes up."""
+    for unit, size in (("GB", 1e9), ("MB", 1e6), ("kB", 1e3)):
+        if n >= size:
+            return f"{n / size:.1f} {unit}"
+    return f"{n:.0f} B"
+
+
 def _build_service_instances(raw):
     """One row per thing this box is serving, from readings already taken.
 
@@ -9320,6 +9406,10 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     _check_utilization(raw, late, counter_window, uplink_mbps)
     _check_tcp(raw, late, counter_window, tcp_baseline)
     _check_flows(raw, late)
+    # After the flows, because it reads them. Wired in beside the sessions
+    # check first, which runs before the socket table is even collected, so
+    # it read an empty side and quietly concluded nothing every time.
+    _check_relay_volume(raw, late)
     findings[slot:slot] = late
 
 

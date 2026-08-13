@@ -5583,6 +5583,65 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestOneListenerAmongSiblings(unittest.TestCase):
+    """`service_endpoint_idle`. The address-level check asks whether traffic
+    arrives on an address at all, so an address holding three listeners answers
+    yes on the strength of any one of them - and a wedged instance beside two
+    working ones is invisible to it."""
+
+    def rows(self, *specs):
+        return [{"address": a, "port": p, "endpoint": f"{a}:{p}",
+                 "traffic": t, "wildcard": w} for a, p, t, w in specs]
+
+    def fired(self, rows):
+        out = []
+        nd._check_idle_endpoint({"service_instances": rows}, out)
+        return [f.get("scope") for f in out]
+
+    def test_an_idle_port_beside_a_busy_one_is_named(self):
+        self.assertEqual(
+            self.fired(self.rows(("10.0.0.5", 443, 9, False),
+                                 ("10.0.0.5", 8443, 0, False))),
+            ["10.0.0.5:8443"])
+
+    def test_a_lone_listener_with_no_traffic_says_nothing(self):
+        """Up and not serving is the commonest harmless state there is: an
+        instance that has just started, or one a balancer has not reached yet.
+        Only a busy sibling on the same address makes it mean something."""
+        self.assertEqual(self.fired(self.rows(("10.0.0.5", 443, 0, False))), [])
+
+    def test_two_quiet_listeners_are_two_quiet_listeners(self):
+        self.assertEqual(self.fired(self.rows(("10.0.0.5", 443, 0, False),
+                                              ("10.0.0.5", 8443, 0, False))), [])
+
+    def test_a_busy_port_on_another_address_is_not_a_sibling(self):
+        """That is the address-level check's question, and it already asks it.
+        Two findings for one condition is how a report stops being a verdict."""
+        self.assertEqual(self.fired(self.rows(("10.0.0.5", 443, 9, False),
+                                              ("10.0.0.9", 8443, 0, False))), [])
+
+    def test_a_wildcard_has_no_address_to_compare_against(self):
+        """`*:443` answers on every address the box holds, so its siblings are
+        not siblings."""
+        self.assertEqual(self.fired(self.rows(("*", 443, 9, True),
+                                              ("*", 8443, 0, True))), [])
+
+    def test_every_idle_port_on_the_address_is_named(self):
+        self.assertEqual(
+            sorted(self.fired(self.rows(("10.0.0.5", 443, 40, False),
+                                        ("10.0.0.5", 8443, 0, False),
+                                        ("10.0.0.5", 9443, 0, False)))),
+            ["10.0.0.5:8443", "10.0.0.5:9443"])
+
+    def test_it_names_the_busiest_sibling_as_the_comparison(self):
+        out = []
+        nd._check_idle_endpoint({"service_instances": self.rows(
+            ("10.0.0.5", 443, 40, False), ("10.0.0.5", 444, 2, False),
+            ("10.0.0.5", 8443, 0, False))}, out)
+        self.assertIn("10.0.0.5:443", out[0]["message"])
+        self.assertIn("40", out[0]["message"])
+
+
 class TestClosedConnectionsStillHoldTheirPort(unittest.TestCase):
     """A socket in TIME_WAIT owns its four-tuple until the timer runs out, so
     the port it used cannot serve another connection to the same destination.
@@ -12754,6 +12813,17 @@ def _(nd):
                 sided_sock("203.0.113.10", "443", sent=38_000_000, retrans=1800),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000,
                            retrans=2_400_000, port="5432"))
+
+@scenario("service_endpoint_idle")
+def _(nd):
+    # Two instances on one address. Clients are reaching :443 and nobody is
+    # reaching :8443, which the address-level check cannot see: it asks whether
+    # traffic arrives on the address at all, and on this box it does.
+    serving(nd, "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
+                "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                "LISTEN 0 128 10.0.0.5:8443 0.0.0.0:*\n"
+                + "".join(f"ESTAB 0 0 10.0.0.5:443 203.0.113.{i}:5123{i}\n"
+                          for i in range(9)))
 
 @scenario("relay_volume_lopsided")
 def _(nd):

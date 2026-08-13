@@ -5301,6 +5301,11 @@ VERDICT_RULES = [
      "Check the service is running and bound as you think. If this box forwards in "
      "the kernel (IPVS, DNAT, direct return) there is no listener to find and this "
      "is expected."),
+    ("service_endpoint_idle", "whatever steers clients to that port, or the instance behind it",
+     "One listener on this address is serving nobody while another on it is busy",
+     "The address works - traffic is arriving on it and going to a different port. "
+     "Check the instance behind the idle port, and what is meant to be sending "
+     "clients to it."),
     ("service_address_idle", "the failover pair, or whatever steers traffic to it",
      "A service address is up and served here, and no traffic is arriving on it",
      "Traffic for it is going elsewhere. Check the failover state on both nodes and "
@@ -6184,6 +6189,7 @@ FINDING_SIDE.update({
     "tcp_flow_loss_clients": "downstream",
     "service_address_unserved": "downstream",
     "service_address_idle": "downstream",
+    "service_endpoint_idle": "downstream",
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
     "queuing_delay_clients": "downstream",
@@ -6313,7 +6319,7 @@ STAGE_RULES = [
     # there is no inbound leg, and the answer to that is "-", not a warning
     # about a direction this box does not have.
     ("clients", set(),
-     {"service_address_unserved", "service_address_idle",
+     {"service_address_unserved", "service_address_idle", "service_endpoint_idle",
       "tcp_flow_loss_clients", "path_jitter_clients", "queuing_delay_clients",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure"}),
@@ -10516,6 +10522,57 @@ def _check_service_addresses(raw, findings):
             })
 
 
+def _check_idle_endpoint(raw, findings):
+    """One listener on an address serving nobody while its siblings serve.
+
+    The address-level check above cannot see this. It asks whether traffic is
+    arriving on an address at all, so an address holding three listeners answers
+    yes on the strength of any one of them, and a wedged instance beside two
+    working ones is invisible - which on a box that runs several is the failure
+    worth finding.
+
+    Deliberately silent unless a sibling on the *same address* is serving. An
+    instance that has just started, or one a load balancer has not sent anything
+    to yet, is up and not serving, and that is the commonest harmless state
+    there is. What makes this different is that something is arriving at this
+    address and choosing another port on it, so routing, ARP and the interface
+    are all ruled out by the traffic itself.
+
+    Wildcard listeners are left out. `*:443` answers on every address the box
+    holds, so it has no address of its own to compare siblings against.
+    """
+    rows = [r for r in (raw.get("service_instances") or [])
+            if not r.get("wildcard") and r.get("address")]
+    by_address = {}
+    for row in rows:
+        by_address.setdefault(row["address"], []).append(row)
+    for address, group in sorted(by_address.items()):
+        # No count check here on purpose: a group of one cannot hold both a
+        # serving and an idle member, so the pair below already excludes it,
+        # and a second guard saying the same thing is one no test can tell the
+        # difference about.
+        serving = [r for r in group if (r.get("traffic") or 0) > 0]
+        idle = [r for r in group if not (r.get("traffic") or 0)]
+        if not serving or not idle:
+            continue
+        for row in idle:
+            busiest = max(serving, key=lambda r: r.get("traffic") or 0)
+            findings.append({
+                "severity": "warning",
+                "layer": 4,
+                "code": "service_endpoint_idle",
+                "scope": row.get("endpoint"),
+                "message": f"Something is listening on {row['endpoint']} and no "
+                           f"connection is arriving on it, while "
+                           f"{busiest['endpoint']} on the same address is "
+                           f"carrying {busiest.get('traffic'):,}. Traffic reaches "
+                           f"this address and goes to another port on it, so the "
+                           f"route, the address and the interface are all working "
+                           f"- what is not is whatever should be steering clients "
+                           f"to this port, or the instance behind it.",
+            })
+
+
 def _check_addressing(raw, findings):
     """Does this device have an address at all?
 
@@ -11378,6 +11435,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # is already there and probes nothing itself, which is why it runs even
     # under --quick, where the up column simply says less.
     _build_service_instances(raw)
+    # After the table, because it compares its rows.
+    _check_idle_endpoint(raw, findings)
     _check_upstream_sessions(raw, findings)
 
     say("querying each configured DNS resolver")

@@ -5583,6 +5583,78 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestOneSessionCanBeTheWholeSide(unittest.TestCase):
+    """Counting connections alone had a hole in it.
+
+    A box that holds one long-lived session beside many short ones is an
+    ordinary shape - a held tunnel out, sessions in - and on it the connection
+    that matters is a minority of one. The majority rule drew nothing when it
+    died, which sends the reader to the short connections that were never the
+    problem.
+    """
+
+    def quiet(self, sent):
+        """A connection that is sending and hearing nothing back."""
+        return {"last_send_ms": 10, "last_recv_ms": 9000, "bytes_sent": sent}
+
+    def busy(self, sent):
+        """A healthy one: it sent, and it heard back just as recently."""
+        return {"last_send_ms": 10, "last_recv_ms": 10, "bytes_sent": sent}
+
+    def test_a_majority_of_connections_still_counts(self):
+        """Deliberately carrying almost none of the traffic, so the count is
+        the only thing that can make this true - written the obvious way, the
+        share rule answers first and the count rule could be deleted with this
+        test still passing."""
+        group = [self.quiet(nd.DIR_MIN_BYTES)] * 3 + [self.busy(50_000_000)] * 2
+        stalled, quiet, total, share = nd.side_return_stalled(group)
+        self.assertTrue(stalled)
+        self.assertEqual((quiet, total), (3, 5))
+        self.assertLess(share, nd.DIR_SILENT_SHARE, "the share rule is deciding")
+
+    def test_one_session_carrying_the_side_counts_too(self):
+        """The tunnel case. One of forty, and everything that matters."""
+        group = [self.quiet(500_000_000)] + [self.busy(1_000_000)] * 39
+        stalled, quiet, total, share = nd.side_return_stalled(group)
+        self.assertTrue(stalled, "a dead session carrying the side is invisible")
+        self.assertEqual((quiet, total), (1, 40))
+        self.assertGreaterEqual(share, nd.DIR_SILENT_SHARE)
+
+    def test_a_minority_carrying_little_still_claims_nothing(self):
+        """The guard on the above. One quiet connection out of forty, carrying
+        a fortieth of the traffic, is churn and not a stalled side."""
+        group = [self.quiet(1_000_000)] + [self.busy(1_000_000)] * 39
+        stalled, _, _, share = nd.side_return_stalled(group)
+        self.assertFalse(stalled)
+        self.assertLess(share, nd.DIR_SILENT_SHARE)
+
+    def test_the_share_is_measured_at_its_documented_edge(self):
+        # One quiet connection in three, so the count rule cannot fire and the
+        # share is the only thing left deciding: half the bytes, against two
+        # healthy connections carrying a quarter each.
+        group = [self.quiet(nd.DIR_MIN_BYTES * 2),
+                 self.busy(nd.DIR_MIN_BYTES), self.busy(nd.DIR_MIN_BYTES)]
+        stalled, quiet, total, share = nd.side_return_stalled(group)
+        self.assertGreater(total, quiet * 2, "the count rule is deciding")
+        self.assertEqual(share, nd.DIR_SILENT_SHARE)
+        self.assertTrue(stalled, "the documented edge must count")
+
+    def test_a_side_carrying_nothing_divides_by_no_one(self):
+        stalled, _, _, share = nd.side_return_stalled(
+            [{"last_send_ms": 10, "last_recv_ms": 9000, "bytes_sent": 0}])
+        self.assertEqual(share, 0)
+        self.assertFalse(stalled, "no traffic is not a stalled return")
+
+    def test_an_empty_side_is_not_a_stall(self):
+        self.assertEqual(nd.side_return_stalled([]), (False, 0, 0, 0))
+
+    def test_the_decision_travels_in_the_report(self):
+        """Both renderers read one field rather than each re-deriving the rule
+        from the counters, which is two copies and two chances to disagree."""
+        group = [self.quiet(500_000_000)] + [self.busy(1_000_000)] * 39
+        self.assertTrue(nd.side_return_stalled(group)[0])
+
+
 class TestTheFarEndConfirmedItArrived(unittest.TestCase):
     """`flow_delivered`: a DSACK is the receiver saying it already had that
     segment, which is proof the original arrived."""

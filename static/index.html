@@ -1060,14 +1060,24 @@ function boundaryArrow(sides, i, flows){
   // inventing one. The earlier version of this hardcoded the outbound head to
   // pass whenever the return stalled, which read as "the way out is fine" on
   // no evidence at all.
-  const stalled = (near.silent_return || 0) * 2 >= total && (near.silent_return || 0) > 0;
+  // The stall decision is made once, where the counters are read, and carried
+  // in the report. A report written before that field existed still has the
+  // counts, so the older rule stays here as the fallback rather than drawing
+  // a saved report as though nothing had ever gone quiet on it.
+  const stalled = near.return_stalled !== undefined
+    ? !!near.return_stalled
+    : ((near.silent_return || 0) > 0 && (near.silent_return || 0) * 2 >= total);
   const arrived = (near.delivered_anyway || 0) * 2 >= total && (near.delivered_anyway || 0) > 0;
   if(total && (stalled || arrived)){
     const why = [];
     if(arrived) why.push(near.delivered_anyway + ' of ' + total
       + ' connections: the far end confirmed data this box resent had arrived');
+    // A minority carrying most of the traffic is the same verdict reached a
+    // different way, and reads as a mistake without the share beside it.
     if(stalled) why.push(near.silent_return + ' of ' + total
-      + ' connections: this box is sending, nothing is coming back');
+      + ' connections: this box is sending, nothing is coming back'
+      + (near.silent_return * 2 < total && near.silent_share_pct
+         ? ', carrying ' + near.silent_share_pct + '% of this side\'s traffic' : ''));
     return `<div class="zarrow split" title="${escapeHtml(why.join(' · '))}">`
       + `<span class="${arrived ? 'pass' : leg.state}">→</span>`
       + `<span class="${stalled ? 'fail' : leg.state}">←</span></div>`;

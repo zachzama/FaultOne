@@ -3327,6 +3327,7 @@ DIR_SENDING_MS = 1000        # last send this recent, or the socket is idle
 DIR_SILENT_MS = 5000         # nothing back for this long
 DIR_SILENCE_RATIO = 10       # and that much longer than since it last sent
 DIR_MIN_BYTES = 100_000      # enough traffic that an answer was owed
+DIR_SILENT_SHARE = 50        # or this much of the side's traffic, however few
 
 
 def flow_direction(flow):
@@ -3348,6 +3349,31 @@ def flow_direction(flow):
     if owed_a_reply and still_sending and gone_quiet:
         return "return"
     return None
+
+
+def side_return_stalled(group):
+    """Has the way back from this side stopped, and how sure is that.
+
+    Two ways to be sure, because counting alone has a hole in it. Most of the
+    connections going quiet is one. The other is a minority of them carrying
+    most of the traffic: a box that holds one long-lived session beside forty
+    short ones is a normal shape, and on it the session that matters is a
+    minority of one. Counted alone, a dead one stayed invisible behind its
+    healthy neighbours, which is the reading that sends someone to look at the
+    short connections that were never the problem.
+
+    Returns (stalled, quiet, total, share_pct) so whoever draws it can say
+    which of the two made it true - "1 of 40, carrying 92%" and "38 of 40" are
+    the same verdict reached for different reasons and want different words.
+    """
+    total = len(group)
+    quiet_flows = [f for f in group if flow_direction(f) == "return"]
+    quiet = len(quiet_flows)
+    sent = sum((f.get("bytes_sent") or 0) for f in group)
+    share = round(100.0 * sum((f.get("bytes_sent") or 0)
+                              for f in quiet_flows) / sent) if sent else 0
+    stalled = bool(quiet) and (quiet * 2 >= total or share >= DIR_SILENT_SHARE)
+    return stalled, quiet, total, share
 
 
 def flow_delivered(flow):
@@ -3467,6 +3493,14 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
                 # forty, and the reader is owed the denominator.
                 "silent_return": sum(1 for f in group
                                      if flow_direction(f) == "return"),
+                # The decision itself, made once here rather than twice in the
+                # two renderers. A threshold written out in both Python and the
+                # page's JavaScript is two copies of a rule and two chances for
+                # them to disagree about the same report.
+                "return_stalled": side_return_stalled(group)[0],
+                # What share of the side's traffic the quiet ones carry, so the
+                # drawing can say which way it became true.
+                "silent_share_pct": side_return_stalled(group)[3],
                 # Connections where the far end confirmed it already had the
                 # data this box resent. Whatever those retransmits were, they
                 # were not the forward path dropping packets.
@@ -12469,14 +12503,24 @@ function boundaryArrow(sides, i, flows){
   // inventing one. The earlier version of this hardcoded the outbound head to
   // pass whenever the return stalled, which read as "the way out is fine" on
   // no evidence at all.
-  const stalled = (near.silent_return || 0) * 2 >= total && (near.silent_return || 0) > 0;
+  // The stall decision is made once, where the counters are read, and carried
+  // in the report. A report written before that field existed still has the
+  // counts, so the older rule stays here as the fallback rather than drawing
+  // a saved report as though nothing had ever gone quiet on it.
+  const stalled = near.return_stalled !== undefined
+    ? !!near.return_stalled
+    : ((near.silent_return || 0) > 0 && (near.silent_return || 0) * 2 >= total);
   const arrived = (near.delivered_anyway || 0) * 2 >= total && (near.delivered_anyway || 0) > 0;
   if(total && (stalled || arrived)){
     const why = [];
     if(arrived) why.push(near.delivered_anyway + ' of ' + total
       + ' connections: the far end confirmed data this box resent had arrived');
+    // A minority carrying most of the traffic is the same verdict reached a
+    // different way, and reads as a mistake without the share beside it.
     if(stalled) why.push(near.silent_return + ' of ' + total
-      + ' connections: this box is sending, nothing is coming back');
+      + ' connections: this box is sending, nothing is coming back'
+      + (near.silent_return * 2 < total && near.silent_share_pct
+         ? ', carrying ' + near.silent_share_pct + '% of this side\'s traffic' : ''));
     return `<div class="zarrow split" title="${escapeHtml(why.join(' · '))}">`
       + `<span class="${arrived ? 'pass' : leg.state}">→</span>`
       + `<span class="${stalled ? 'fail' : leg.state}">←</span></div>`;
@@ -13571,13 +13615,22 @@ def render_text_report(report, color=False, width=None):
             # carries one direction: silence about the way back, a DSACK about
             # the way out. A retransmit ratio carries neither and must never
             # reach this.
-            stalled = quiet and quiet * 2 >= total
+            share = near.get("silent_share_pct") or 0
+            # The same decision the page reads, taken from the report rather
+            # than worked out again here. Older reports carry only the counts.
+            stalled = near.get("return_stalled")
+            if stalled is None:
+                stalled = bool(quiet) and quiet * 2 >= total
             confirmed = arrived and arrived * 2 >= total
             if total and stalled:
                 line += tint("  -->x  ", "critical") + cells[i]
+                # Say which way it became true. "1 of 40" on its own reads as
+                # the tool over-reacting to one bad connection.
+                weight = (f", and they carry {share}% of this side's traffic"
+                          if quiet * 2 < total and share else "")
                 notes.append(f"nothing coming back from {zname[leg['side']]}: "
                              f"{quiet} of {total} connections, while this box "
-                             f"is still sending")
+                             f"is still sending{weight}")
             elif total and confirmed:
                 # The way out is confirmed and the way back is not in question,
                 # so this is the one shape that says something good rather than

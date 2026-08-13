@@ -1344,7 +1344,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **160** | Distinct conclusions it can reach and state in plain language. 134 are faults; 26 are context, like which switch port you're on. |
 | **Ranked causes** | **134** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1114 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1121 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 160 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1941,7 +1941,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1114 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1121 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2032,6 +2032,7 @@ can say what the bar was rather than "the tool said so".
 | `DIR_SILENT_MS` | **5000** | Nothing received for this long, on a connection that is still sending, before the return direction is called stalled |
 | `DIR_SILENCE_RATIO` | **10** | And that many times longer than since it last sent, so the two counters have to disagree by a margin rather than by a moment |
 | `DIR_MIN_BYTES` | **100,000** | Sent on a connection before an answer is owed. Below it there may be nothing to reply to |
+| `DIR_SILENT_SHARE` | **50** | Or the quiet connections carry this much of the side's traffic, however few of them there are. A box holding one long-lived session beside forty short ones is a normal shape, and on it the session that matters is a minority of one — counted alone, a dead one stayed invisible behind its healthy neighbours |
 | `OWN_TLS_MAX_LISTENERS` | **12** | Listeners of our own tested per run, counted per address and port rather than per port. Each costs a handshake or a request against a service that is probably logging connections. Anything past the limit is reported as not checked |
 | `BACKEND_MIN_CONNECTIONS` | **2** | connections to one peer before `--target auto` treats it as a dependency rather than a passing conversation |
 | `BACKEND_MIN_SHARE` | **0.15** | and the share of outbound connections it must hold. A count alone cannot tell a dependency from a busy destination |
@@ -3376,7 +3377,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1114 tests, no dependencies, no network, a few seconds, so they run
+1121 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

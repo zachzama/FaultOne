@@ -113,6 +113,29 @@ def answering_into_silence(mod):
     T.serving(mod, sockets(clients(5), backends(4)))
 
 
+def losing_traffic_and_hearing_nothing(mod):
+    """Both at once on the same side: the backend connections are losing
+    traffic *and* nothing is coming back on them.
+
+    The two demos either side of this each show half of it. A loss percentage
+    cannot say which direction dropped the packet, so demo 2's arrow stays a
+    single colour however bad the number gets; the direction counters say which
+    way went quiet but carry no measure of how much. A degrading path produces
+    both, and this is what the page looks like when it has everything it can
+    get: a figure for how much is being lost, a red head for the direction that
+    stopped, and a muted one for the direction nothing can be said about.
+    """
+    T.sided_flows(
+        mod,
+        *[T.sided_sock("198.51.100.%d" % i, "443", sent=40_000_000, retrans=0,
+                       timers=(10, 10, 10))
+          for i in range(1, 6)],
+        *[T.sided_sock("10.0.0.90", "51%03d" % (100 + i), sent=60_000_000,
+                       retrans=4_800_000, timers=(10, 9000, 9000))
+          for i in range(4)])
+    T.serving(mod, sockets(clients(5), backends(4)))
+
+
 def relaying_out_of_ports(mod):
     T.serving(mod, sockets(clients(7),
                            ["ESTAB 0 0 10.0.0.5:%d 10.0.0.90:5432" % (32768 + i)
@@ -189,6 +212,7 @@ DEMOS = [
     ("4-egress-blocked",  "egress_blocked",           None),
     ("5-service-address", "service_address_unserved", serving_but_not_on_the_vip),
     ("6-return-stalled",  "tcp_return_stalled_backends", answering_into_silence),
+    ("7-losing-and-quiet", "tcp_flow_loss_backends", losing_traffic_and_hearing_nothing),
 ]
 
 

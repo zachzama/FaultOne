@@ -81,8 +81,8 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 656 KB of
-repetitive text: it goes over the wire at 197 KB with compression on, for the
+`-C` because OpenSSH doesn't compress by default, and the file is 702 KB of
+repetitive text: it goes over the wire at 211 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -91,12 +91,12 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 142 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 151 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
-Stripped and compressed together it's 142 KB instead of 656. That is 78%
-less, which is under twelve minutes down to two and a half on a 9600-baud
+Stripped and compressed together it's 151 KB instead of 702. That is 78%
+less, which is just over twelve minutes down to under three on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
 

@@ -12374,6 +12374,29 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
   /* The four legs. One column per side, two lanes in each. */
   .pcols{display:grid; grid-template-columns:1fr; gap:14px; margin:6px 0 22px;}
+  @media (min-width: 1100px){ .pcols{grid-template-columns:repeat(3, 1fr);} }
+  /* The traced path's hops, inside its own column. A bar per hop for the share
+     of the total it added - the one thing the full-width ribbon did that a
+     number cannot, which is show proportion without being read. */
+  .hops{padding:8px 14px 10px; border-top:1px dashed var(--border);}
+  .hrow{display:flex; align-items:center; gap:8px; padding:3px 0;
+    font-family:var(--mono); font-size:11px; color:var(--text-dim);}
+  .hrow.crit{color:var(--crit);} .hrow.warn{color:var(--warn);}
+  .hrow .hn{opacity:.6; min-width:38px;}
+  .hrow .hh{color:var(--text); min-width:74px;}
+  .hrow.crit .hh{color:var(--crit);} .hrow.warn .hh{color:var(--warn);}
+  .hrow .ht{margin-left:auto; white-space:nowrap; opacity:.85;}
+  .hbar{flex:1; min-width:26px; height:4px; border-radius:2px;
+    background:var(--border); overflow:hidden;}
+  .hbar > span{display:block; height:100%; background:var(--text-dim); opacity:.55;}
+  .hrow.crit .hbar > span{background:var(--crit); opacity:.9;}
+  .hrow.warn .hbar > span{background:var(--warn); opacity:.9;}
+  .hwhy{font-family:var(--mono); font-size:10.5px; color:var(--crit);
+    padding:0 0 3px 46px;}
+  .hwhy.warn{color:var(--warn);}
+  .hwhy.edge{color:var(--text-dim); opacity:.7;}
+  .base{padding:8px 14px; border-top:1px dashed var(--border);
+    font-family:var(--mono); font-size:10.5px; color:var(--text-dim); opacity:.8;}
   @media (min-width: 780px){ .pcols{grid-template-columns:1fr 1fr;} }
   .pcol{border:1px solid var(--border); border-radius:9px; background:var(--panel-2);
     overflow:hidden; min-width:0;}
@@ -13531,6 +13554,41 @@ function renderDiagnosis(data, opts){
   // them to disagree about the same report.
   const LEGWORD = {pass:'OK', warn:'SLOW', fail:'FAULT', unknown:'NOT MEASURABLE'};
   const legSides = data.path_legs || [];
+
+  // The traced path, as the third column. Present whenever a trace ran, so the
+  // hops stay visible on every report rather than only on the ones that mark
+  // a hop - what a fault changes is the colour and which row is called out.
+  //
+  // One leg. A traceroute is one way, so there is no return measurement, and
+  // drawing one anyway is the mistake the boundary arrow carried for two
+  // releases. Every state here was decided in build_probe_column; nothing on
+  // this side of the wire judges a hop.
+  const pp = data.probe_path;
+  const probeHtml = pp ? `<div class="pcol ${pp.state}">
+      <div class="pcol-hd"><span class="pwho">reachability probe</span>
+        <span class="pfacts">${escapeHtml(pp.target)}<br>${pp.hops.length} hop${
+          pp.hops.length === 1 ? '' : 's'}${
+          pp.total_ms ? ' \u00b7 ' + pp.total_ms + 'ms' : ''}</span></div>
+      <div class="plane ${pp.state}">
+        <div class="ptop"><span class="pwhat">path out</span>
+          <span class="pverd">${{pass:'OK', warn:'SLOW', fail:'FAULT'}[pp.state]}</span></div>
+        <div class="ptrack"><span class="pend">this box</span>
+          <span class="pline"></span><span class="ptip">&rarr;</span>
+          <span class="pend">${escapeHtml(pp.target)}</span></div>
+        <div class="pev">a probe to one address, not the traffic this box carries \u2014 and the only thing that can see a fault at a single hop</div>
+      </div>
+      <div class="hops">${pp.hops.map(h => `
+        <div class="hrow ${h.state === 'ok' ? '' : h.state}">
+          <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
+          <span class="hh">${escapeHtml(h.host)}</span>
+          <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
+          <span class="ht">${h.timed_out ? 'no reply'
+            : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+        </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+          h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
+      </div>
+      ${pp.baseline ? `<div class="base">${escapeHtml(pp.baseline)}</div>` : ''}
+    </div>` : '';
   const pathHtml = legSides.length ? '<div class="pcols">' + legSides.map(side => {
     const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
                    side.rtt_ms != null ? side.rtt_ms + 'ms rtt' : '',
@@ -13594,7 +13652,7 @@ function renderDiagnosis(data, opts){
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
         ${lanes}${traced}${noteHtml}</div>`;
-  }).join('') + '</div>' : '';
+  }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml
     ? '<div class="section-title">The path, out and back on each side</div>' + pathHtml

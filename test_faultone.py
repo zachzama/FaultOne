@@ -5395,6 +5395,18 @@ class TestZones(unittest.TestCase):
                                 "fallback, so a browser without color-mix is "
                                 "left with no marking" % state)
 
+    def test_every_state_a_split_head_can_take_is_drawn_differently(self):
+        """Three states, three appearances. Without a rule of its own the
+        unknown head falls back to the inherited colour, which is the muddle
+        this whole split exists to get out of - and it does it silently, with
+        the class name still in the markup and nothing to show for it."""
+        src = nd.VIEWER_TEMPLATE
+        for cls in ("pass", "fail", "unknown"):
+            with self.subTest(head=cls):
+                self.assertIn(".zarrow.split .%s{" % cls, src,
+                              "a split head in state %r has no appearance of "
+                              "its own" % cls)
+
     def test_the_heads_split_only_where_two_counters_disagree(self):
         """This guard used to say the heads must never be coloured apart, and it
         was right for as long as the only evidence was a retransmit ratio, which
@@ -6482,8 +6494,23 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
         self.assertNotIn("split", arrow)
 
     def assertSplit(self, arrow):
+        """A stalled return, with nothing said about the way out.
+
+        This used to assert the outbound head was drawn `pass`, and it passed
+        for a reason that had nothing to do with the rule: the fixture's sides
+        are all healthy, so the head inheriting the leg's colour inherited
+        "pass". On a real report the leg fails - a stalled return is a finding
+        now - and the same code drew both heads red, which is not a split at
+        all and is exactly what the arrow exists to avoid.
+
+        The way out is unknown here and is drawn as unknown. Proof that a
+        segment this box sent arrived is something coming back about it, and in
+        a stall that is the thing that has stopped.
+        """
         self.assertIn("split", arrow)
-        self.assertIn('<span class="pass">→</span>', arrow, "no head going out")
+        self.assertIn('<span class="unknown">→</span>', arrow,
+                      "the way out is being claimed, in one direction or the "
+                      "other, on evidence a stall cannot provide")
         self.assertIn('<span class="fail">←</span>', arrow, "no head coming back")
 
     def test_a_relay_draws_both_directions_by_default(self):
@@ -6563,17 +6590,48 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
         self.assertIn('<span class="pass">→</span>', client)
         self.assertIn("confirmed data this box resent had arrived", client)
 
-    def test_a_head_with_no_counter_behind_it_keeps_the_legs_colour(self):
-        """The version before this hardcoded the outbound head to pass whenever
-        the return stalled, which read as "the way out is fine" on no evidence.
-        With a warning leg and nothing said about the way out, the outbound head
-        is a warning too."""
+    def test_the_way_out_is_not_coloured_by_the_stall_on_the_way_back(self):
+        """Two wrong answers were tried here before this one.
+
+        The first hardcoded the outbound head to pass whenever the return
+        stalled, which read as "the way out is fine" on no evidence at all. The
+        fix made it inherit the leg's colour, and that is circular: a stalled
+        return is a finding, the finding fails the leg, and the outbound head
+        then reads as broken *because of the stall on the other head*. On a real
+        report both heads came out red, which is not a split and is the reason
+        this arrow exists.
+
+        Neither claim can be made. Proof that a segment this box sent arrived is
+        something coming back about it, and "my data is arriving and their
+        replies are not" is indistinguishable from "my data is not arriving"
+        when the acknowledgement that separates them travels the broken
+        direction. So it is drawn as neither.
+        """
+        for state in ("warn", "fail"):
+            with self.subTest(leg=state):
+                sides = [{"side": "downstream", "state": state},
+                         {"side": "local", "state": "pass"},
+                         {"side": "upstream", "state": "pass"}]
+                client, _ = self.draw({"client": {"connections": 4, "silent_return": 4}},
+                                      sides=sides)
+                self.assertIn('<span class="unknown">→</span>', client)
+                self.assertIn('<span class="fail">←</span>', client)
+                self.assertNotIn('<span class="%s">→</span>' % state, client,
+                                 "the way out is taking its colour from a leg "
+                                 "the return stall is what failed")
+
+    def test_a_head_with_no_counter_behind_it_still_keeps_the_legs_colour(self):
+        """Where the split comes from a confirmation rather than a stall, the
+        way back has no counter of its own and inherits the leg, which is the
+        original rule and still right: nothing about the return has been
+        measured, so nothing about it is being claimed."""
         sides = [{"side": "downstream", "state": "warn"},
                  {"side": "local", "state": "pass"},
                  {"side": "upstream", "state": "pass"}]
-        client, _ = self.draw({"client": {"connections": 4, "silent_return": 4}}, sides=sides)
-        self.assertIn('<span class="warn">→</span>', client)
-        self.assertIn('<span class="fail">←</span>', client)
+        client, _ = self.draw({"client": {"connections": 4, "delivered_anyway": 4}},
+                              sides=sides)
+        self.assertIn('<span class="pass">→</span>', client)
+        self.assertIn('<span class="warn">←</span>', client)
 
     def test_the_two_directions_are_read_from_their_own_counters(self):
         """Both at once: the data got there and nothing came back. Two claims
@@ -11609,6 +11667,14 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         # target hop underneath them is the picture contradicting the sentence.
         "egress_blocked": lambda rep: TestTheChainMarksTheHopTheVerdictNames._target_hops(rep),
         "inet_partial_loss": lambda rep: TestTheChainMarksTheHopTheVerdictNames._target_hops(rep),
+        # The opposite case, and the one that went unmarked for a long time.
+        # The two above say traffic is not reaching the target though the trace
+        # got a reply from it; this one says the path is genuinely fine and the
+        # thing at the end of it is what went quiet. Both name the destination,
+        # so both have to mark it - "the path reaches the target and the target
+        # answers nothing" was drawn as a green target ending a green path.
+        "destination_unresponsive":
+            lambda rep: TestTheChainMarksTheHopTheVerdictNames._target_hops(rep),
     }
 
     def test_a_hop_is_blamed_exactly_when_the_report_blames_it(self):

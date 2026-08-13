@@ -11510,10 +11510,22 @@ def _check_internet(raw, findings, target, probes):
     return inet_loss
 
 
-# Findings whose subject is the destination itself, and which assert that
-# traffic to it is not arriving. They mark the target hop by role rather than
-# by number, since which hop is the target varies with the path.
-TARGET_UNREACHED = ("egress_blocked", "inet_partial_loss")
+# Findings whose subject is the destination itself, rather than the path to it.
+# They mark the target hop by role rather than by number, since which hop is the
+# target varies with the path.
+#
+# Two shapes end up here for opposite reasons. The first two say traffic to the
+# target is not arriving even though the trace got a reply from it - an egress
+# policy that blocks echo and 443 while leaving traceroute's probes alone. The
+# third says the opposite: the path is genuinely fine and the thing at the end
+# of it is what went quiet. Both need the same endpoint marked, because in both
+# the report names the destination and the chain would otherwise draw it clean.
+#
+# destination_unresponsive was left out of this for a long time, which is how
+# "the path reaches the target and the target answers nothing" came to be drawn
+# as a green target at the end of a green path.
+TARGET_UNREACHED = ("egress_blocked", "inet_partial_loss",
+                    "destination_unresponsive")
 
 
 def _mark_target_hop(hops, findings):
@@ -12040,6 +12052,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .zarrow.split{flex-direction:column; line-height:1; font-size:15px;}
   .zarrow.split .pass{color:var(--ok);}
   .zarrow.split .fail{color:var(--crit);}
+  /* A direction with no evidence either way. Muted rather than coloured,
+     because the two states it sits between - carrying, and broken - are both
+     claims, and this head is drawn precisely when neither can be made. */
+  .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -12998,8 +13014,25 @@ function boundaryArrow(sides, i, flows){
       + ' connections: this box is sending, nothing is coming back'
       + (near.silent_return * 2 < total && near.silent_share_pct
          ? ', carrying ' + near.silent_share_pct + '% of this side\'s traffic' : ''));
+    // The way out, when the way back has stopped and no DSACK confirmed
+    // anything. It is tempting to draw this green - the box is plainly sending,
+    // so surely that direction works - and it cannot be earned. The only proof
+    // a segment this box sent arrived is something coming back about it, and in
+    // a stall that is exactly what is missing: "my data is arriving and their
+    // replies are not" and "my data is not arriving at all" produce the same
+    // silence here, because the acknowledgement that would separate them
+    // travels the broken direction.
+    //
+    // Painting it with the leg's colour was the other half of that mistake, and
+    // the half that shipped: it asserted the way out had failed on the same
+    // absent evidence. Drawn muted instead, which is the honest third state and
+    // the reason this arrow splits at all.
+    if(stalled && !arrived) why.push('the way out cannot be judged from here: '
+      + 'the only proof it is carrying is something coming back, which is what '
+      + 'has stopped');
+    const outState = arrived ? 'pass' : (stalled ? 'unknown' : leg.state);
     return `<div class="zarrow split" title="${escapeHtml(why.join(' · '))}">`
-      + `<span class="${arrived ? 'pass' : leg.state}">→</span>`
+      + `<span class="${outState}">→</span>`
       + `<span class="${stalled ? 'fail' : leg.state}">←</span></div>`;
   }
   return `<div class="zarrow ${leg.state}" title="${

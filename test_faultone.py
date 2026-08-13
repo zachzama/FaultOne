@@ -5675,6 +5675,107 @@ class TestWhichDirectionStopped(unittest.TestCase):
         self.assertIsNone(nd.flow_direction({}))
 
 
+class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
+    """The page drew the clients' side from the connections and the backends'
+    side not at all.
+
+    What stood in for it was a traceroute to the target, which on a proxy is
+    usually not where the work goes: the backends sit on an internal segment the
+    trace never crosses. So a fault there had nowhere on the picture to appear,
+    every node under it stayed green, and the reader was left holding a red
+    verdict over a drawing with no red in it.
+
+    Run through the viewer's own renderHopChain rather than read off the
+    template, because the question is what the page ends up showing.
+    """
+
+    def render(self, report):
+        import json as _json
+        import os as _os
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+
+        def block(name):
+            a = src.index("function " + name + "(")
+            depth, b = 0, src.index("{", a)
+            for k in range(b, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        return src[a:k + 1]
+            return ""
+
+        parts = [m.group(0) for m in
+                 re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S)]
+        for name in dict.fromkeys(re.findall(r"^\s*function (\w+)\(", src, re.M)):
+            parts.append(block(name))
+        # Enough of a document for the function to write into, and nothing more.
+        stub = ("const els={};function el(id){return els[id]||(els[id]="
+                "{id,style:{},textContent:'',innerHTML:''});}\n"
+                "global.document={getElementById:el,querySelectorAll:()=>[],"
+                "createElement:()=>el('x')};global.window={};\n")
+        body = ("\nrenderHopChain(%s);\nprocess.stdout.write(JSON.stringify({"
+                "out:document.getElementById('outboundWrap').innerHTML,"
+                "note:document.getElementById('pathNote').textContent}));"
+                % _json.dumps(report))
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write(stub + "\n".join(parts) + body)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stderr[:400])
+            return _json.loads(res.stdout)
+        finally:
+            _os.unlink(path)
+
+    def report(self, code):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def severity(self, html):
+        m = re.search(r'hop-node (\w+)">\s*<div class="hop-label">what this box', html)
+        return m.group(1) if m else None
+
+    def test_a_lossy_backend_is_drawn_as_a_fault(self):
+        """The case that started this: 8% loss to a database in another subnet,
+        and every node on the page green because the trace went elsewhere."""
+        drawn = self.render(self.report("tcp_flow_loss_backends"))
+        self.assertEqual(self.severity(drawn["out"]), "crit")
+
+    def test_it_names_the_destination_and_what_was_measured(self):
+        drawn = self.render(self.report("tcp_flow_loss_backends"))
+        self.assertIn("10.0.0.90", drawn["out"],
+                      "the failing destination is not named on the picture")
+        self.assertIn("% loss", drawn["out"])
+
+    def test_a_stalled_return_shows_on_it_too(self):
+        drawn = self.render(self.report("tcp_return_stalled_backends"))
+        self.assertEqual(self.severity(drawn["out"]), "crit")
+        self.assertIn("silent", drawn["out"])
+
+    def test_a_clean_way_out_is_drawn_clean(self):
+        """The other direction of the same rule. Demo 1's fault is inbound, and
+        marking the backends there would be the mirror of the bug."""
+        drawn = self.render(self.report("tcp_flow_loss_clients"))
+        self.assertEqual(self.severity(drawn["out"]), "ok")
+
+    def test_it_says_it_is_measured_rather_than_probed(self):
+        """The distinction the whole panel rests on. These are the connections
+        this box opened; the chain below is a probe to somewhere else."""
+        drawn = self.render(self.report("tcp_flow_loss_backends"))
+        self.assertIn("not a probe", drawn["out"])
+
+
 class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
     """A clean trace under a red verdict is not a contradiction, but it reads as
     one until the page says the two are about different paths.

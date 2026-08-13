@@ -12787,6 +12787,8 @@ function renderHopChain(data){
     pathTitle.style.display = 'none';
     document.getElementById('hopChainWrap').innerHTML = '';
     if(inboundWrap) inboundWrap.innerHTML = '';
+    const ow = document.getElementById('outboundWrap');
+    if(ow) ow.innerHTML = '';
     return;
   }
   // Name the destination. "The path out" reads as *the* way out, so a clean
@@ -12931,6 +12933,33 @@ function renderHopChain(data){
         ? `This box cannot see past ${escapeHtml(cin.via)} to the client. A clean reading here means clean as far as ${escapeHtml(cin.via)} — not clean to whoever is complaining.`
         : 'Connections arrive from many addresses, so this is the spread of real clients rather than one balancer in front.'}</div>
     </div>` : '';
+
+  // The backends, measured the same way and from the same field. Drawn as a
+  // chain of its own rather than folded into the traced path, because they are
+  // two measurements of two different destinations: that one is a probe to the
+  // target, this is the traffic this box is actually carrying.
+  const cout = inbound.backend;
+  const outboundHtml = cout ? `
+    <div class="inbound">
+      <div class="inbound-title">backends out — measured on this box's own connections, not probed</div>
+      <div class="hop-chain">
+        <div class="hop-node ok"><div class="hop-label">this box</div>
+          <div class="hop-sub">${escapeHtml(data.hostname || 'here')}</div></div>
+        <div class="hop-arrow">→</div>
+        <div class="hop-node ${sideSeverity(data, 'upstream')}">
+          <div class="hop-label">what this box depends on${
+            cout.worst_peer ? ' · ' + escapeHtml(String(cout.worst_peer).replace(/:\d+$/, '')) : ''}</div>
+          <div class="hop-sub">${cout.connections} connection${cout.connections === 1 ? '' : 's'}</div>
+          <div class="hop-meta">${[cout.rtt_ms != null ? cout.rtt_ms + 'ms rtt' : '',
+              cout.worst_loss_pct != null ? cout.worst_loss_pct + '% loss' : '',
+              cout.return_stalled ? cout.silent_return + ' of ' + cout.connections + ' silent' : '']
+              .filter(Boolean).join(' · ')}</div>
+        </div>
+      </div>
+      <div class="inbound-note">These are the connections this box opened, not a probe. The traced path below goes to the target and does not cross this segment, so it says nothing about it either way.</div>
+    </div>` : '';
+  const outboundWrap = document.getElementById('outboundWrap');
+  if(outboundWrap) outboundWrap.innerHTML = outboundHtml;
 
   if(inboundWrap) inboundWrap.innerHTML = inboundHtml;
   document.getElementById('hopChainWrap').innerHTML =

@@ -162,34 +162,63 @@ PAIRED = [
     # resolvers being unreachable is the consequence rather than the cause.
     ("dns_all_resolvers_down",  "inet_unreachable",       "inet_unreachable"),
     ("source_address_not_held", "gw_partial_loss",        "source_address_not_held"),
+    # Reasoned the same way and confirmed, from a batch of twenty candidates.
+    # The batch is worth recording: eleven of the twenty could not be composed
+    # at all - two scenarios on one box produced only one finding - and of the
+    # nine that could, three disagreed with the expectation and all three were
+    # the expectation being wrong, not the tool. link_busy is latent and must
+    # not headline; syncookies are deliberately ranked above the symptoms they
+    # cause; and an expired certificate on a service this box calls is not the
+    # cause of this box's own listener failing a handshake. No new bug came out
+    # of those twenty, which is why the sweep stopped there.
+    ("resolvers_unreadable",    "dns_fail",               "resolvers_unreadable"),
+    ("dns_no_resolvers",        "dns_fail",               "dns_no_resolvers"),
+    ("saturation_bursts",       "queuing_delay",          "saturation_bursts"),
+    ("inet_partial_loss",       "call_quality_bad",       "inet_partial_loss"),
+    ("port_host_unreachable",   "tcp_retransmits",        "port_host_unreachable"),
 ]
-for _first, _second, _expected in PAIRED:
-    _absent = [c for c in (_first, _second) if c not in T.S]
-    if _absent:
-        note(f"paired: no scenario for {_absent}")
-        continue
-    COMPOUND.append(((_first, _second),
-                     (lambda a, b: lambda m: (T.S[a][0](m), T.S[b][0](m)))(_first, _second),
-                     _expected))
-
 for label, setup, expected in COMPOUND:
     mod = T.fresh(); setup(mod)
     report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
     got = report["verdict"]["based_on"][0]
-    codes = {f["code"] for f in report["findings"]}
-    # A pair where only one of the two ever fired is not testing a ranking. It
-    # would sit here passing for a reason that has nothing to do with the rule,
-    # which is the failure mode this whole section exists to avoid.
-    if isinstance(label, tuple):
-        for code in label:
-            if code not in codes:
-                note(f"paired '{label[0]} over {label[1]}': {code} never fired, "
-                     f"so no ranking was tested")
-        label = f"{label[0]} over {label[1]}"
     ok = got == expected
     print(f"  [{'ok' if ok else '!!'}] {label:<46} -> {got}")
     if not ok:
         note(f"compound '{label}': verdict named {got}, expected {expected}")
+
+for first, second, expected in PAIRED:
+    absent = [c for c in (first, second) if c not in T.S]
+    if absent:
+        note(f"paired: no scenario for {absent}")
+        continue
+    mod = T.fresh()
+    T.S[first][0](mod)
+    T.S[second][0](mod)
+    # Both scenarios' arguments, not just the first one's. Some findings only
+    # exist when the run was asked for them - a port check needs --check-ports,
+    # a saturation burst needs a window and a line rate - and calling with one
+    # scenario's arguments left the other silent, which the co-fire check below
+    # then reported. Merged, those pairs test a ranking instead of an absence.
+    kwargs = dict(T.S[first][1])
+    kwargs.update(T.S[second][1])
+    report = mod.diagnose(quick=False, **T.scenario_kwargs(kwargs))
+    codes = {f["code"] for f in report["findings"]}
+    got = report["verdict"]["based_on"][0]
+    # Named by what should win rather than by which was applied first. Two of
+    # these deliberately expect the second, and reading "X over Y" against a
+    # result of Y is the kind of line someone corrects the wrong side of.
+    label = f"{expected} over {second if expected == first else first}"
+    # A pair where only one of the two ever fired is not testing a ranking. It
+    # would sit here passing for a reason that has nothing to do with the rule,
+    # which is the failure mode this whole section exists to avoid.
+    for code in (first, second):
+        if code not in codes:
+            note(f"paired '{first} with {second}': {code} never fired, "
+                 f"so no ranking was tested")
+    ok = got == expected
+    print(f"  [{'ok' if ok else '!!'}] {label:<46} -> {got}")
+    if not ok:
+        note(f"paired '{label}': verdict named {got}, expected {expected}")
 
 print("\n=== 3. the same input twice, and across hash seeds ===")
 def snapshot(seed=None):

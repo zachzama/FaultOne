@@ -11773,6 +11773,159 @@ def _check_internet(raw, findings, target, probes):
     return inet_loss
 
 
+# The one word to go and touch.
+#
+# `owner` already says who owns a finding, but it is prose - 106 distinct
+# phrases across the ranked findings, nearly one each. That is a sentence to
+# read. This is a label to scan, from a closed set small enough to learn.
+#
+# It is deliberately incomplete. A hint that is wrong is worse than none at all,
+# because one word carries more authority than the paragraph under it, so a
+# finding nobody has classified gets no chip rather than a guess. The guard
+# below allows that; what it does not allow is a word outside the vocabulary.
+#
+# The trap is naming the obvious answer rather than the conclusion. Climbing CRC
+# errors look like a cable, and on a full-duplex link they are a duplex
+# mismatch that no cable will fix - which is one of the cases this tool exists
+# to get right. So duplex_mismatch points at the switch port, and anything whose
+# whole purpose is to contradict the obvious reading has to be checked by hand
+# before it is given a word.
+HINT_WORDS = (
+    "cable", "switch port", "optics", "this box", "cooling", "clock",
+    "DNS", "ISP", "LAN", "capacity", "certificate", "the service",
+    "the app", "firewall", "MTU", "the backend", "the client path",
+)
+
+FINDING_HINT = {
+    # --- the physical link ---------------------------------------------
+    "link_errors_live": "cable",
+    "link_flapping_live": "cable",
+    "link_flapping_logged": "cable",
+    "link_flapping": "cable",
+    "slow_link": "cable",
+    "link_errors_historical": "cable",
+    # Not "cable". A full-duplex link reporting collisions is the switch port
+    # disagreeing about duplex, and replacing the cable is the wrong answer the
+    # ranking exists to prevent.
+    "duplex_mismatch": "switch port",
+    "collisions": "switch port",
+    "negotiated_below_capacity": "switch port",
+    "bond_degraded": "switch port",
+    "optics_alarm": "optics",
+    "optics_rx_low": "optics",
+    "optics_rx_marginal": "optics",
+    "optics_warning": "optics",
+
+    # --- the box itself ------------------------------------------------
+    "no_ipv4": "this box",
+    "no_gateway": "this box",
+    "no_route_to_target": "this box",
+    "drops_live": "this box",
+    "nic_drops_live": "this box",
+    "nic_ring_overruns": "this box",
+    "nic_reset_logged": "this box",
+    "rcv_buffer_pruned": "this box",
+    "tcp_orphans_high": "this box",
+    "conntrack_drops_live": "this box",
+    "conntrack_near_limit": "this box",
+    "neigh_table_full": "this box",
+    "neigh_table_near_limit": "this box",
+    "fd_pressure": "this box",
+    "ephemeral_ports_low": "this box",
+    "resets_sent_high": "this box",
+    "udp_recv_buffer_full": "this box",
+    "source_address_not_held": "this box",
+    "cpu_throttled_live": "cooling",
+    "cpu_throttled_historical": "cooling",
+    "clock_skewed": "clock",
+    "clock_unsynced": "clock",
+    # The certificate is not the fault: it is not valid *yet*, which is almost
+    # always this device's clock.
+    "tls_not_yet_valid": "clock",
+
+    # --- names ----------------------------------------------------------
+    "dns_fail": "DNS",
+    "dns_all_resolvers_down": "DNS",
+    "dns_resolver_down": "DNS",
+    "dns_resolver_slow": "DNS",
+    "dns_disagree": "DNS",
+    "dns_no_resolvers": "DNS",
+    "dns_hijack": "DNS",
+
+    # --- off the site ----------------------------------------------------
+    "inet_partial_loss": "ISP",
+    "inet_unreachable": "ISP",
+    "cgnat": "ISP",
+    "trace_stalls": "ISP",
+    "loop": "ISP",
+    "tcp_flow_loss_some_peers": "ISP",
+
+    # --- the segment this box sits on ------------------------------------
+    "gw_unreachable": "LAN",
+    "gw_partial_loss": "LAN",
+    "duplicate_ip": "LAN",
+    "double_nat": "LAN",
+    "virtual_router_conflict": "LAN",
+
+    # --- not a fault, a limit --------------------------------------------
+    "link_saturated": "capacity",
+    "link_busy": "capacity",
+    "uplink_saturated": "capacity",
+    "uplink_busy": "capacity",
+    "saturation_bursts": "capacity",
+
+    # --- certificates -----------------------------------------------------
+    "own_tls_expired": "certificate",
+    "own_tls_expiring": "certificate",
+    "own_tls_untrusted": "certificate",
+    "tls_expired": "certificate",
+    "tls_expiring": "certificate",
+    "tls_untrusted": "certificate",
+    "tls_intercepted": "certificate",
+
+    # --- something is listening, and it is the problem ---------------------
+    "own_service_silent": "the service",
+    "own_service_erroring": "the service",
+    "own_service_not_http": "the service",
+    "own_tls_handshake_failed": "the service",
+    "port_refused": "the service",
+    "tls_handshake_failed": "the service",
+    "tls_handshake_slow": "the service",
+    "accept_overflow_live": "the app",
+    "accept_overflow_historical": "the app",
+    "close_wait_backlog": "the app",
+    "syn_recv_backlog": "the app",
+    "syncookies_live": "the app",
+    "syncookies_historical": "the app",
+    "reqq_full_drops": "the app",
+
+    # --- something is refusing on purpose ----------------------------------
+    "egress_blocked": "firewall",
+    "path_admin_prohibited": "firewall",
+    "port_timeout": "firewall",
+
+    # --- how big a packet may be -------------------------------------------
+    "pmtu_blackhole": "MTU",
+    "fragments_lost": "MTU",
+    "tunnel_mtu": "MTU",
+    "frame_length_errors": "MTU",
+    "mtu_nonstandard": "MTU",
+
+    # --- the two sides of a box that relays --------------------------------
+    "tcp_flow_loss_backends": "the backend",
+    "tcp_return_stalled_backends": "the backend",
+    "queuing_delay_backends": "the backend",
+    "path_jitter_backends": "the backend",
+    "tcp_flow_loss_clients": "the client path",
+    "tcp_return_stalled_clients": "the client path",
+    "queuing_delay_clients": "the client path",
+    "path_jitter_clients": "the client path",
+    "service_address_unserved": "the client path",
+    "service_address_idle": "the client path",
+    "service_endpoint_idle": "the client path",
+}
+
+
 # Findings whose subject is the destination itself, rather than the path to it.
 # They mark the target hop by role rather than by number, since which hop is the
 # target varies with the path.
@@ -12073,6 +12226,17 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # Built once and used twice: the three boxes read it, and the four legs take
     # each side's state from it so a column heading cannot disagree with the box
     # sitting directly above it.
+    # The one word to go and touch, where the finding has been classified.
+    # Attached here rather than worked out in a renderer, so the page and the
+    # terminal cannot end up pointing at different things.
+    for _f in findings:
+        # Checked against the vocabulary on the way out, so a word nobody chose
+        # cannot reach a report even if the table grows one. The set is the
+        # point: a label is only scannable while it is small enough to learn.
+        _hint = FINDING_HINT.get(_f.get("code"))
+        if _hint in HINT_WORDS:
+            _f["hint"] = _hint
+
     _sides = build_sides(findings, raw)
     return {
         "verdict": verdict,
@@ -12337,6 +12501,15 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      because the two states it sits between - carrying, and broken - are both
      claims, and this head is drawn precisely when neither can be made. */
   .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
+  /* The one word to go and touch, beside the tags that already label a finding.
+     A chip rather than a sentence at the end of the message: the point is to be
+     read without reading, and the owner beside it is already the prose. */
+  .hint{display:inline-flex; align-items:center; gap:4px;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.02em;
+    padding:1px 7px; border-radius:999px; white-space:nowrap;
+    color:var(--text); border:1px solid var(--border);
+    border-color:color-mix(in srgb, var(--accent) 45%, var(--border));
+    background:color-mix(in srgb, var(--accent) 12%, transparent);}
   /* The four legs. One column per side, two lanes in each. */
   .pcols{display:grid; grid-template-columns:1fr; gap:14px; margin:6px 0 22px;}
   /* The traced path's hops, inside its own column. A bar per hop for the share
@@ -13281,7 +13454,8 @@ function renderDiagnosis(data, opts){
       <div>
         <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
           f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
-          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}</div>
+          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}${
+          f.hint ? `<span class="hint">&rarr; ${escapeHtml(f.hint)}</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>

@@ -183,6 +183,15 @@
      because the two states it sits between - carrying, and broken - are both
      claims, and this head is drawn precisely when neither can be made. */
   .zarrow.split .unknown{color:var(--text-dim); opacity:.5;}
+  /* The one word to go and touch, beside the tags that already label a finding.
+     A chip rather than a sentence at the end of the message: the point is to be
+     read without reading, and the owner beside it is already the prose. */
+  .hint{display:inline-flex; align-items:center; gap:4px;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.02em;
+    padding:1px 7px; border-radius:999px; white-space:nowrap;
+    color:var(--text); border:1px solid var(--border);
+    border-color:color-mix(in srgb, var(--accent) 45%, var(--border));
+    background:color-mix(in srgb, var(--accent) 12%, transparent);}
   /* The four legs. One column per side, two lanes in each. */
   .pcols{display:grid; grid-template-columns:1fr; gap:14px; margin:6px 0 22px;}
   /* The traced path's hops, inside its own column. A bar per hop for the share
@@ -1127,7 +1136,8 @@ function renderDiagnosis(data, opts){
       <div>
         <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
           f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
-          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}</div>
+          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}${
+          f.hint ? `<span class="hint">&rarr; ${escapeHtml(f.hint)}</span>` : ''}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>

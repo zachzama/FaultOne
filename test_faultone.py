@@ -5970,6 +5970,95 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
         self.assertIsNone(nd.build_probe_column([], "8.8.8.8"))
 
 
+class TestTheOneWordHint(unittest.TestCase):
+    """The thing to go and touch, in one word.
+
+    `owner` already says who owns a finding, but it is prose - 106 distinct
+    phrases across the ranked findings, nearly one each. This is a label to
+    scan, and the whole value is that the set is small enough to learn.
+
+    A wrong one is worse than none, because a single word carries more
+    authority than the paragraph under it. So the table is allowed to be
+    incomplete and is not allowed to be loose.
+    """
+
+    def hints(self):
+        return nd.FINDING_HINT
+
+    def test_every_hint_is_a_word_from_the_vocabulary(self):
+        """A table that grows a synonym has stopped being scannable - "cabling"
+        and "cable" read as two different answers."""
+        outside = sorted({h for h in self.hints().values()
+                          if h not in nd.HINT_WORDS})
+        self.assertEqual(outside, [], "hints outside the vocabulary: %s" % outside)
+
+    def test_every_hint_names_a_finding_that_exists(self):
+        codes = {c for c, _o, _h, _w in nd.VERDICT_RULES} | set(nd.VERDICT_EXEMPT)
+        unknown = sorted(set(self.hints()) - codes)
+        self.assertEqual(unknown, [], "hints for codes that do not exist: %s" % unknown)
+
+    def test_a_finding_with_no_hint_gets_no_chip(self):
+        """Incomplete on purpose. An unclassified finding shows nothing rather
+        than a guess, and the page has to cope with that rather than print an
+        empty chip."""
+        self.assertLess(len(self.hints()), len(nd.VERDICT_RULES),
+                        "every finding now has a hint, so this no longer tests "
+                        "that a missing one is handled")
+        src = nd.VIEWER_TEMPLATE
+        i = src.index('class="hint"')
+        self.assertIn("f.hint ?", src[max(0, i - 200):i],
+                      "the chip is drawn without checking there is a hint")
+
+    def test_the_cable_that_is_not_a_cable(self):
+        """The case the README uses to explain why ranking matters: climbing
+        error counters look like a cable, and on a full-duplex link they are the
+        switch port disagreeing about duplex, which no cable will fix.
+
+        This is exactly where a one-word hint is most dangerous - it is the
+        obvious answer, and the obvious answer is wrong.
+        """
+        self.assertEqual(self.hints()["duplex_mismatch"], "switch port")
+        self.assertEqual(self.hints()["collisions"], "switch port")
+
+    def test_a_certificate_that_is_not_the_certificate(self):
+        """`tls_not_yet_valid` is almost always this device's clock, and sending
+        someone to renew a certificate that is not expired is the same trap."""
+        self.assertEqual(self.hints()["tls_not_yet_valid"], "clock")
+
+    def test_a_hint_never_faces_the_other_way_from_its_finding(self):
+        """"the client path" on a finding about the way out would put the reader
+        on the wrong side of the box - the one contradiction the direction axis
+        exists to prevent, arriving in a label rather than a picture."""
+        facing = {"the client path": "downstream", "the backend": "upstream"}
+        for code, hint in self.hints().items():
+            want = facing.get(hint)
+            if not want:
+                continue
+            with self.subTest(code=code):
+                self.assertEqual(nd.FINDING_SIDE.get(code), want,
+                                 "%s is hinted %r but faces %s"
+                                 % (code, hint, nd.FINDING_SIDE.get(code)))
+
+    def test_the_hint_reaches_the_report(self):
+        mod = fresh()
+        setup, kwargs = S["tcp_return_stalled_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        got = {f["code"]: f.get("hint") for f in rep["findings"]}
+        self.assertEqual(got.get("tcp_return_stalled_backends"), "the backend")
+
+    def test_a_word_outside_the_vocabulary_cannot_reach_a_report(self):
+        """The vocabulary gates the way out, not just the table, so a hint added
+        without being agreed on renders as nothing rather than as a new word."""
+        mod = fresh()
+        mod.FINDING_HINT = dict(mod.FINDING_HINT, no_ipv4="gremlins")
+        setup, kwargs = S["no_ipv4"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        for f in rep["findings"]:
+            self.assertNotEqual(f.get("hint"), "gremlins")
+
+
 class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
     """One line decides which side a connection is on:
 

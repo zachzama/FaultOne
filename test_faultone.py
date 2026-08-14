@@ -6672,6 +6672,90 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhatThisRunWasAllowedToSee(unittest.TestCase):
+    """Several checks read something only a privileged user can read. Each of
+    them already says "couldn't look" instead of "nothing happened", which is
+    the half that matters and was already right.
+
+    What was missing is one statement of which run this was. Two reports of the
+    same box, one privileged and one not, are different reports, and nothing on
+    either said which one you were holding. The file header has said "typically
+    root" since the first version, so the expectation was written down
+    everywhere except on the report it applies to.
+    """
+
+    def under_euid(self, euid):
+        mod = fresh()
+        mod.os = types.SimpleNamespace(**{k: getattr(nd.os, k)
+                                          for k in dir(nd.os) if not k.startswith("__")})
+        mod.os.geteuid = lambda: euid
+        return mod.privilege_of_this_run()
+
+    def test_root_is_told_it_missed_nothing(self):
+        said = self.under_euid(0)
+        self.assertIs(said["elevated"], True)
+        self.assertIn("with the privilege it needs", said["note"])
+
+    def test_anyone_else_is_told_what_could_not_be_looked_at(self):
+        """A count would be a number. These are the questions behind it, and
+        the reader needs to know whether the one they came for is on the list.
+        """
+        said = self.under_euid(1000)
+        self.assertIs(said["elevated"], False)
+        for read in nd.PRIVILEGED_READS:
+            self.assertIn(read, said["note"])
+
+    def test_it_never_reads_as_nothing_found(self):
+        """The point of saying it at all. A degraded run that looks clean is
+        worse than one that admits it is degraded."""
+        self.assertIn("none of them is reported as nothing found",
+                      self.under_euid(1000)["note"])
+
+    def test_a_platform_without_the_question_says_unknown_rather_than_no(self):
+        """geteuid is absent on Windows, where privilege is a different
+        question. Guessing False there would put "not root" on every Windows
+        report, which is not what was measured."""
+        mod = fresh()
+        mod.os = types.SimpleNamespace(**{k: getattr(nd.os, k)
+                                          for k in dir(nd.os) if not k.startswith("__")})
+        del mod.os.geteuid
+        said = mod.privilege_of_this_run()
+        self.assertIsNone(said["elevated"])
+
+    def test_the_report_carries_it(self):
+        mod = fresh()
+        setup, kwargs = S["all_clear"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertIn("elevated", rep["privilege"])
+
+    def test_only_the_lesser_run_says_so_on_the_page_and_the_terminal(self):
+        """A privileged run is what the header has told people to do since the
+        first version. Saying so every time would be a line of noise on the
+        ordinary report, so the badge and the terminal line appear only when
+        the run was the lesser one."""
+        mod = fresh()
+        setup, kwargs = S["all_clear"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        for elevated, expected in ((True, False), (False, True), (None, False)):
+            with self.subTest(elevated=elevated):
+                shown = dict(rep, privilege={"elevated": elevated, "note": "n"})
+                said = nd.render_text_report(shown)
+                self.assertEqual("[not root" in said, expected)
+
+    def test_the_page_reads_the_same_field_the_report_writes(self):
+        """Computing it and not drawing it is how the traced peer spent a day
+        being right and invisible.
+
+        The test names the condition rather than the field. "data.privilege
+        appears somewhere in the template" stayed true against a badge wired to
+        a constant, because the tooltip below it still mentioned the field.
+        """
+        self.assertIn("data.privilege.elevated === false", nd.VIEWER_TEMPLATE)
+        self.assertIn("'not root'", nd.VIEWER_TEMPLATE)
+
+
 class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
     """Three findings say connections are waiting in a queue rather than
     travelling, and then offer three candidates for where: a full link, an

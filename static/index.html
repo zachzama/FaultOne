@@ -897,9 +897,14 @@ function renderDiagnosis(data, opts){
   output.innerHTML = '';
   panelSeq = 0;
 
+  // Same rule as the terminal: the badge says so only when the run was the
+  // lesser one, and the reason travels in the tooltip rather than on the page.
+  const lesser = data.privilege && data.privilege.elevated === false;
   osBadge.textContent = [(data.os_label || data.os) && `${data.os_label || data.os} report`,
-                         data.version && `v${data.version}`].filter(Boolean).join(' · ')
+                         data.version && `v${data.version}`,
+                         lesser && 'not root'].filter(Boolean).join(' · ')
                         || 'report viewer';
+  osBadge.title = lesser ? (data.privilege.note || '') : '';
 
 
   const findings = data.findings || [];

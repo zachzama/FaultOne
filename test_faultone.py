@@ -6157,6 +6157,23 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         self.assertIn("1 of 1", self.finding(rep)["message"])
         self.assertNotIn("of that side's traffic", self.finding(rep)["message"])
 
+    def test_the_column_is_divided_where_it_changes_subject(self):
+        """A column carries two things: what the connections on that side are
+        doing, and the path to one of the destinations they go to. The rule that
+        separates them belongs between those, at the top of the traced block.
+
+        It sat on the hop list instead, which put it between the traced block's
+        own heading and its rows - splitting a block from its title, and leaving
+        the connections and the path running together above it.
+        """
+        css = nd.VIEWER_TEMPLATE[:nd.VIEWER_TEMPLATE.index("</style>")]
+        traced = css[css.index(".ptraced{"):css.index("}", css.index(".ptraced{"))]
+        self.assertIn("border-top", traced,
+                      "nothing separates the connections from the path below them")
+        hops = css[css.index(".hops{"):css.index("}", css.index(".hops{"))]
+        self.assertNotIn("border-top", hops,
+                         "the hop rows are still cut off from their own heading")
+
     def test_a_hop_timing_is_not_offered_as_one_direction(self):
         """A traceroute time is a round trip: the probe goes out with a short
         TTL and the router at that hop answers, so the reply that stops the

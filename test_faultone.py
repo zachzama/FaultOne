@@ -6051,6 +6051,28 @@ class TestTheAddressesTheReportShows(unittest.TestCase):
         self.assertLessEqual(len(asked), 8, "the whole connection table is "
                                             "being resolved, not the page")
 
+    def test_a_name_never_shares_a_line_with_a_measurement(self):
+        """The hop row is an address, a bar and a time; the bar is the only
+        element on the page that shows where the latency went, and it takes
+        whatever width the row has left. A resolved name is the longest thing a
+        hop carries, and putting it on that line squeezed the measurement.
+
+        The same holds for a leg's track, whose whole content is a coloured rule
+        between two endpoints - and whose peer the column heading already names,
+        so there is nothing lost by keeping the ends short.
+        """
+        src = nd.VIEWER_TEMPLATE
+        row = src[src.index('<div class="hrow'):src.index('class="hbar"')]
+        self.assertIn("escapeHtml(h.host)", row)
+        self.assertNotIn("named(h.host)", row,
+                         "a resolved name is back on the row with the bar")
+        track = src[src.index('<div class="ptrack">'):]
+        track = track[:track.index("</div>")]
+        self.assertNotIn("named(", track,
+                         "a resolved name is back on the line with the rule")
+        self.assertIn('class="hname"', src,
+                      "the name has nowhere of its own to go")
+
     def test_a_name_never_replaces_its_address(self):
         """A PTR record is written by whoever owns the reverse zone, not
         necessarily whoever owns the host. It is a label to read; the address

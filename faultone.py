@@ -12714,6 +12714,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .hbar > span{display:block; height:100%; background:var(--text-dim); opacity:.55;}
   .hrow.crit .hbar > span{background:var(--crit); opacity:.9;}
   .hrow.warn .hbar > span{background:var(--warn); opacity:.9;}
+  /* Under the row, not on it. A resolved name is the longest thing a hop
+     carries, and the row's own content is a bar showing where the time went -
+     on that line the name squeezes the one element that is a measurement. */
+  .hname{font-family:var(--mono); font-size:10px; color:var(--text-dim);
+    opacity:.75; padding:0 0 2px 46px;}
   .hwhy{font-family:var(--mono); font-size:10.5px; color:var(--crit);
     padding:0 0 3px 46px;}
   .hwhy.warn{color:var(--warn);}
@@ -13565,12 +13570,13 @@ function renderDiagnosis(data, opts){
   const hopList = col => `<div class="hops">${col.hops.map(h => `
       <div class="hrow ${h.state === 'ok' ? '' : h.state}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${named(h.host)}</span>
+        <span class="hh">${escapeHtml(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-      </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+      </div>${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
+          h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       <div class="pboth">each time is a round trip to that hop, out and back
         together \u2014 a traceroute cannot separate them${
@@ -13627,9 +13633,9 @@ function renderDiagnosis(data, opts){
       return `<div class="plane ${leg.state}">
           <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
             <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
-          <div class="ptrack"><span class="pend">${named(side.left)}</span>
+          <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
             ${track}
-            <span class="pend">${named(side.right)}</span></div>
+            <span class="pend">${escapeHtml(side.right)}</span></div>
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');

@@ -6767,7 +6767,15 @@ def build_probe_column(hops, target, baseline_path=None):
         return None
     rows, run = [], 0.0
     for hop in hops:
+        # Averaged here when nobody has done it already. The target's hops come
+        # through the path pipeline, which adds avg_ms on the way; the ones
+        # traced to a backend come straight from the parser and carry only the
+        # individual timings. Reading avg_ms alone gave every one of those a
+        # null, and the page rendered it as "nullms".
         avg = hop.get("avg_ms")
+        if avg is None:
+            times = [t for t in (hop.get("times_ms") or []) if t is not None]
+            avg = sum(times) / len(times) if times else None
         delta = max(0.0, (avg or 0) - run)
         if avg is not None:
             run = avg
@@ -12407,6 +12415,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      many peers, one stands in for the rest and the reader has to know which. */
   .ptraced{padding:9px 14px 0; font-family:var(--mono); font-size:10.5px;
     color:var(--text-dim);}
+  /* The hop timings are round trips. Under a heading reading "request out" they
+     would be read as one way, which is a claim no traceroute can make: the
+     reply that stops the clock is the router's own, so out and back are in
+     every figure and nothing here can split them. */
+  .ptraced .pboth{display:block; margin-top:3px; opacity:.75;}
   /* Observations about this side that are not a leg. */
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
@@ -13165,6 +13178,7 @@ function renderDiagnosis(data, opts){
         <span class="hh">${escapeHtml(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
+          : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
       </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
@@ -13225,7 +13239,9 @@ function renderDiagnosis(data, opts){
     const op = data.out_path;
     const traced = (op && side.side === 'backend') ? `
       <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
-        escapeHtml(op.picked)}${op.of > 1 ? ' of ' + op.of + ' connections' : ''}</div>
+        escapeHtml(op.picked)}${op.of > 1 ? ' of ' + op.of + ' connections' : ''}
+        <span class="pboth">each time is a round trip to that hop, out and back
+        together \u2014 a traceroute cannot separate them</span></div>
       ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>

@@ -6157,6 +6157,36 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         self.assertIn("1 of 1", self.finding(rep)["message"])
         self.assertNotIn("of that side's traffic", self.finding(rep)["message"])
 
+    def test_a_hop_timing_is_not_offered_as_one_direction(self):
+        """A traceroute time is a round trip: the probe goes out with a short
+        TTL and the router at that hop answers, so the reply that stops the
+        clock is its own. Out and back are in every figure and nothing here can
+        separate them - one-way delay needs a synchronised clock at both ends.
+
+        So the timings must not sit under a heading that reads as one
+        direction, and the page says which they are where they are drawn.
+        """
+        src = nd.VIEWER_TEMPLATE
+        i = src.index('class="ptraced"')
+        block = src[i:src.index("</div>", i)]
+        self.assertIn("round trip", block,
+                      "the hop timings do not say they are round trips")
+
+    def test_a_hop_with_no_timing_says_so_rather_than_printing_null(self):
+        """Hops traced to a backend come straight from the parser and carry only
+        their individual timings; the target's come through the path pipeline,
+        which averages them on the way. Reading the average alone gave every
+        backend hop a null, and the page printed "nullms"."""
+        col = nd.build_probe_column(
+            [{"hop": 1, "display": "10.0.0.1", "times_ms": [1.0, 1.2, 1.3]},
+             {"hop": 2, "display": "10.0.0.90", "times_ms": []}], "10.0.0.90")
+        self.assertAlmostEqual(col["hops"][0]["ms"], 1.2, places=1)
+        self.assertIsNone(col["hops"][1]["ms"])
+        src = nd.VIEWER_TEMPLATE
+        i = src.index('class="ht"')
+        self.assertIn("no timing", src[i:i + 400],
+                      "a hop with no timing still renders its null")
+
     def test_the_destination_traced_is_one_this_box_actually_uses(self):
         """The trace used to go to the target, a public address picked for being
         reliably reachable. On a box that relays that is a reachability check

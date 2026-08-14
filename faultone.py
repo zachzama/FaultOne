@@ -7200,8 +7200,24 @@ def build_sides(findings, raw=None):
     rank = {"pass": 0, "warn": 1, "fail": 2}
     out = []
     for side, label, detail in order:
+        # Findings facing this zone, and findings this zone owns.
+        #
+        # Direction alone left the box green on the seven whose owner is this
+        # box: the port-exhaustion report said "this box is running out of
+        # ports" over a box reading OK, because nothing about its link, NIC or
+        # clock was failing. True about the direction, false about the box, and
+        # the reader believes the box.
+        #
+        # Lighting both is what is actually the case: the way out stopped, and
+        # this box is why. Two lit zones would read as two faults, which is what
+        # the "the cause" tag is there to prevent.
+        #
+        # This is the drawing only. build_verdict reasons on finding_side, so
+        # what explains what, and which findings can corroborate each other, are
+        # untouched - a port ceiling still cannot explain an inbound fault.
         mine = [f for f in findings
-                if finding_side(f.get("code")) == side
+                if (finding_side(f.get("code")) == side
+                    or cause_owner_side(f.get("code")) == side)
                 and f.get("severity") in ("warning", "critical")
                 and f.get("code") not in VERDICT_EXEMPT]
         state = ("fail" if any(f["severity"] == "critical" for f in mine)

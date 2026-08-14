@@ -6627,18 +6627,37 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
             with self.subTest(list=name):
                 self.assertEqual(sorted(listed - codes), [])
 
-    def test_the_box_that_owns_it_is_marked_even_when_it_is_not_the_lit_one(self):
-        """The case this exists for."""
+    def test_the_box_that_owns_it_lights_even_with_nothing_facing_it(self):
+        """The case this exists for.
+
+        Running out of ports faces the way out, so direction alone left this box
+        reading OK while the verdict said it was the fault. Nothing about its
+        link, NIC or clock was failing, which is true and is not what the reader
+        takes from a green box under that sentence.
+
+        Both are lit now: the way out is what stopped, and this box is why.
+        """
         mod = fresh()
         setup, kwargs = S["ephemeral_ports_low"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        owning = [z for z in rep["sides"] if z["owns_cause"]]
-        self.assertEqual([z["side"] for z in owning], ["local"])
-        self.assertEqual(owning[0]["state"], "pass",
-                         "the box the verdict blames is not the lit one here, "
-                         "which is the whole point")
+        by = {z["side"]: z for z in rep["sides"]}
+        self.assertEqual([s for s, z in by.items() if z["owns_cause"]], ["local"])
+        self.assertNotEqual(by["local"]["state"], "pass",
+                            "the box the verdict blames still reads OK")
+        self.assertNotEqual(by["upstream"]["state"], "pass",
+                            "the direction that stopped is no longer lit")
+        # Nothing faces local here; it is lit for what it owns.
+        self.assertNotIn("ephemeral_ports_low",
+                         [c for c in by["local"]["because"]
+                          if nd.finding_side(c) == "local"])
 
+    def test_lighting_a_zone_for_what_it_owns_changes_no_reasoning(self):
+        """The colour is the drawing. build_verdict reasons on finding_side, so
+        what explains what is untouched - a port ceiling still cannot be offered
+        as the cause of an inbound fault."""
+        self.assertEqual(nd.finding_side("ephemeral_ports_low"), "upstream")
+        self.assertEqual(nd.finding_side("fd_pressure"), "downstream")
     def test_it_marks_the_lit_box_where_they_agree(self):
         """The ordinary case, and the one that says whether this is worth
         carrying: with two boxes lit the colours cannot say which is the cause,

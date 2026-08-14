@@ -1357,10 +1357,10 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **34** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Data collections** | **35** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1284 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1293 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1481,7 +1481,7 @@ about what sits between them is softened, and only when the trace shows it
 fanning out **between the two hops in question**: a path that splits after
 hop 6 says nothing about whether hops 1 and 2 are adjacent.
 
-### The 34 things it inspects
+### The 35 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1496,30 +1496,31 @@ hop 6 says nothing about whether hops 1 and 2 are adjacent.
 10. LLDP/CDP neighbour: which switch and port
 11. ARP / neighbour table
 12. TCP socket states
-13. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
-14. TCP retransmission counters
-15. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
-16. Clock synchronisation and offset, where a time daemon can be asked
-17. Listening ports
-18. Neighbour inventory (with `--inventory`)
+13. Interface queues: what this box's own egress queues are holding and dropping (Linux `tc`)
+14. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
+15. TCP retransmission counters
+16. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
+17. Clock synchronisation and offset, where a time daemon can be asked
+18. Listening ports
+19. Neighbour inventory (with `--inventory`)
 
 **Off the device**
-19. Gateway reachability and loss
-20. Target reachability and loss
-21. Hop-by-hop path (traceroute, or mtr where installed)
-22. TCP-probe path, when the standard one is filtered
-23. Path MTU
-24. DNS resolution
-25. Each configured DNS resolver, individually
-26. TCP reachability of specific ports
-27. TLS handshake and certificate on ports that should have one
-28. Bonded interface members, and which of them are down (Linux)
-29. Neighbour table size against its own ceiling (Linux)
-30. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
-31. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
-32. The TLS certificate this box *serves*, read from the outside in
-33. This box's own service, asked over HTTP for an answer rather than a connection
-34. Proxy configuration, how this box is told to reach the internet: the
+20. Gateway reachability and loss
+21. Target reachability and loss
+22. Hop-by-hop path (traceroute, or mtr where installed)
+23. TCP-probe path, when the standard one is filtered
+24. Path MTU
+25. DNS resolution
+26. Each configured DNS resolver, individually
+27. TCP reachability of specific ports
+28. TLS handshake and certificate on ports that should have one
+29. Bonded interface members, and which of them are down (Linux)
+30. Neighbour table size against its own ceiling (Linux)
+31. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
+32. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
+33. The TLS certificate this box *serves*, read from the outside in
+34. This box's own service, asked over HTTP for an answer rather than a connection
+35. Proxy configuration, how this box is told to reach the internet: the
     `http_proxy` family, and on macOS the system settings including a PAC file
     or WPAD. Read, never probed
 
@@ -2105,7 +2106,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1284 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1293 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3593,7 +3594,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1284 tests, no dependencies, no network, a few seconds, so they run
+1293 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

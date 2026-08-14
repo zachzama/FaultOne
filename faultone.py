@@ -2207,6 +2207,115 @@ def cmd_socket_owners():
                      "(tried ss, netstat, lsof)"}
 
 
+# ---------------------------------------------------------------------------
+# The queues on this box's own interfaces.
+#
+# Three findings say connections are waiting in a queue rather than travelling,
+# and then offer three candidates for where: a full link, an overrun interface
+# queue, or a device buffering to hide one. The middle one is on this box and
+# the kernel counts it, so the three-way guess was only ever a guess about two.
+#
+# `tc -s qdisc` is a read-only netlink dump and needs no privilege, which is
+# what makes this the cheapest of the lot: nothing was in the way of collecting
+# it except nobody having asked.
+# ---------------------------------------------------------------------------
+
+_QDISC_HEAD = re.compile(r"^qdisc (\S+) (\S+) dev (\S+)")
+_QDISC_SENT = re.compile(r"Sent \d+ bytes (\d+) pkt \(dropped (\d+), "
+                         r"overlimits (\d+) requeues (\d+)\)")
+_QDISC_BACKLOG = re.compile(r"backlog (\d+)b (\d+)p")
+
+
+def parse_qdisc(text):
+    """`tc -s qdisc` into one row per queue.
+
+    Three lines per queue: the header naming the kind and the interface, the
+    totals, and the backlog. Anything that does not parse is skipped, because a
+    queueing discipline this does not know still prints a header this does.
+    """
+    out, current = [], None
+    for line in (text or "").splitlines():
+        head = _QDISC_HEAD.match(line.strip())
+        if head:
+            current = {"kind": head.group(1), "handle": head.group(2),
+                       "iface": head.group(3), "root": " root " in line + " ",
+                       "sent_pkts": 0, "dropped": 0, "overlimits": 0,
+                       "requeues": 0, "backlog_bytes": 0, "backlog_pkts": 0}
+            out.append(current)
+            continue
+        if current is None:
+            continue
+        sent = _QDISC_SENT.search(line)
+        if sent:
+            current["sent_pkts"] = int(sent.group(1))
+            current["dropped"] = int(sent.group(2))
+            current["overlimits"] = int(sent.group(3))
+            current["requeues"] = int(sent.group(4))
+        backlog = _QDISC_BACKLOG.search(line)
+        if backlog:
+            current["backlog_bytes"] = int(backlog.group(1))
+            current["backlog_pkts"] = int(backlog.group(2))
+    return out
+
+
+def cmd_qdisc():
+    """What this box's own egress queues are doing.
+
+    Opportunistic like the rest: a box without `tc` says so and every message
+    built on this reads as it did before.
+    """
+    if OS_NAME != "Linux":
+        return {"ok": False, "cmd": "tc -s qdisc", "applicable": False,
+                "error": "queue statistics are Linux-only"}
+    res = run_first_usable([["tc", "-s", "qdisc", "show"], ["tc", "-s", "qdisc"]],
+                           timeout=10)
+    if not res.get("ok"):
+        return res
+    res["queues"] = parse_qdisc(res.get("stdout") or "")
+    return res
+
+
+def worst_local_queue(raw):
+    """The interface queue holding or dropping the most, if any is.
+
+    Loopback is excluded. It is a queue by the kernel's reckoning and never the
+    answer to "where is traffic being held up on the way out".
+    """
+    queues = ((raw or {}).get("qdisc") or {}).get("queues") or []
+    real = [q for q in queues if q.get("iface") != "lo"]
+    if not real:
+        return None
+    worst = max(real, key=lambda q: (q["backlog_pkts"], q["dropped"]))
+    if not worst["backlog_pkts"] and not worst["dropped"]:
+        return None
+    return worst
+
+
+def _queues_here_say(raw):
+    """Whether this box's own egress queues are part of the delay, or are not.
+
+    Both answers are worth a sentence, and the second more than the first. The
+    message this joins offers three candidates and the reader has to eliminate
+    them by hand; an empty queue here eliminates one of them from the box the
+    report is being written on.
+    """
+    queues = ((raw or {}).get("qdisc") or {}).get("queues") or []
+    if not queues:
+        return ""
+    worst = worst_local_queue(raw)
+    if not worst:
+        return (" This box's own egress queues are empty and have dropped nothing, "
+                "so the buffering is not happening here.")
+    parts = []
+    if worst["backlog_pkts"]:
+        parts.append("%d packet(s) waiting" % worst["backlog_pkts"])
+    if worst["dropped"]:
+        parts.append("%d dropped" % worst["dropped"])
+    return (" This box's own %s queue on %s has %s, so at least some of the holding "
+            "up is here rather than further out."
+            % (worst["kind"], worst["iface"], " and ".join(parts)))
+
+
 def owners_in_state(owners, state):
     """[(process, sockets)] worst first, for one TCP state."""
     want, counts = _norm_state(state), {}
@@ -3706,7 +3815,7 @@ def _flow_loss_pct(flow):
     return None, None
 
 
-def _queue_message(info, where):
+def _queue_message(info, where, raw=None):
     """One sentence for a queue, wherever it was found."""
     return (f"{info['queued']} connection(s) {where} are waiting in a queue rather "
             f"than travelling: the worst is {info['queue_peer']} at "
@@ -3714,7 +3823,8 @@ def _queue_message(info, where):
             f"so {info['queue_ms']}ms of every round trip is spent buffered. That is "
             f"not distance - the same connection has been faster. Something on this "
             f"path is holding traffic instead of dropping it: a full link, an overrun "
-            f"interface queue, or a device buffering to hide one.")
+            f"interface queue, or a device buffering to hide one."
+            + _queues_here_say(raw))
 
 
 def _queue_summary(flows):
@@ -5107,6 +5217,13 @@ PANEL_HELP = {
         "desc": "This device's own TCP sockets by state. Connections stuck in SYN_SENT mean "
                 "nothing is answering; a pile of CLOSE_WAIT means an application isn't closing "
                 "its sockets, which is not a network fault.",
+    },
+    "qdisc": {
+        "label": "interface queues", "layer": 2,
+        "desc": "What this box's own egress queues are holding and dropping. Three findings "
+                "say traffic is waiting rather than travelling and offer three candidates "
+                "for where; this is the one of them that is on this box, and the kernel "
+                "counts it, so it can be named or ruled out rather than left to the reader.",
     },
     "socket_owners": {
         "label": "who holds the sockets", "layer": 4,
@@ -6963,6 +7080,9 @@ RAW_STAGE = {
     # Read from the same table and answering the same two stages: who is
     # listening belongs to ports, who is holding them open to clients.
     "socket_owners": ("ports", "clients"),
+    # An egress queue is the link stage: it is this box's own interface
+    # holding traffic, which is what that stage is about.
+    "qdisc": "link",
     # This box's own service and the certificate it serves, both read from the
     # outside in. They belong to the ports stage for the same reason the port
     # checks do: they answer whether what is listening here actually works.
@@ -9937,6 +10057,8 @@ def _check_arp(raw, findings):
         raw["sockets"] = cmd_socket_states()
     if "socket_owners" not in raw:
         raw["socket_owners"] = cmd_socket_owners()
+    if "qdisc" not in raw:
+        raw["qdisc"] = cmd_qdisc()
     sock_states = raw["sockets"].get("states", {}) if raw["sockets"].get("ok") else {}
     pending = raw["sockets"].get("pending", {}) if raw["sockets"].get("ok") else {}
     syn_sent = sock_states.get("SYN_SENT", 0)
@@ -10278,18 +10400,19 @@ def _check_flows(raw, findings):
         findings.append({
             "severity": "warning", "layer": 3, "code": "queuing_delay_backends",
             "message": _queue_message(sides["backend"],
-                                      "between this box and what it connects out to"),
+                                      "between this box and what it connects out to",
+                                      raw),
         })
     elif sides.get("client", {}).get("queued"):
         findings.append({
             "severity": "warning", "layer": 3, "code": "queuing_delay_clients",
             "message": _queue_message(sides["client"],
-                                      "between this box and the people using it"),
+                                      "between this box and the people using it", raw),
         })
     elif not sides and (stats.get("queue") or {}).get("queued"):
         findings.append({
             "severity": "warning", "layer": 3, "code": "queuing_delay",
-            "message": _queue_message(stats["queue"], "on the path out of this box"),
+            "message": _queue_message(stats["queue"], "on the path out of this box", raw),
         })
 
     # Delay that will not sit still, from TCP's own variance on the
@@ -12670,6 +12793,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # Who holds them, read beside the table itself so every finding built from
     # that table can name a process instead of saying "an application".
     raw["socket_owners"] = cmd_socket_owners()
+    # What this box's own egress queues are doing, for the three findings that
+    # otherwise offer three candidates and can eliminate none of them.
+    raw["qdisc"] = cmd_qdisc()
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
     # Kept beside the kind so anything reading raw can name what was aimed at

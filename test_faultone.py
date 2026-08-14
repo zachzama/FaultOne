@@ -6672,6 +6672,115 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
+    """Three findings say connections are waiting in a queue rather than
+    travelling, and then offer three candidates for where: a full link, an
+    overrun interface queue, or a device buffering to hide one. The middle one
+    is on this box and the kernel counts it, so the three-way guess was only
+    ever a guess about two.
+
+    `tc -s qdisc` is a read-only netlink dump and needs no privilege. Nothing
+    was ever in the way of collecting it except nobody having asked, which is
+    what makes it worth writing down.
+    """
+
+    TC = ("qdisc noqueue 0: dev lo root refcnt 2\n"
+          " Sent 1000 bytes 10 pkt (dropped 0, overlimits 0 requeues 0)\n"
+          " backlog 0b 0p requeues 0\n"
+          "qdisc fq_codel 8003: dev eth0 root refcnt 2 limit 10240p flows 1024\n"
+          " Sent 998877665 bytes 7654321 pkt (dropped 8412, overlimits 0 requeues 3)\n"
+          " backlog 1876543b 1240p requeues 3\n"
+          "  maxpacket 1514 drop_overlimit 0 new_flow_count 12 ecn_mark 0\n"
+          "qdisc mq 1: dev eth1 root\n"
+          " Sent 55 bytes 1 pkt (dropped 0, overlimits 0 requeues 0)\n"
+          " backlog 0b 0p requeues 0\n")
+
+    def raw_with(self, text):
+        return {"qdisc": {"ok": True, "queues": nd.parse_qdisc(text)}}
+
+    def test_it_reads_the_three_numbers_that_matter(self):
+        eth0 = next(q for q in nd.parse_qdisc(self.TC) if q["iface"] == "eth0")
+        self.assertEqual((eth0["kind"], eth0["dropped"], eth0["backlog_pkts"]),
+                         ("fq_codel", 8412, 1240))
+
+    def test_a_queueing_discipline_it_does_not_know_still_parses(self):
+        """The header names the kind and the interface whatever the kind is,
+        and the totals line is the same for all of them. A queue this has never
+        heard of is still a queue with a backlog."""
+        odd = ("qdisc somethingnew 42: dev eth9 root quantum 900 novel_option 5\n"
+               " Sent 5 bytes 1 pkt (dropped 7, overlimits 0 requeues 0)\n"
+               " backlog 900b 3p requeues 0\n")
+        got = nd.parse_qdisc(odd)
+        self.assertEqual((got[0]["iface"], got[0]["dropped"], got[0]["backlog_pkts"]),
+                         ("eth9", 7, 3))
+
+    def test_loopback_is_never_the_answer(self):
+        """It is a queue by the kernel's reckoning and never where traffic is
+        held up on the way out."""
+        only_lo = ("qdisc noqueue 0: dev lo root refcnt 2\n"
+                   " Sent 10 bytes 1 pkt (dropped 99, overlimits 0 requeues 0)\n"
+                   " backlog 500b 9p requeues 0\n")
+        self.assertIsNone(nd.worst_local_queue(self.raw_with(only_lo)))
+
+    def test_the_busiest_real_queue_is_the_one_named(self):
+        """Busiest, not first. A box with several interfaces lists them in
+        whatever order the kernel walks them, and taking the first real one
+        would name whichever interface happened to come back first."""
+        self.assertEqual(nd.worst_local_queue(self.raw_with(self.TC))["iface"], "eth0")
+        moved = (self.TC.replace("backlog 1876543b 1240p", "backlog 0b 0p")
+                        .replace("(dropped 8412", "(dropped 0")
+                 + "qdisc htb 9: dev eth7 root\n"
+                   " Sent 900 bytes 9 pkt (dropped 3, overlimits 1 requeues 0)\n"
+                   " backlog 4000b 40p requeues 0\n")
+        self.assertEqual(nd.worst_local_queue(self.raw_with(moved))["iface"], "eth7")
+
+    # ---- both answers are worth a sentence --------------------------------
+
+    def test_a_queue_holding_traffic_says_the_holding_up_is_here(self):
+        said = nd._queues_here_say(self.raw_with(self.TC))
+        self.assertIn("eth0", said)
+        self.assertIn("1240 packet(s) waiting", said)
+        self.assertIn("8412 dropped", said)
+
+    def test_empty_queues_rule_this_box_out_and_say_so(self):
+        """The more useful of the two answers. The message this joins offers
+        three candidates and leaves the reader to eliminate them by hand; an
+        empty queue eliminates one of them, on the box the report is about."""
+        idle = self.TC.replace("(dropped 8412", "(dropped 0").replace(
+            "backlog 1876543b 1240p", "backlog 0b 0p")
+        said = nd._queues_here_say(self.raw_with(idle))
+        self.assertIn("not happening here", said)
+
+    def test_a_box_that_could_not_be_asked_says_nothing_either_way(self):
+        """The same rule the process naming follows. "A full link, an overrun
+        interface queue, or a device buffering" is a complete sentence, and a
+        box without `tc` has to keep it."""
+        self.assertEqual(nd._queues_here_say({}), "")
+        self.assertEqual(nd._queues_here_say({"qdisc": {"ok": False}}), "")
+
+    def test_it_reaches_the_queuing_findings(self):
+        for code in ("queuing_delay_backends", "queuing_delay_clients"):
+            with self.subTest(code=code):
+                mod = fresh()
+                setup, kwargs = S[code]
+                setup(mod)
+                mod.cmd_qdisc = lambda: {"ok": True, "cmd": "tc -s qdisc",
+                                         "queues": nd.parse_qdisc(self.TC)}
+                rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+                said = next(f["message"] for f in rep["findings"] if f["code"] == code)
+                self.assertIn("own fq_codel queue on eth0", said)
+
+    def test_and_the_finding_is_unchanged_where_tc_is_absent(self):
+        mod = fresh()
+        setup, kwargs = S["queuing_delay_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queuing_delay_backends")
+        self.assertIn("a device buffering to hide one.", said)
+        self.assertNotIn("This box's own", said)
+
+
 class TestWhereTheTraceStoppedFollowingOnePath(unittest.TestCase):
     """Classic traceroute varies the destination port on every probe, and that
     port is part of the flow identifier a per-flow load balancer hashes on. So
@@ -10702,8 +10811,9 @@ class TestDocsMatchReality(unittest.TestCase):
             # human grouping, not a function - some collectors run several
             # times, and some are helpers rather than collections. Raised to
             # 33 when proxy configuration was added, 34 when the socket
-            # table gained the process holding each socket.
-            "collections": (34, [r"\*\*(\d+)\s+things are inspected",
+            # table gained the process holding each socket, 35 with the
+            # interface queues.
+            "collections": (35, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -10780,6 +10890,8 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_ping": "reachability and loss",
         "cmd_routes": "Routing table and default gateway",
         "cmd_socket_owners": "Which process holds each socket",
+        "cmd_qdisc": "Interface queues: what this box's own egress queues are "
+                     "holding and dropping",
         "cmd_socket_states": "TCP socket states",
         "cmd_tcp_flows": "Per-connection TCP statistics",
         "cmd_tcp_health": "TCP retransmission counters",

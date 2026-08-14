@@ -60,6 +60,18 @@ Note what it does **not** say here: `internet PASS`, because what this box
 connects out to is fine. The fault is on the traffic arriving at it, and that is a
 different direction with a different owner.
 
+Under the boxes the same question is asked again with the measurements
+attached: **one column per side, carrying the leg out and the leg back**, which
+is the pair you are comparing when you ask which direction stopped. A leg reads
+`OK`, `SLOW`, `FAULT`, or `NOT MEASURABLE` - the last being a refusal rather
+than a reading, because the only proof that what this box sent arrived is
+something coming back about it, and when nothing is coming back that proof is
+what is missing.
+
+Each column also carries **the hops to one destination on that side**, traced to
+a peer the connections actually use rather than to `--target`, and it says which
+peer it picked and why. [How that choice is made.](REFERENCE.md#which-destination-gets-traced-and-why-that-one)
+
 One Python file. Nothing to install, nothing left behind, no port opened.
 
 ## Use it

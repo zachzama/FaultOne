@@ -1366,6 +1366,84 @@ they're spelled out:
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
+### The path, out and back on each side
+
+The three boxes answer *where*. Underneath them the same question is asked
+again with the measurements attached, as one column per side of this box:
+
+```
+  clients and this box                  this box and what it connects out to
+  lb-edge-1 (198.51.100.1)              db-primary (10.0.2.40)
+  5 connections · 12.4ms · 0% loss      4 connections · 12.4ms · 8% loss
+  7 hops away                           2 hops away
+
+  request in                   OK       request out        NOT MEASURABLE
+  clients ─────────▶ this box           this box ─ ─ ─ ─ ─▶ 10.0.2.40
+  arriving                              arrival cannot be confirmed while
+                                        nothing is coming back
+
+  response out                 OK       response back              FAULT
+  clients ◀───────── this box           this box ◀───────── 10.0.2.40
+  acknowledged, so it is arriving       4 of 4 connections silent · no data
+                                        and no acknowledgement
+```
+
+Three places have exactly two boundaries between them, so there are two
+columns and the middle box belongs to both. Each column carries the leg out
+and the leg back, because that pair is what anybody is comparing when they
+ask which direction stopped - and the two sides are different equipment with
+different owners, which is why they are measured apart rather than averaged.
+
+A leg is drawn in one of four states. `OK` and `FAULT` are the ordinary two.
+`SLOW` is the far end acknowledging and not answering: its network is
+carrying, so that is a service taking its time rather than a broken path.
+**`NOT MEASURABLE`** is the one worth understanding, because it is a refusal
+rather than a reading: proof that a segment this box sent arrived is
+something coming back about it, and when nothing is coming back that proof
+is exactly what is missing. "My data is arriving and their replies are not"
+and "my data is not arriving" produce the same silence here. Drawing that
+leg green would guess; drawing it red would guess the other way.
+
+A retransmit ratio counts packets this box had to send again and cannot say
+which direction lost them, so it sits on the side and never on a leg. That
+is the same reason it has never been allowed to colour the two ends of the
+boundary arrow apart.
+
+### Which destination gets traced, and why that one
+
+Under each column are the hops to one destination on that side, with the
+share of the round trip each hop added.
+
+The trace used to go to `--target`, which defaults to a public address
+chosen for being reliably reachable. On a box that relays, that is a
+reachability check rather than the route the work takes: it left the report
+pointing at the internet twice, once at the connections this box opens and
+once at somewhere it never sends anything.
+
+It follows a peer from the connections themselves now. Which one is a
+judgement on a box holding hundreds, so it is made in a fixed order and
+**said on the page** - "hop 2 is slow" means nothing without knowing hop 2
+of what:
+
+- **first, the destination a finding named**, if one did. That is the
+  connection the report is already about.
+- **failing that, where most of that side's connections go**, if one address
+  dominates. That is the load-balancer shape, and its path is the path
+  nearly everything takes.
+- **otherwise the worst-performing destination** on that side.
+
+Each side answers to its own findings: a loss finding on the clients says
+nothing about which backend is worth tracing.
+
+Tracing a client goes *to* them, so it is not the route their packets took
+to arrive - nothing on this box can watch that. What it shows is the segment
+between here and the people using it, hop by hop, which is what the column
+is about. The hop count beside it, off the TTL of a reply, is the closest
+thing there is to the other direction.
+
+A box that opens no connections of its own has nothing to trace, and there
+the probe to `--target` really is its way out, so it keeps one.
+
 ### The 33 things it inspects
 
 **On the device**
@@ -2718,7 +2796,7 @@ Loss is a percentage, so it needs traffic to measure. A side that has stopped
 carrying entirely produces no percentage at all, and for a proxy that is the
 worse case: requests going out and nothing coming back.
 
-`ss -ti` prints three timers per connection — `lastsnd`, `lastrcv` and
+`ss -ti` prints three timers per connection: `lastsnd`, `lastrcv` and
 `lastack`. This box sending within the last second while nothing has arrived for
 seconds is two counters disagreeing rather than anything inferred, which is why
 it is allowed to colour the two ends of the boundary arrow apart. No loss ratio
@@ -2734,7 +2812,7 @@ a return path that has stopped carrying        lastsnd:10 lastrcv:9000 lastack:9
 ```
 
 One of them is not a network fault at all. `lastack` separates them, because
-unlike a reply an acknowledgement is not the far end's to withhold — TCP sends
+unlike a reply an acknowledgement is not the far end's to withhold. TCP sends
 it whether or not the application above has anything to add. Still arriving
 means the path back is carrying and the far end is holding the request; stopped
 means nothing is coming back.
@@ -2746,7 +2824,7 @@ means nothing is coming back.
 
 Both rank **below** the two loss findings above: a side losing traffic is the
 nearer cause of a side gone quiet, and the percentage is the more useful
-sentence — it says how much is getting through, where this only says that
+sentence, because it says how much is getting through where this only says
 something is not. Both rank **above** the service findings, because a return
 path carrying nothing is a network fault and those are not.
 

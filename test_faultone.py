@@ -6404,6 +6404,26 @@ class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
                 self.assertIn("connects out to", owner)
                 self.assertNotIn("depends on", owner)
 
+    def test_the_terminal_and_the_page_call_the_side_the_same_thing(self):
+        """The strip in the terminal carries short forms of the zone labels
+        because it has to fit eighty columns. Short, but the same words - when
+        the side was renamed these were missed, so one report called it "what
+        this box connects out to" on the page and "depends on" in the terminal.
+        """
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_clients"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        text = mod.render_text_report(rep, color=False, width=96)
+        label = [z["label"] for z in rep["sides"] if z["side"] == "upstream"][0]
+        strip = [l for l in text.splitlines() if "this box" in l and "<-->" in l]
+        self.assertTrue(strip, "no zone strip in the terminal report")
+        short = "connects out to"
+        self.assertIn(short, label,
+                      "the page's label no longer contains the short form")
+        self.assertIn(short, strip[0],
+                      "the terminal calls the side something the page does not")
+
     def test_the_picture_and_the_verdict_use_the_same_words(self):
         """A column headed one thing over a verdict blaming another is the
         contradiction this page has spent a long time getting rid of."""

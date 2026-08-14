@@ -1195,7 +1195,7 @@ only talks outward. On a box that answers requests there are two directions:
 |---|---|
 | **local** | This box and its own link. Sits in both paths, so it explains symptoms in either, which is the original rule, unchanged. |
 | **downstream** | Toward whoever connects to this box: the load balancer, the edge, the accept path. Broken here and clients cannot get in. |
-| **upstream** | Toward whatever this box depends on: backends, DNS, the path out. Broken here and this box cannot answer them. |
+| **upstream** | Toward whatever this box connects out to: backends, DNS, the path out. Broken here and this box cannot answer them. |
 
 The two resource ceilings show why this is not cosmetic. `fd_pressure` and
 `ephemeral_ports_low` are both "this box ran out of something", and they break
@@ -1209,7 +1209,7 @@ by someone who has never heard of layers. The report leads with three boxes and
 an arrow:
 
 ```
-  clients in (10.20.0.7) FAULT  ->  this box ok  ->  depends on (10.60.9.30) degraded
+  clients in (10.20.0.7) FAULT  <-->  this box ok  <-->  connects out to (10.60.9.30) degraded
 ```
 
 - The state is a **word as well as a colour**: colour alone is not readable to
@@ -1231,7 +1231,7 @@ an arrow:
   in. That is an answer, not a gap.
 
 ```
-  clients in none connected  ->  this box FAULT  ->  depends on ok
+  clients in none connected  <-->  this box FAULT  <-->  connects out to ok
 ```
 
 The panel is shown on **every** box, including one that only talks outward. It
@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **33** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1232 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1233 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1989,7 +1989,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1232 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1233 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3477,7 +3477,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1232 tests, no dependencies, no network, a few seconds, so they run
+1233 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

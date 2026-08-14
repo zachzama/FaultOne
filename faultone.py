@@ -12491,9 +12491,6 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # this is the segment the work actually crosses.
         # The hops out to a destination this box actually uses. Where there
         # are none, the reference probe below stands in for the way out.
-        # Each side's traced path hangs off its own column; see below, where
-        # it is filled once the columns exist.
-        "probe_only": None,
         "call_quality": call_quality,
         "neighbours": neighbours,
         "inventory": inventory_data,
@@ -14657,8 +14654,12 @@ def render_text_report(report, color=False, width=None):
                 # Not "not checked": the socket table was read and there was
                 # nothing coming in. That is an answer, not a gap.
                 "skip": "none connected"}
+        # Short forms of the zone labels, for a strip that has to fit a
+        # terminal. Short, but the same words: when the side was renamed these
+        # were missed, so one report called it "what this box connects out to"
+        # on the page and "depends on" in the terminal.
         zname = {"downstream": "clients in", "local": "this box",
-                 "upstream": "depends on"}
+                 "upstream": "connects out to"}
         cells = []
         for zone in sides:
             via = f" ({zone['via']})" if zone.get("via") else ""

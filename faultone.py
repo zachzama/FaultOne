@@ -6736,79 +6736,6 @@ def build_stages(findings, raw=None, checked_ports=False, quick=False):
     return stages
 
 
-def path_scope(hops, target, raw=None, findings=None):
-    """What the hop chain actually covers, and what it does not.
-
-    The trace goes to one destination - the target, which defaults to a public
-    address. The connections a verdict is about often go somewhere else
-    entirely, and on a proxy they usually do: the fault is on the segment to a
-    database in another subnet, and the trace never crosses it.
-
-    Drawn without that distinction, "the path out, hop by hop" in green sits
-    directly beneath "the loss is on what this box talks to" in red, and a
-    reader is right to call that a contradiction. Both halves are true and they
-    are about different paths - which is a sentence the page has to say rather
-    than leave the reader to work out.
-
-    The hops themselves stay exactly as measured. Colouring a clean hop amber
-    because something else failed would be inventing a fault on the one part of
-    the page that reports what was actually observed, and a warning that means
-    "something is wrong somewhere else" is not a warning anyone can act on.
-    """
-    raw = raw or {}
-    if not hops:
-        return None
-    traced = [h.get("host") for h in hops if h.get("host")]
-
-    # Destinations a finding named, taken from the flow statistics rather than
-    # parsed back out of message text. Only peers this box has real connections
-    # to; the trace target is excluded because that is the path being drawn.
-    elsewhere = []
-    flows = raw.get("tcp_flows") or {}
-    for peer in (flows.get("lossy_peers") or []):
-        host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
-        if host and host not in traced and host != target and host not in elsewhere:
-            elsewhere.append(host)
-    by_side = flows.get("by_side") or {}
-    for name in ("backend", "client"):
-        near = by_side.get(name) or {}
-        if not near.get("return_stalled"):
-            continue
-        peer = near.get("worst_peer") or ""
-        host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
-        if host and host not in traced and host != target and host not in elsewhere:
-            elsewhere.append(host)
-
-    # Whether this chain has anything to say. Across this tool's scenarios, 150
-    # of 164 draw every hop clean, and on those the bar and the row of nodes are
-    # the largest thing on the panel and the last - so a reader looking for the
-    # conclusion finds a full-width picture of a path nobody asked about.
-    #
-    # The fourteen that mark a hop are why it cannot simply go: a routing loop, a
-    # latency wall, loss at an intermediate router and a stalled trace are all
-    # findings *about a specific hop*, and the four legs have no way to say
-    # "hop 2". So it collapses to a line when quiet and draws in full when not.
-    notable = any(h.get("timed_out") or h.get("blame")
-                  or (h.get("loss_pct") or 0) >= 5 for h in hops)
-    # The one line a quiet chain is worth. Built here so the column that hosts
-    # it does not have to wait for the hop chain to be drawn - and once it is a
-    # line rather than a panel, there is nowhere else for it to live.
-    reached = [h for h in hops if not h.get("timed_out") and h.get("avg_ms")]
-    summary = "%d hop%s to %s" % (len(hops), "" if len(hops) == 1 else "s", target)
-    if reached:
-        summary += ", %.1fms" % reached[-1]["avg_ms"]
-    summary += ", nothing marked" if not notable else ""
-    return {
-        "traced": target,
-        "hops_cover": traced,
-        "notable": notable,
-        "summary": summary,
-        # Destinations a finding is about that this trace does not reach. Empty
-        # is the ordinary case and means the drawing needs no qualification.
-        "fault_elsewhere": elsewhere,
-    }
-
-
 # What a hop's own loss percentage has to reach to be drawn as a fault. Only mtr
 # reports one; a traceroute is judged on how many of its probes came back.
 HOP_LOSS_CRIT_PCT = 20
@@ -12161,9 +12088,6 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         "quick": quick,
         "soak_seconds": soak or None,
         "path_source": path_source,
-        # What the hop chain covers, so a green path cannot be read as a
-        # statement about a segment it never crossed.
-        "path_scope": path_scope(hops, target, raw, findings),
         # The path as four legs, decided here so the page and the terminal
         # cannot end up with two versions of which direction stopped.
         "path_legs": build_path_legs(raw, _sides),
@@ -13658,29 +13582,6 @@ function renderDiagnosis(data, opts){
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');
-    // Observations that belong to this side, at the foot of its column.
-    //
-    // The probe to the target used to be a titled section of its own with a bar
-    // and a row of nodes; on a quiet report that had already collapsed to a
-    // heading over one line, which is still a section. A line is a line, and it
-    // belongs under the side it leaves from rather than in a panel of its own.
-    // When the chain has something to say it keeps its section - a hop that is
-    // marked needs the hops around it.
-    const sc = data.path_scope || {};
-    const notes = [];
-    if(sc.summary && !sc.notable){
-      notes.push('probe to ' + escapeHtml(sc.traced) + ': '
-                 + escapeHtml(sc.summary.replace(/^\d+ hops? to \S+?, /, ''))
-                 + ' — a reachability check, not the traffic this box carries');
-    }
-    const away = sc.fault_elsewhere || [];
-    if(away.length && !sc.notable){
-      notes.push('that probe does not cross '
-                 + escapeHtml(away.join(', ')) + ', so it says nothing about it');
-    }
-    const noteHtml = (notes.length && side.side === 'backend')
-      ? `<div class="pnotes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : '';
-
     // The hops out to a destination this side actually uses, inside the column
     // that names it. It used to be a probe to a fixed address in a column of its
     // own, which on a box that relays pointed at the internet twice - once at
@@ -13693,7 +13594,7 @@ function renderDiagnosis(data, opts){
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
-        ${lanes}${traced}${noteHtml}</div>`;
+        ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml
@@ -14194,15 +14095,6 @@ def _render_path(report, out, tint, width):
         out.append("  (skipped in --quick mode; drop --quick for the hop-by-hop path)")
     elif not hops:
         out.append("  (no hops parsed - traceroute may be unavailable or blocked)")
-    # Same qualification the page carries, from the same field. A clean path to
-    # the target under a verdict about a different destination is two true
-    # statements about two paths, and the reader is owed the second one.
-    away = (report.get("path_scope") or {}).get("fault_elsewhere") or []
-    if hops and away:
-        out.append(_wrap_note(
-            "these hops were measured clean, and the connections this report is "
-            "about go to %s - a path they do not cross, so nothing below says "
-            "anything about that segment" % ", ".join(away), width))
     demarc = report.get("demarc_hop")
     # The path as a bar, one row per hop, sized by what that hop added. The
     # HTML report has drawn this since the ribbon landed; the text report was

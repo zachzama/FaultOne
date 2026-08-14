@@ -5678,6 +5678,15 @@ class TestWhichDirectionStopped(unittest.TestCase):
 class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
     """The path drawn as four legs: out and back, on each side of this box.
 
+    A class of guards was retired here rather than moved. They held the page to
+    saying that the traced path was not the path that failed - which it had to
+    say while the trace went to a fixed public address and the traffic went
+    wherever the users asked. The trace follows a destination this box actually
+    uses now, so there is no longer a second path to disclaim, and a test that
+    the disclaimer is present would pin a sentence that would be false. What
+    replaced them is TestTheTracedPathAsItsOwnColumn, which asks whether the
+    destination traced is one the connections name.
+
     Before this there was a chain per side with the directions left to an
     arrowhead, and for a while no chain for the backends at all - so a fault on
     the segment to a database had nowhere on the picture to appear and every
@@ -5827,18 +5836,6 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
             self.assertNotIn("% loss", lane,
                              "a leg is carrying a loss figure, which claims a "
                              "direction a retransmit ratio does not have")
-    def test_a_quiet_traced_path_gets_no_section_at_all(self):
-        """It collapsed to a heading over one line first, and a heading over one
-        line is still a section. The line moved to the foot of the column the
-        probe leaves from, which is where an observation about that side
-        belongs, and nothing is left behind."""
-        drawn = self.render(self.report("tcp_return_stalled_backends"))
-        self.assertEqual(drawn["chain"], "",
-                         "a quiet traced path is still drawing something")
-        self.assertFalse(drawn["note"])
-        self.assertIn("probe to 8.8.8.8", drawn["out"],
-                      "the line went nowhere rather than into the column")
-
     def test_the_head_sits_at_the_end_of_the_leg_it_is_on(self):
         """At the end of the leg leaving this box, at the start of the one
         coming back, so a column reads as a circuit rather than as two lines
@@ -5864,61 +5861,12 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                                         "the leg leaving this box has its head "
                                         "at the near end of the line")
 
-    def test_the_observation_lands_on_one_side_only(self):
-        """It is about the probe out of this box, so it belongs under the side
-        that probe leaves from. Printed on both columns it would read as a fact
-        about the clients too, which it is not - and would be the third time on
-        this page that a true sentence ended up under the wrong heading."""
-        drawn = self.render(self.report("tcp_flow_loss_backends"))
-        _, clients = self.column(drawn["out"], "client")
-        _, backends = self.column(drawn["out"], "backend")
-        self.assertIn("probe to", backends)
-        self.assertNotIn("probe to", clients)
-
-    def test_a_box_with_no_backends_keeps_the_section(self):
-        """There is no column to host the line on a box that opens nothing, and
-        on one of those the probe to the target really is the way out."""
-        drawn = self.render(self.report("service_address_unserved"))
-        self.assertIn("hop", drawn["chain"],
-                      "the only path this box has was dropped entirely")
-
-    def test_a_path_with_a_marked_hop_still_draws_in_full(self):
-        """Why it collapses rather than goes. A routing loop, a latency wall,
-        loss at an intermediate router and a stalled trace are each findings
-        about a specific hop, and the four legs have no way to say "hop 2"."""
-        drawn = self.render(self.report("latency_wall"))
-        self.assertIn('class="hop-chain"', drawn["chain"])
-        self.assertIn("hop-node", drawn["chain"])
-
-    def test_what_counts_as_worth_drawing_is_decided_once(self):
-        """In the report, not in the page - the same reason the leg states are.
-        A quiet path and a marked one are told apart by whether any hop carries
-        a timeout, a blame or real loss."""
-        quiet = self.report("tcp_return_stalled_backends")["path_scope"]
-        loud = self.report("latency_wall")["path_scope"]
-        self.assertFalse(quiet["notable"])
-        self.assertTrue(loud["notable"])
-
-    def test_a_clean_chain_says_what_it_is_not(self):
-        """150 of the 164 scenarios draw every hop on this chain clean. It is
-        one line's worth of news, and it now sits at the foot of the column the
-        probe leaves from rather than under a heading of its own - but it still
-        has to say that the traffic this box carries is not what it measured."""
-        drawn = self.render(self.report("queuing_delay_backends"))
-        self.assertIn("not the traffic this box carries", drawn["out"])
-        self.assertIn("reachability check", drawn["out"])
-
     def test_the_clean_line_is_only_for_a_box_that_relays(self):
         """On a box with no backends the probe to the target really is the way
         out, and telling the reader to look at a chain above that does not exist
         would be worse than saying nothing."""
         drawn = self.render(self.report("service_address_unserved"))
         self.assertNotIn("not the traffic this box carries", drawn["note"] or "")
-
-    def test_a_fault_off_the_path_still_says_where_it_is(self):
-        drawn = self.render(self.report("tcp_flow_loss_backends"))
-        self.assertIn("does not cross", drawn["out"])
-        self.assertIn("10.0.0.90", drawn["out"])
 
     def test_a_path_that_is_itself_the_fault_is_not_qualified(self):
         """The one in seven where the chain earns its place. Qualifying it would
@@ -5927,91 +5875,6 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
         self.assertFalse(drawn["note"],
                          "the chain carrying the fault is being explained away")
 
-
-
-class TestTheHopChainSaysWhichPathItIs(unittest.TestCase):
-    """A clean trace under a red verdict is not a contradiction, but it reads as
-    one until the page says the two are about different paths.
-
-    On a proxy the fault is usually on the segment to a backend in another
-    subnet, and the trace goes to the target - a public address by default. Both
-    halves are true. Drawn without the distinction, "the path out, hop by hop"
-    in green sits directly beneath "the loss is on what this box talks to" in
-    red, and the reader is right to call that broken.
-    """
-
-    def report(self, code):
-        mod = fresh()
-        setup, kwargs = S[code]
-        setup(mod)
-        return mod, mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-
-    def test_it_names_the_destination_the_hops_go_to(self):
-        _, rep = self.report("tcp_flow_loss_backends")
-        self.assertEqual(rep["path_scope"]["traced"], rep["target"])
-
-    def test_a_fault_the_trace_never_crossed_is_named(self):
-        """The whole point. The loss is on connections to a database in another
-        subnet; the trace goes to the public target and never touches it."""
-        _, rep = self.report("tcp_flow_loss_backends")
-        away = rep["path_scope"]["fault_elsewhere"]
-        self.assertTrue(away, "a fault off the traced path is not being named")
-        for host in away:
-            self.assertNotIn(host, rep["path_scope"]["hops_cover"])
-            self.assertNotEqual(host, rep["target"])
-
-    def test_a_return_stall_off_the_traced_path_is_named_too(self):
-        _, rep = self.report("tcp_return_stalled_backends")
-        self.assertTrue(rep["path_scope"]["fault_elsewhere"])
-
-    def test_a_healthy_box_qualifies_nothing(self):
-        """The note is a qualification, not decoration. Where there is no fault
-        away from the traced path it must not appear at all."""
-        mod, rep = self.report("all_clear")
-        self.assertEqual(rep["path_scope"]["fault_elsewhere"], [])
-        self.assertNotIn("do not cross",
-                         mod.render_text_report(rep, color=False, width=92))
-
-    def test_a_fault_on_the_traced_path_is_not_called_elsewhere(self):
-        """Loss out on the path to the target is exactly what the hop chain is
-        drawing, so qualifying it would be telling the reader to look away from
-        the right place."""
-        _, rep = self.report("path_loss")
-        self.assertEqual(rep["path_scope"]["fault_elsewhere"], [])
-
-    def test_the_terminal_report_carries_the_same_qualification(self):
-        """Both renderers, from the one field. A sentence the page says and the
-        terminal does not is a third version of the report."""
-        mod, rep = self.report("tcp_flow_loss_backends")
-        text = mod.render_text_report(rep, color=False, width=92)
-        self.assertIn("do not cross", text)
-        for host in rep["path_scope"]["fault_elsewhere"]:
-            self.assertIn(host, text)
-
-    def test_the_page_titles_the_chain_with_its_destination(self):
-        src = nd.VIEWER_TEMPLATE
-        self.assertIn("The path to ${scope.traced}, hop by hop", src,
-                      "the hop chain is still titled without its destination")
-        self.assertNotIn("The path out to ${scope.traced}", src,
-                         "this is still called the way out, which now names the "
-                         "chain above it - the connections this box opened")
-        self.assertIn("pathNote", src)
-
-    def test_no_hop_is_marked_because_something_else_failed(self):
-        """The decision this is built on, written down so it is not quietly
-        reversed. A clean hop stays clean: the hop chain is the part of the page
-        that reports what was actually observed, and amber meaning "something is
-        wrong somewhere else" is not a warning anyone can act on. The fix for a
-        green path under a red verdict is a sentence, not a colour.
-        """
-        _, rep = self.report("tcp_flow_loss_backends")
-        self.assertTrue(rep["path_scope"]["fault_elsewhere"])
-        for hop in rep["hops"]:
-            with self.subTest(hop=hop["hop"]):
-                self.assertFalse(hop.get("timed_out"))
-                self.assertIsNone(hop.get("loss_pct"),
-                                  "a hop measured clean is carrying a loss "
-                                  "figure invented from a fault elsewhere")
 
 
 class TestTheColumnsSitWhereTheyBelong(unittest.TestCase):

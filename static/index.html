@@ -1441,29 +1441,6 @@ function renderDiagnosis(data, opts){
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');
-    // Observations that belong to this side, at the foot of its column.
-    //
-    // The probe to the target used to be a titled section of its own with a bar
-    // and a row of nodes; on a quiet report that had already collapsed to a
-    // heading over one line, which is still a section. A line is a line, and it
-    // belongs under the side it leaves from rather than in a panel of its own.
-    // When the chain has something to say it keeps its section - a hop that is
-    // marked needs the hops around it.
-    const sc = data.path_scope || {};
-    const notes = [];
-    if(sc.summary && !sc.notable){
-      notes.push('probe to ' + escapeHtml(sc.traced) + ': '
-                 + escapeHtml(sc.summary.replace(/^\d+ hops? to \S+?, /, ''))
-                 + ' — a reachability check, not the traffic this box carries');
-    }
-    const away = sc.fault_elsewhere || [];
-    if(away.length && !sc.notable){
-      notes.push('that probe does not cross '
-                 + escapeHtml(away.join(', ')) + ', so it says nothing about it');
-    }
-    const noteHtml = (notes.length && side.side === 'backend')
-      ? `<div class="pnotes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : '';
-
     // The hops out to a destination this side actually uses, inside the column
     // that names it. It used to be a probe to a fixed address in a column of its
     // own, which on a box that relays pointed at the internet twice - once at
@@ -1476,7 +1453,7 @@ function renderDiagnosis(data, opts){
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
-        ${lanes}${traced}${noteHtml}</div>`;
+        ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml

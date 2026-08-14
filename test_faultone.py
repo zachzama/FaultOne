@@ -5852,6 +5852,23 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                                         "the leg leaving this box has its head "
                                         "at the near end of the line")
 
+    def test_the_path_heading_sits_with_what_it_introduces(self):
+        """It was 4px below the three boxes and 18px above its own columns, so
+        it read as a caption on the boxes - a heading belonging to the thing
+        above it instead of the thing under it.
+
+        Asserted as the relationship rather than as two numbers: what matters is
+        that the space above is the larger of the two, whatever either becomes.
+        """
+        css = nd.VIEWER_TEMPLATE[:nd.VIEWER_TEMPLATE.index("</style>")]
+        rule = css[css.index(".section-title.over{"):]
+        rule = rule[:rule.index("}")]
+        top, bottom = re.search(r"margin:(\d+)px 0 (\d+)px", rule).groups()
+        self.assertGreater(int(top), int(bottom) * 2,
+                           "the path heading is still closer to what is above "
+                           "it than to the columns it introduces")
+        self.assertIn('class="section-title over">The path', nd.VIEWER_TEMPLATE)
+
     def test_the_columns_share_the_width_however_many_there_are(self):
         """A fixed track count has now been wrong in both directions.
 

@@ -12818,6 +12818,12 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* The one group with something nested inside it, so it says so. */
   #grpWhere{border-left-color:var(--accent-dim);}
   .section-title.sub{margin-top:20px;}
+  /* A heading belongs to what follows it, and this one was not getting the
+     chance: the zones above end 4px up and the columns below start 18px down,
+     so "the path, out and back on each side" read as a caption on the three
+     boxes. Proximity is the lever, not indentation - an indent would only break
+     its alignment with the full-width columns it introduces. */
+  .section-title.over{margin:26px 0 7px;}
   .section-title{
     font-family:var(--mono); font-size:11px; color:var(--text-dim);
     text-transform:uppercase; letter-spacing:0.08em; margin:0 0 12px;
@@ -13438,7 +13444,7 @@ function renderDiagnosis(data, opts){
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml
-    ? '<div class="section-title">The path, out and back on each side</div>' + pathHtml
+    ? '<div class="section-title over">The path, out and back on each side</div>' + pathHtml
     : '';
 
   document.getElementById('whereWrap').innerHTML = sides.length

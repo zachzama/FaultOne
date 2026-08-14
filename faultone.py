@@ -12733,6 +12733,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* The traced path's hops, inside its own column. A bar per hop for the share
      of the total it added - the one thing the full-width ribbon did that a
      number cannot, which is show proportion without being read. */
+  /* The rule at the top is where the column stops being about connections and
+     starts being about the path to one of them. It has moved twice: it sat on
+     the heading that named the destination, which put it between that heading
+     and its own rows, and that heading has since gone for over-explaining. */
   .hops{padding:9px 14px 10px; margin-top:2px;
     border-top:1px dashed var(--border);}
   .hrow{display:flex; align-items:center; gap:8px; padding:3px 0;
@@ -12814,16 +12818,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .plane.unknown .ptrack .ptip{color:var(--text-dim); opacity:.55;}
   .plane .pev{font-family:var(--mono); font-size:10.5px; color:var(--text-dim);
     opacity:.85; line-height:1.55;}
-  /* The hops out to the backend, where one was traced. Inside the column it
-     belongs to rather than as a second chain elsewhere on the page: the whole
-     point of tracing it is that this is the segment the work crosses. */
-  /* Which destination the hops below are to, and why that one. On a side with
-     many peers, one stands in for the rest and the reader has to know which. */
-  /* The divider goes at the top of the traced block, where the column stops
-     being about connections and starts being about the path to one of them.
-     It used to sit on .hops, which put it between this heading and its own
-     rows - splitting a block from its title rather than separating the two
-     things the column carries. */
 
   /* The hop timings are round trips. Under a heading reading "request out" they
      would be read as one way, which is a claim no traceroute can make: the
@@ -12884,10 +12878,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .stage.warn b{color:var(--warn);}
   .stage.fail b{color:var(--crit);}
   .stage.skip{opacity:0.5;}
-  /* A qualification on the drawing below it, not a fault of its own, so it is
-     marked in the warning colour's ink without the filled ground a finding
-     gets. It says the green underneath is about a different path - which is a
-     limit on what was measured, and stating those is the page's job. */
   /* A stage that failed has to look failed from across the room. Colouring only
      the word inside left every chip the same shape, the same border and the same
      background, so a strip with one FAIL in it read as uniformly quiet - which is

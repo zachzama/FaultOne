@@ -2119,6 +2119,114 @@ class TestNoVendorNames(unittest.TestCase):
         self.assertIsNone(nd.looks_intercepted(["DigiCert Global Root CA"]))
 
 
+class TestTheStylesheetHasNothingLeftOver(unittest.TestCase):
+    """The viewer is a 66 KB string literal inside a Python file, edited by
+    string replacement, and that is where this repository's worst hours have
+    gone. Deleting a feature leaves its rules behind, and it leaves the comments
+    explaining those rules behind too - which is the worse half, because a
+    comment describing a ribbon nobody can find sends the next reader looking
+    for one.
+
+    Both happened. Removing the hop chain left seven rules and nine comments,
+    and none of it failed anything: dead CSS is invisible until somebody reads
+    the file.
+    """
+
+    # Class names the page builds at runtime, so a search for the literal
+    # misses them. Every one has to be justified by an interpolation in the
+    # markup, which the test below checks - the list cannot quietly become a
+    # place to silence a real orphan.
+    BUILT_AT_RUNTIME = {
+        # `class="... ${state}"` on zones, stages, legs, findings, hops
+        "pass": "${", "warn": "${", "fail": "${", "skip": "${",
+        "ok": "${", "crit": "${", "unknown": "${",
+        # `class="row ${c.direction}"`
+        "better": "${", "worse": "${", "neutral": "${",
+        # `class="rel rel-${f.relation}"`
+        "rel-cause": "rel-${", "rel-explained": "rel-${",
+        "rel-corroborates": "rel-${", "rel-unrelated": "rel-${",
+        "rel-hardware": "rel-hardware",
+        # `class="layer${isLowest ? ' low' : ''}"`
+        "low": "${",
+    }
+
+    def parts(self):
+        src = nd.VIEWER_TEMPLATE
+        cut = src.index("</style>")
+        return src[:cut], src[cut:]
+
+    def declared(self, css):
+        """Every class a rule names, ignoring the inside of comments."""
+        bare = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+        out = set()
+        for block in re.finditer(r"([^{}]+)\{", bare):
+            for name in re.findall(r"\.([a-zA-Z][\w-]*)", block.group(1)):
+                out.add(name)
+        return out
+
+    def test_no_rule_styles_something_the_page_never_draws(self):
+        css, body = self.parts()
+        orphans = []
+        for name in sorted(self.declared(css)):
+            if name in body:
+                continue
+            if name in self.BUILT_AT_RUNTIME:
+                continue
+            # `.thing-modifier` is alive if `.thing-` is built with a suffix
+            if any(name.startswith(p) and (p + "${") in body
+                   for p in (name.rsplit("-", 1)[0] + "-",)):
+                continue
+            orphans.append(name)
+        self.assertEqual(orphans, [],
+                         "rules styling classes the page never draws: %s" % orphans)
+
+    def test_the_runtime_list_cannot_hide_a_real_orphan(self):
+        """Each entry has to be a class the page really does build. Without
+        this the list is a place to make the check above go quiet."""
+        _css, body = self.parts()
+        unjustified = sorted(n for n, needs in self.BUILT_AT_RUNTIME.items()
+                             if needs not in body)
+        self.assertEqual(unjustified, [],
+                         "listed as built at runtime, but the page builds no "
+                         "such thing: %s" % unjustified)
+
+    def test_no_comment_explains_a_rule_that_is_gone(self):
+        """A comment is attached to what follows it, so one with nothing after
+        it but a closing brace or the end of the sheet is describing something
+        deleted out from under it.
+
+        What this cannot see is a comment orphaned in the middle of a block,
+        where the rule below it is somebody else's. Knowing which rule a
+        sentence is about is not decidable from the text, and a check that
+        guessed would either miss those anyway or fail on comments that
+        legitimately mention a class they do not introduce. It catches the
+        common shape - a deletion at the end of a run - and says so rather than
+        implying more.
+        """
+        css, _body = self.parts()
+        stranded = []
+        for m in re.finditer(r"/\*(.*?)\*/", css, re.S):
+            # Skip past any run of comments: a block intro sitting above a
+            # rule's own comment is ordinary, and only the run as a whole has
+            # to end in something being styled.
+            rest = css[m.end():].lstrip()
+            while rest.startswith("/*"):
+                rest = rest[rest.index("*/") + 2:].lstrip()
+            if not rest or rest.startswith("}") or rest.startswith("</style>"):
+                stranded.append(" ".join(m.group(1).split())[:60])
+        self.assertEqual(stranded, [],
+                         "comments with no rule under them: %s" % stranded)
+
+    def test_the_stylesheet_still_balances(self):
+        """A replacement that eats a closing brace takes every rule after it
+        with it, and the page keeps rendering - just wrongly, from the first
+        swallowed rule to the end."""
+        css, _body = self.parts()
+        bare = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+        self.assertEqual(bare.count("{"), bare.count("}"),
+                         "the stylesheet's braces do not balance")
+
+
 class TestTheSuiteSendsNothing(unittest.TestCase):
     """The suite opens no sockets, and a datagram is a socket.
 

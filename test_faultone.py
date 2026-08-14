@@ -6018,6 +6018,80 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
         self.assertIsNone(nd.build_probe_column([], "8.8.8.8"))
 
 
+class TestTheAddressesTheReportShows(unittest.TestCase):
+    """The neighbour inventory has resolved names since it was written and
+    nothing else had: every column heading, finding and hop row carried a bare
+    address. `10.0.2.40` is a fact a reader has to go and look up.
+    """
+
+    def resolved(self, code, ptr=None, **kw):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        # `ptr or {...}` would fall back for an empty table, which is exactly
+        # the case one of these tests is about: an address that answers nothing.
+        table = {"10.0.0.90": "db-primary.internal",
+                 "10.0.0.1": "gw-core-1.internal"} if ptr is None else ptr
+        mod.dns_ptr = lambda server, ip, timeout=1.0: table.get(ip)
+        rep = mod.diagnose(quick=kw.get("quick", False), **scenario_kwargs(kwargs))
+        return mod, rep
+
+    def test_only_the_addresses_the_page_shows_are_looked_up(self):
+        """A forward proxy holds connections to hundreds of destinations.
+        Resolving all of them would be hundreds of lookups for names nobody
+        reads, so this takes the peers the columns name, the destination that
+        was traced, and the hosts on its hops."""
+        asked = []
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        mod.dns_ptr = lambda server, ip, timeout=1.0: asked.append(ip) or None
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(sorted(asked), sorted(mod.addresses_on_the_page(rep)))
+        self.assertLessEqual(len(asked), 8, "the whole connection table is "
+                                            "being resolved, not the page")
+
+    def test_a_name_never_replaces_its_address(self):
+        """A PTR record is written by whoever owns the reverse zone, not
+        necessarily whoever owns the host. It is a label to read; the address
+        stays the thing anyone acts on, so the page shows both."""
+        src = nd.VIEWER_TEMPLATE
+        i = src.index("const named =")
+        helper = src[i:i + 260]
+        self.assertIn("(${escapeHtml(a)})", helper,
+                      "a resolved name is shown without its address")
+
+    def test_an_address_that_answers_nothing_stays_an_address(self):
+        _mod, rep = self.resolved("tcp_flow_loss_backends", ptr={})
+        self.assertEqual(rep["peer_names"], {})
+
+    def test_a_name_that_is_just_the_address_is_not_a_name(self):
+        """Some resolvers echo the address back rather than failing."""
+        _mod, rep = self.resolved(
+            "tcp_flow_loss_backends", ptr={"10.0.0.90": "10.0.0.90"})
+        self.assertEqual(rep["peer_names"], {})
+
+    def test_the_names_reach_the_report(self):
+        _mod, rep = self.resolved("tcp_flow_loss_backends")
+        self.assertEqual(rep["peer_names"].get("10.0.0.90"), "db-primary.internal")
+
+    def test_quick_mode_resolves_nothing(self):
+        """--quick skips the trace and the path MTU for the same reason: it is
+        for someone on the phone."""
+        _mod, rep = self.resolved("tcp_flow_loss_backends", quick=True)
+        self.assertEqual(rep["peer_names"], {})
+
+    def test_a_box_with_no_resolver_asks_no_one(self):
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        mod.cmd_dns_health = lambda check_hijack=True: {
+            "ok": False, "cmd": "r", "stdout": "", "probe": "x", "resolvers": []}
+        mod.dns_ptr = lambda *a, **k: self.fail("asked a resolver that is not there")
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(rep["peer_names"], {})
+
+
 class TestHowManyHopsItTookToReachUs(unittest.TestCase):
     """A traceroute only goes outward, so nothing here can watch the route a
     client's packets took to arrive.

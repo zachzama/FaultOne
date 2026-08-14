@@ -6797,6 +6797,72 @@ HOP_LOSS_CRIT_PCT = 20
 HOP_LOSS_WARN_PCT = 5
 
 
+def name_the_addresses(shown, raw, quick=False):
+    """Reverse-resolve the handful of addresses a report actually displays.
+
+    The neighbour inventory has resolved names since it was written, and nothing
+    else has: every column heading, finding message and hop row has carried a
+    bare address. `10.0.2.40` is a fact a reader has to go and look up;
+    `db-primary` is one they can act on.
+
+    Only what is on the page. A forward proxy holds connections to hundreds of
+    destinations and resolving all of them would be hundreds of lookups for
+    names nobody will read - so this takes the peers the columns name, the
+    destination that was traced, and the hosts on its hops.
+
+    Bounded by the same deadline the inventory uses, against the resolver this
+    box is already configured with. Whatever has not answered when it expires
+    stays an address, which is the honest fallback and the common one.
+    """
+    if quick:
+        return {}
+    resolvers = [r.get("server") for r in
+                 ((raw.get("dns_health") or {}).get("resolvers") or [])
+                 if r.get("server")]
+    wanted = sorted({a for a in shown if a and _looks_like_ipv4(a)})
+    if not resolvers or not wanted:
+        return {}
+    resolver = resolvers[0]
+    deadline = time.monotonic() + PTR_DEADLINE_SECONDS
+
+    def lookup(ip):
+        if time.monotonic() > deadline:
+            return None
+        return dns_ptr(resolver, ip, timeout=1.0)
+
+    names = {}
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(PTR_WORKERS, len(wanted))) as pool:
+        for ip, name in zip(wanted, pool.map(lookup, wanted)):
+            # A PTR record is written by whoever owns the reverse zone, which is
+            # not necessarily whoever owns the host. It is a label to read, and
+            # nothing here may decide anything from it - the address stays the
+            # thing that gets acted on, which is why the page shows both.
+            if name and name.rstrip(".") != ip:
+                names[ip] = name.rstrip(".")
+    return names
+
+
+def _looks_like_ipv4(value):
+    parts = str(value).split(".")
+    return (len(parts) == 4
+            and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts))
+
+
+def addresses_on_the_page(report):
+    """Every address the report will actually show, and no others."""
+    shown = set()
+    for side in (report.get("path_legs") or []):
+        shown.add(side.get("peer"))
+        shown.update((side.get("left"), side.get("right")))
+    for column in (report.get("out_path"), report.get("probe_path")):
+        if not column:
+            continue
+        shown.add(column.get("target"))
+        shown.update(h.get("host") for h in (column.get("hops") or []))
+    return {a for a in shown if a and _looks_like_ipv4(a)}
+
+
 def build_probe_column(hops, target, baseline_path=None):
     """The traced path as a column beside the two measured ones.
 
@@ -12320,7 +12386,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
                                  0 if f.get("relation") == "cause" else 1))
 
     _sides = build_sides(findings, raw)
-    return {
+    report = {
         "verdict": verdict,
         "stages": build_stages(findings, raw, checked_ports=bool(check_ports), quick=quick),
         "sides": _sides,
@@ -12350,6 +12416,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # The path as four legs, decided here so the page and the terminal
         # cannot end up with two versions of which direction stopped.
         "path_legs": build_path_legs(raw, _sides),
+        # Names for the addresses this report shows, and only those. Carried as
+        # a lookup rather than folded into the fields, so every address stays
+        # exactly what it was and the page decides how to show both.
+        "peer_names": None,
         # The traced path, as the third column. Present whenever a trace ran.
         # The reference probe, kept only where this box opens no connections of
         # its own. On a box that relays it duplicated the column beside it -
@@ -12382,6 +12452,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         "python": platform.python_version(),
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
+    report["peer_names"] = name_the_addresses(
+        addresses_on_the_page(report), raw, quick)
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -13434,6 +13507,13 @@ function renderDiagnosis(data, opts){
   // Python and again in this file is two copies of a rule and two chances for
   // them to disagree about the same report.
   const LEGWORD = {pass:'OK', warn:'SLOW', fail:'FAULT', unknown:'NOT MEASURABLE'};
+  // An address with the name it answers to, where it answered to one. Both,
+  // never the name alone: a PTR record is written by whoever owns the reverse
+  // zone rather than by whoever owns the host, so it is a label to read and the
+  // address stays the thing anyone acts on.
+  const NAMES = data.peer_names || {};
+  const named = a => NAMES[a] ? `${escapeHtml(NAMES[a])} (${escapeHtml(a)})`
+                              : escapeHtml(String(a == null ? '' : a));
   const legSides = data.path_legs || [];
 
   // The traced path, as the third column. Present whenever a trace ran, so the
@@ -13450,7 +13530,7 @@ function renderDiagnosis(data, opts){
   const hopList = col => `<div class="hops">${col.hops.map(h => `
       <div class="hrow ${h.state === 'ok' ? '' : h.state}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hh">${named(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
@@ -13507,9 +13587,9 @@ function renderDiagnosis(data, opts){
       return `<div class="plane ${leg.state}">
           <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
             <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
-          <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
+          <div class="ptrack"><span class="pend">${named(side.left)}</span>
             ${track}
-            <span class="pend">${escapeHtml(side.right)}</span></div>
+            <span class="pend">${named(side.right)}</span></div>
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');
@@ -13519,13 +13599,13 @@ function renderDiagnosis(data, opts){
     // the connections it opens, once at somewhere it never sends anything.
     const op = data.out_path;
     const traced = (op && side.side === 'backend') ? `
-      <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
+      <div class="ptraced">the path to ${named(op.target)} \u2014 ${
         escapeHtml(op.picked)}${op.of > 1
           ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>
       ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
-          <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
+          <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}</span></div>
         ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');

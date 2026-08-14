@@ -1034,6 +1034,13 @@ function renderDiagnosis(data, opts){
   // Python and again in this file is two copies of a rule and two chances for
   // them to disagree about the same report.
   const LEGWORD = {pass:'OK', warn:'SLOW', fail:'FAULT', unknown:'NOT MEASURABLE'};
+  // An address with the name it answers to, where it answered to one. Both,
+  // never the name alone: a PTR record is written by whoever owns the reverse
+  // zone rather than by whoever owns the host, so it is a label to read and the
+  // address stays the thing anyone acts on.
+  const NAMES = data.peer_names || {};
+  const named = a => NAMES[a] ? `${escapeHtml(NAMES[a])} (${escapeHtml(a)})`
+                              : escapeHtml(String(a == null ? '' : a));
   const legSides = data.path_legs || [];
 
   // The traced path, as the third column. Present whenever a trace ran, so the
@@ -1050,7 +1057,7 @@ function renderDiagnosis(data, opts){
   const hopList = col => `<div class="hops">${col.hops.map(h => `
       <div class="hrow ${h.state === 'ok' ? '' : h.state}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hh">${named(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
@@ -1107,9 +1114,9 @@ function renderDiagnosis(data, opts){
       return `<div class="plane ${leg.state}">
           <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
             <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
-          <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
+          <div class="ptrack"><span class="pend">${named(side.left)}</span>
             ${track}
-            <span class="pend">${escapeHtml(side.right)}</span></div>
+            <span class="pend">${named(side.right)}</span></div>
           <div class="pev">${escapeHtml((leg.evidence || []).join(' \u00b7 '))}</div>
         </div>`;
     }).join('');
@@ -1119,13 +1126,13 @@ function renderDiagnosis(data, opts){
     // the connections it opens, once at somewhere it never sends anything.
     const op = data.out_path;
     const traced = (op && side.side === 'backend') ? `
-      <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
+      <div class="ptraced">the path to ${named(op.target)} \u2014 ${
         escapeHtml(op.picked)}${op.of > 1
           ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>
       ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
-          <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>
+          <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}</span></div>
         ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');

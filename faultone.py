@@ -10326,12 +10326,17 @@ def trace_the_way_out(raw, findings, quick=False):
     if not near:
         return None                       # nothing outbound; the probe stands in
     named = [f for f in (findings or []) if f["code"] in BACKEND_TRACE_CODES]
+    # Phrased as destinations, because that is what is being chosen. Calling it
+    # "the connection this report is about" and printing the side's connection
+    # count beside it read as though the hops below were the connections - they
+    # are the path to one destination, and the count is of connections on the
+    # side, which are two different numbers that happened to sit together.
     if named:
-        peer, why = near.get("worst_peer"), "the connection this report is about"
+        peer, why = near.get("worst_peer"), "the destination this report is about"
     elif near.get("via"):
-        peer, why = near.get("via"), "carrying most of this side"
+        peer, why = near.get("via"), "where most of this side's connections go"
     else:
-        peer, why = near.get("worst_peer"), "the worst-performing of them"
+        peer, why = near.get("worst_peer"), "the worst-performing destination here"
     peer = str(peer or "")
     host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
     if not host or not valid_target(host):
@@ -12419,7 +12424,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      would be read as one way, which is a claim no traceroute can make: the
      reply that stops the clock is the router's own, so out and back are in
      every figure and nothing here can split them. */
-  .ptraced .pboth{display:block; margin-top:3px; opacity:.75;}
+  /* Under the timings it describes, not above them. */
+  .pboth{display:block; margin-top:7px; padding-top:6px;
+    border-top:1px dotted var(--border); font-family:var(--mono);
+    font-size:10px; color:var(--text-dim); opacity:.8;}
   /* Observations about this side that are not a leg. */
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
@@ -13182,6 +13190,8 @@ function renderDiagnosis(data, opts){
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
       </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
+      <div class="pboth">each time is a round trip to that hop, out and back
+        together \u2014 a traceroute cannot separate them</div>
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 
   const pp = data.probe_path;
@@ -13239,9 +13249,8 @@ function renderDiagnosis(data, opts){
     const op = data.out_path;
     const traced = (op && side.side === 'backend') ? `
       <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
-        escapeHtml(op.picked)}${op.of > 1 ? ' of ' + op.of + ' connections' : ''}
-        <span class="pboth">each time is a round trip to that hop, out and back
-        together \u2014 a traceroute cannot separate them</span></div>
+        escapeHtml(op.picked)}${op.of > 1
+          ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>
       ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>

@@ -6167,10 +6167,13 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         direction, and the page says which they are where they are drawn.
         """
         src = nd.VIEWER_TEMPLATE
-        i = src.index('class="ptraced"')
+        i = src.index('class="pboth"')
         block = src[i:src.index("</div>", i)]
         self.assertIn("round trip", block,
                       "the hop timings do not say they are round trips")
+        # Under the timings, not above them: it describes what has just been
+        # read, and above the list it was a preamble to numbers not yet seen.
+        self.assertLess(src.index('class="hrow'), src.index('class="pboth"'))
 
     def test_a_hop_with_no_timing_says_so_rather_than_printing_null(self):
         """Hops traced to a backend come straight from the parser and carry only
@@ -6201,7 +6204,12 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         out = rep["out_path"]
         self.assertEqual(out["target"], "10.0.0.90")
         self.assertTrue(out["hops"])
-        self.assertEqual(out["picked"], "the connection this report is about")
+        self.assertEqual(out["picked"], "the destination this report is about")
+        # A destination, not a connection. Printing "the connection this report
+        # is about of 4 connections" read as though the hops below were the
+        # connections; they are the path to one destination, and the count is of
+        # connections on the side.
+        self.assertNotIn("connection", out["picked"])
 
     def test_the_peer_carrying_most_of_the_side_is_the_one_traced(self):
         """The load-balancer shape. Where one address carries most of a side,
@@ -6220,7 +6228,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         out = mod.trace_the_way_out(raw, [])
         self.assertEqual(seen, ["10.0.0.7"], "it traced the outlier, not the path "
                                              "nearly every connection takes")
-        self.assertEqual(out["picked"], "carrying most of this side")
+        self.assertEqual(out["picked"], "where most of this side's connections go")
         self.assertEqual(out["of"], 40)
 
     def test_the_worst_performer_is_traced_when_nothing_dominates(self):
@@ -6235,7 +6243,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
             "connections": 40, "via": None, "worst_peer": "10.0.0.99:443"}}}}
         out = mod.trace_the_way_out(raw, [])
         self.assertEqual(seen, ["10.0.0.99"])
-        self.assertEqual(out["picked"], "the worst-performing of them")
+        self.assertEqual(out["picked"], "the worst-performing destination here")
 
     def test_a_box_with_nothing_outbound_traces_nothing_here(self):
         """There is no connection to follow, and the reference probe is what

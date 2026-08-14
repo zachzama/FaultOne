@@ -6536,7 +6536,13 @@ STAGE_RULES = [
       "tcp_flow_loss_clients", "tcp_return_stalled_clients",
       "path_jitter_clients", "queuing_delay_clients",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
-      "reqq_full_drops", "fd_pressure"}),
+      "reqq_full_drops", "fd_pressure",
+      # The rest of the accept path. Overflowing the accept queue is the
+      # plainest way a box turns clients away, and sockets left in CLOSE_WAIT
+      # are how it runs out of room to accept into - both were headlining over
+      # a strip with nothing on it.
+      "accept_overflow_live", "accept_overflow_historical",
+      "close_wait_backlog"}),
     # Optics belong to the link stage for the same reason the error counters
     # do: a fibre outside its rated range is the physical link failing, and
     # leaving the strip all-green during an optical alarm is exactly the
@@ -6581,7 +6587,17 @@ STAGE_RULES = [
       # Ceilings that stop this box opening connections of its own. The ones
       # that stop it *accepting* face the other way and belong to "clients".
       "no_traffic_at_all", "ephemeral_ports_low",
-      "aborts_on_memory", "aborts_on_timeout"}),
+      "aborts_on_memory", "aborts_on_timeout",
+      # Attempts outward that nothing answers, which is the same stage as the
+      # retransmitted SYNs and failed connects already here.
+      "syn_sent_backlog",
+      # The rest of the per-flow readings. The loss ones are above; these two
+      # say the flow was held up by a buffer at one end rather than by the
+      # path, which is an answer about the way out and belongs beside them.
+      "tcp_flow_sendbuf_limited", "tcp_flow_receiver_limited",
+      # What sits between this site and the internet. Neither is a fault on
+      # its own, and both change what the way out can do.
+      "cgnat", "double_nat"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -12542,10 +12558,15 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
 
     _sides = build_sides(findings, raw)
     # Which box the verdict blames. The colours say which direction stopped
-    # working, and for seven findings that is a different box - so on those the
-    # panel pointed at a side the verdict had just exonerated.
+    # working, and for nineteen findings that is a different box - so on those
+    # the panel pointed at a side the verdict had just exonerated.
+    #
+    # Only when there is something to blame. A verdict is always based on the
+    # top finding, including on a clean run where that finding is a note about
+    # something being fine, so marking the cause off `based_on` alone tagged a
+    # green box "the cause" on every all-clear report.
     _cause = (verdict.get("based_on") or [None])[0]
-    if _cause:
+    if _cause and verdict.get("severity") in ("warning", "critical"):
         _owner = cause_owner_side(_cause)
         for _z in _sides:
             _z["owns_cause"] = _z["side"] == _owner

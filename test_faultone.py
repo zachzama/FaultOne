@@ -6672,6 +6672,160 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestTheWordsAndThePictureAgree(unittest.TestCase):
+    """Every scenario, checked for saying one thing and drawing another.
+
+    Four defects of this shape were found in a row, each by a person opening one
+    report and reading it: a verdict blaming this box over a green box, a strip
+    of eight green stages under a warning, a tag reading "the cause" on a report
+    with no cause. Each was fixed where it was seen, which is how the first fix
+    covered seven of the nineteen findings it needed to.
+
+    So the checks are here rather than on the demos, and they run against all of
+    them at once. Finding one of these should not depend on which report someone
+    happened to open.
+
+    Where a report is allowed to look like a contradiction the code is listed
+    below with the reason, so the exception is a decision on the record rather
+    than a gap.
+    """
+
+    # The strip is the eight stages of the chain. These findings are not on it:
+    # they are about the box or about the run, not about a stage, and forcing
+    # them onto one would have the strip report a stage that is working as
+    # broken. A green chain under "the clock has drifted" is the truth.
+    NOT_ON_THE_CHAIN = {
+        "clock_skewed", "clock_unsynced",       # the box's clock, not the path
+        "regression_since_baseline",            # a comparison across two runs
+        "no_clients_connected",                 # there is no inbound leg to judge
+    }
+
+    # A column can be lit with all four legs reading OK. Loss and jitter count
+    # what had to be sent again, or how much the spacing moved - neither can
+    # name a direction, so they sit on the side and never on a leg. Drawing a
+    # leg from them would invent the half of the answer that was not measured.
+    NOT_ON_A_LEG = {
+        "tcp_flow_loss_clients", "tcp_flow_loss_backends",
+        "path_jitter_clients", "path_jitter_backends",
+        "queuing_delay_clients", "queuing_delay_backends",
+    }
+
+    LIT = ("warn", "fail")
+    BAD = ("warning", "critical")
+    HINT_POINTS_AT = {"this box": "local", "the client path": "downstream",
+                      "the backend": "upstream"}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.reports = {}
+        for code in sorted(S):
+            mod = fresh()
+            setup, kwargs = S[code]
+            setup(mod)
+            cls.reports[code] = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def every_report(self):
+        for code in sorted(self.reports):
+            rep = self.reports[code]
+            yield code, rep, rep["verdict"], {z["side"]: z for z in rep["sides"]}
+
+    @staticmethod
+    def owning(zones):
+        return [s for s, z in zones.items() if z.get("owns_cause")]
+
+    def test_the_cause_is_marked_on_one_box_and_only_when_there_is_one(self):
+        """A verdict is always based on its top finding, including on a clean
+        run where that finding is a note about something being fine. Marking off
+        that alone put "the cause" on a green box on twenty-four reports, most
+        of them reports with nothing wrong."""
+        for code, _rep, v, zones in self.every_report():
+            with self.subTest(code=code):
+                owning = self.owning(zones)
+                if v["severity"] not in self.BAD:
+                    self.assertEqual(owning, [], "a box is the cause of nothing")
+                else:
+                    self.assertEqual(len(owning), 1)
+                    self.assertIn(zones[owning[0]]["state"], self.LIT,
+                                  "the cause is marked on a box drawn as fine")
+
+    def test_a_verdict_blaming_this_box_lights_this_box(self):
+        for code, _rep, v, zones in self.every_report():
+            if v["severity"] not in self.BAD:
+                continue
+            if not TestWhichBoxTheVerdictBlames.OWNED_BY_BOX.match(v["owner"].lower()):
+                continue
+            with self.subTest(code=code):
+                self.assertEqual(self.owning(zones), ["local"])
+                self.assertIn(zones["local"]["state"], self.LIT)
+
+    def test_the_hint_and_the_marked_box_name_the_same_place(self):
+        """Three of the hint words are places. A report ending "Hint: the
+        backend" over a cause marked on the clients is two answers."""
+        for code, _rep, v, zones in self.every_report():
+            top = (v.get("based_on") or [None])[0]
+            want = self.HINT_POINTS_AT.get(nd.FINDING_HINT.get(top))
+            if v["severity"] not in self.BAD or not want:
+                continue
+            with self.subTest(code=code):
+                self.assertEqual(self.owning(zones), [want])
+
+    def test_a_report_with_a_fault_lights_something(self):
+        for code, _rep, v, zones in self.every_report():
+            if v["severity"] not in self.BAD:
+                continue
+            with self.subTest(code=code):
+                self.assertTrue(any(z["state"] in self.LIT for z in zones.values()),
+                                "a %s verdict over three boxes drawn as fine"
+                                % v["severity"])
+
+    def test_every_ranked_finding_lands_on_a_stage(self):
+        """The one that was actually wrong. Twelve ranked findings were in no
+        stage set at all, so a report headlining one of them showed a verdict
+        over eight green stages - the strip indifferent to the fault it was
+        printed beside. Eight of the twelve were plain omissions."""
+        on_a_stage = set()
+        for _name, fails, warns in nd.STAGE_RULES:
+            on_a_stage |= set(fails) | set(warns)
+        missing = {c for c, _o, _h, _w in nd.VERDICT_RULES} - on_a_stage
+        self.assertEqual(sorted(missing - self.NOT_ON_THE_CHAIN), [],
+                         "these can headline and no stage would show it")
+        self.assertEqual(sorted(self.NOT_ON_THE_CHAIN - missing), [],
+                         "listed as not on the chain and now on one")
+
+    def test_the_strip_is_lit_wherever_the_chain_is_the_fault(self):
+        for code, rep, v, _z in self.every_report():
+            top = (v.get("based_on") or [None])[0]
+            if v["severity"] not in self.BAD or top in self.NOT_ON_THE_CHAIN:
+                continue
+            with self.subTest(code=code):
+                self.assertTrue(
+                    any(s["state"] in self.LIT for s in rep["stages"]),
+                    "a %s verdict over eight green stages" % v["severity"])
+
+    def test_a_lit_column_has_a_lit_leg_or_a_reason_it_cannot(self):
+        for code, rep, v, _z in self.every_report():
+            top = (v.get("based_on") or [None])[0]
+            for side in rep.get("path_legs") or []:
+                if side["state"] not in self.LIT:
+                    continue
+                if any(l["state"] in self.LIT for l in side["legs"]):
+                    continue
+                with self.subTest(code=code, side=side["side"]):
+                    self.assertIn(top, self.NOT_ON_A_LEG,
+                                  "a column is lit and every leg under it reads OK")
+
+    def test_no_column_reads_ok_over_a_leg_that_does_not(self):
+        """The other way round has no defence: the column is the summary of its
+        own legs, so it cannot be quieter than the worst of them."""
+        for code, rep, _v, _z in self.every_report():
+            for side in rep.get("path_legs") or []:
+                if side["state"] != "pass":
+                    continue
+                with self.subTest(code=code, side=side["side"]):
+                    self.assertEqual(
+                        [l["what"] for l in side["legs"] if l["state"] in self.LIT], [])
+
+
 class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
     """One line decides which side a connection is on:
 

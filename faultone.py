@@ -6882,7 +6882,8 @@ def addresses_on_the_page(report):
     for side in (report.get("path_legs") or []):
         shown.add(side.get("peer"))
         shown.update((side.get("left"), side.get("right")))
-    for column in (report.get("out_path"), report.get("probe_path")):
+    columns = [s.get("traced") for s in (report.get("path_legs") or [])]
+    for column in columns + [report.get("probe_path")]:
         if not column:
             continue
         shown.add(column.get("target"))
@@ -7111,6 +7112,11 @@ def build_path_legs(raw=None, sides=None):
             # lost them, so putting it on a leg would attribute a direction the
             # number does not have.
             "connections": total,
+            # The address most of this side's connections go through, where one
+            # dominates - a balancer in front, or a single backend. Carried so
+            # whatever traces this side can pick the path nearly everything
+            # takes rather than an outlier.
+            "via": (near.get("via") or "").rsplit(":", 1)[0] or None,
             "rtt_ms": near.get("rtt_ms"),
             "loss_pct": near.get("worst_loss_pct"),
             "left": this if name == "backend" else far,
@@ -10442,10 +10448,37 @@ def collect_trace(target, mtr_cycles):
     return {"raw": res, "hops": hops, "source": "traceroute", "mtr": None}
 
 
-BACKEND_TRACE_CODES = ("tcp_flow_loss_backends", "tcp_return_stalled_backends")
+# The findings that name a peer worth tracing, per side. A finding on the way
+# out points at a backend; one on the way in points at whatever the clients come
+# through, which is usually a balancer rather than any one of them.
+SIDE_TRACE_CODES = {
+    "backend": ("tcp_flow_loss_backends", "tcp_return_stalled_backends"),
+    "client": ("tcp_flow_loss_clients", "tcp_return_stalled_clients"),
+}
 
 
-def trace_the_way_out(raw, findings, quick=False):
+def trace_each_side(legs, findings, quick=False):
+    """Trace a destination on both sides, and hang each path off its own column.
+
+    Only the way out had one. The clients' side carried what its connections
+    were doing and nothing about the route between here and them, which left
+    half the picture describing a journey and half describing a state.
+
+    Tracing a client goes *to* them, so it is not the route their packets took
+    to arrive - that cannot be watched from here, and the TTL count beside it is
+    the closest thing there is. It is still the segment between this box and the
+    people using it, hop by hop, which is what the column is about.
+
+    Within the same rule everything else here follows: nothing is probed that
+    was not already talking to this box.
+    """
+    for side in (legs or []):
+        column = trace_one_peer(side, findings, quick)
+        if column:
+            side["traced"] = column
+
+
+def trace_one_peer(side, findings, quick=False):
     """Trace a destination this box is actually talking to.
 
     The path chain traced the target, which defaults to a public address chosen
@@ -10468,25 +10501,23 @@ def trace_the_way_out(raw, findings, quick=False):
     Returns None where there is nothing outbound to trace, and on --quick, which
     skips the first trace too.
     """
-    if quick:
+    if quick or not side:
         return None
-    near = ((raw.get("tcp_flows") or {}).get("by_side") or {}).get("backend") or {}
-    if not near:
-        return None                       # nothing outbound; the probe stands in
-    named = [f for f in (findings or []) if f["code"] in BACKEND_TRACE_CODES]
+    near = side
+    named = [f for f in (findings or [])
+             if f["code"] in SIDE_TRACE_CODES.get(side.get("side"), ())]
     # Phrased as destinations, because that is what is being chosen. Calling it
     # "the connection this report is about" and printing the side's connection
     # count beside it read as though the hops below were the connections - they
     # are the path to one destination, and the count is of connections on the
     # side, which are two different numbers that happened to sit together.
     if named:
-        peer, why = near.get("worst_peer"), "the destination this report is about"
+        host, why = near.get("peer"), "the destination this report is about"
     elif near.get("via"):
-        peer, why = near.get("via"), "where most of this side's connections go"
+        host, why = near.get("via"), "where most of this side's connections go"
     else:
-        peer, why = near.get("worst_peer"), "the worst-performing destination here"
-    peer = str(peer or "")
-    host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
+        host, why = near.get("peer"), "the worst-performing destination here"
+    host = str(host or "")
     if not host or not valid_target(host):
         return None
     res = cmd_traceroute(host)
@@ -12460,7 +12491,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # this is the segment the work actually crosses.
         # The hops out to a destination this box actually uses. Where there
         # are none, the reference probe below stands in for the way out.
-        "out_path": trace_the_way_out(raw, findings, quick),
+        # Each side's traced path hangs off its own column; see below, where
+        # it is filled once the columns exist.
+        "probe_only": None,
         "call_quality": call_quality,
         "neighbours": neighbours,
         "inventory": inventory_data,
@@ -12482,6 +12515,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # How far away each side is, on the way in. Done here rather than in
     # build_path_legs, which reads what has already been collected and does not
     # probe: this is one ping per side and belongs where the other probes are.
+    trace_each_side(report.get("path_legs"), findings, quick)
     count_the_hops_in(report.get("path_legs"), quick)
     report["peer_names"] = name_the_addresses(
         addresses_on_the_page(report), raw, quick)
@@ -13643,8 +13677,8 @@ function renderDiagnosis(data, opts){
     // that names it. It used to be a probe to a fixed address in a column of its
     // own, which on a box that relays pointed at the internet twice - once at
     // the connections it opens, once at somewhere it never sends anything.
-    const op = data.out_path;
-    const traced = (op && side.side === 'backend') ? `
+    const op = side.traced;
+    const traced = op ? `
       <div class="ptraced">the path to ${named(op.target)} \u2014 ${
         escapeHtml(op.picked)}${op.of > 1
           ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>

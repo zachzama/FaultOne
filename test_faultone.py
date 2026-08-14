@@ -2119,6 +2119,43 @@ class TestNoVendorNames(unittest.TestCase):
         self.assertIsNone(nd.looks_intercepted(["DigiCert Global Root CA"]))
 
 
+class TestTheSuiteSendsNothing(unittest.TestCase):
+    """The suite opens no sockets, and a datagram is a socket.
+
+    The existing guard booby-traps `connect`, `connect_ex` and name resolution,
+    which is what the checks that reached a live host were using. A reverse
+    lookup uses neither: it opens a UDP socket and calls `sendto`, so when the
+    report started resolving the addresses it shows, every scenario in the
+    corpus began sending to whatever 10.0.0.53 is on the machine running the
+    suite.
+
+    It cost nothing visible here because that address fails fast, which is how a
+    test suite quietly acquires a dependency on the network it runs from.
+    """
+
+    def test_a_scenario_sends_no_datagrams(self):
+        import socket as _socket
+        sent = []
+        real = _socket.socket.sendto
+
+        def watched(self, data, *args):
+            addr = args[-1] if args else None
+            host = addr[0] if isinstance(addr, tuple) else addr
+            if host not in ("127.0.0.1", "::1", None):
+                sent.append(host)
+            return real(self, data, *args)
+
+        _socket.socket.sendto = watched
+        try:
+            mod = fresh()
+            setup, kwargs = S["tcp_flow_loss_backends"]
+            setup(mod)
+            mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        finally:
+            _socket.socket.sendto = real
+        self.assertEqual(sent, [], "a scenario sent to %s" % sorted(set(sent)))
+
+
 class TestTheSuiteCleansUpAfterItself(unittest.TestCase):
     """Properties of the suite rather than of the tool.
 
@@ -5458,7 +5495,7 @@ class TestZones(unittest.TestCase):
         setup, kwargs = S["path_loss_cosmetic"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        col = rep["out_path"] or rep["probe_path"]
+        col = traced_side(rep) or rep["probe_path"]
         self.assertTrue(col["hops"])
         self.assertEqual([h["state"] for h in col["hops"]],
                          ["ok"] * len(col["hops"]))
@@ -6173,7 +6210,7 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
                       "4 packets transmitted, 4 received, 0%% packet loss\n"
                       "rtt min/avg/max/mdev = 1.0/20.0/30.0/2.0 ms\n" % t}
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        out = rep["out_path"]
+        out = traced_side(rep)
         self.assertEqual(out["hops_in"], 7)
         self.assertEqual(out["ttl_seen"], 57)
         self.assertEqual(out["ttl_assumed"], 64)
@@ -6185,7 +6222,7 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         setup, kwargs = S["tcp_flow_loss_backends"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        self.assertIsNone(rep["out_path"].get("hops_in"))
+        self.assertIsNone(traced_side(rep).get("hops_in"))
 
     def test_the_way_in_gets_a_hop_count_of_its_own(self):
         """The point of the whole thing. The way in has never had a path -
@@ -6386,6 +6423,19 @@ class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
         self.assertEqual(nd._where_that_is(""), "")
 
 
+def traced_side(report, side="backend"):
+    """The path traced for one side of the box.
+
+    Each column owns its own now. It used to be a single `out_path` on the
+    report, which was the way out and nothing else - the clients' side carried
+    what its connections were doing and no route between here and them.
+    """
+    for s in (report.get("path_legs") or []):
+        if s.get("side") == side:
+            return s.get("traced")
+    return None
+
+
 class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
     """The direction counters coloured an arrowhead for two releases without a
     finding underneath them.
@@ -6570,6 +6620,51 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         self.assertIn("no timing", src[i:i + 400],
                       "a hop with no timing still renders its null")
 
+    def test_both_sides_get_a_traced_path(self):
+        """Only the way out had one. The clients' side carried what its
+        connections were doing and nothing at all about the route between here
+        and them, so half the picture described a journey and half described a
+        state.
+
+        Tracing a client goes *to* them, so it is not the route their packets
+        took to arrive - that cannot be watched from here, and the TTL count in
+        the heading is the closest thing there is. It is still the segment
+        between this box and the people using it, hop by hop.
+        """
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_clients"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        for side in ("client", "backend"):
+            with self.subTest(side=side):
+                path = traced_side(rep, side)
+                self.assertIsNotNone(path, "%s has no path" % side)
+                self.assertTrue(path["hops"])
+
+    def test_each_side_traces_its_own_peer(self):
+        """A client's path must not be drawn to a backend, which is the whole
+        reason the two are measured apart."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_clients"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        by = {s["side"]: s for s in rep["path_legs"]}
+        for side, s in by.items():
+            with self.subTest(side=side):
+                self.assertEqual(traced_side(rep, side)["target"], s["peer"])
+
+    def test_a_finding_on_one_side_does_not_choose_the_other_sides_peer(self):
+        """The reason each side names its own findings: a loss finding on the
+        clients says nothing about which backend is worth tracing."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_clients"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(traced_side(rep, "client")["picked"],
+                         "the destination this report is about")
+        self.assertNotEqual(traced_side(rep, "backend")["picked"],
+                            "the destination this report is about")
+
     def test_the_destination_traced_is_one_this_box_actually_uses(self):
         """The trace used to go to the target, a public address picked for being
         reliably reachable. On a box that relays that is a reachability check
@@ -6581,7 +6676,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         connection the report is already about.
         """
         _, rep = self.report(backend=(10, 9000, 9000))
-        out = rep["out_path"]
+        out = traced_side(rep)
         self.assertEqual(out["target"], "10.0.0.90")
         self.assertTrue(out["hops"])
         self.assertEqual(out["picked"], "the destination this report is about")
@@ -6602,10 +6697,9 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
             "ok": True, "cmd": "traceroute", "stdout":
             " 1  10.0.0.1 (10.0.0.1)  1.0 ms  1.1 ms  1.2 ms\n"
             " 2  %s (%s)  9.0 ms  9.1 ms  9.2 ms\n" % (t, t)})
-        raw = {"tcp_flows": {"by_side": {"backend": {
-            "connections": 40, "via": "10.0.0.7:443",
-            "worst_peer": "10.0.0.99:443"}}}}
-        out = mod.trace_the_way_out(raw, [])
+        side = {"side": "backend", "connections": 40,
+                "via": "10.0.0.7", "peer": "10.0.0.99"}
+        out = mod.trace_one_peer(side, [])
         self.assertEqual(seen, ["10.0.0.7"], "it traced the outlier, not the path "
                                              "nearly every connection takes")
         self.assertEqual(out["picked"], "where most of this side's connections go")
@@ -6619,9 +6713,9 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         mod.cmd_traceroute = lambda t: (seen.append(t) or {
             "ok": True, "cmd": "traceroute",
             "stdout": " 1  %s (%s)  9.0 ms  9.1 ms  9.2 ms\n" % (t, t)})
-        raw = {"tcp_flows": {"by_side": {"backend": {
-            "connections": 40, "via": None, "worst_peer": "10.0.0.99:443"}}}}
-        out = mod.trace_the_way_out(raw, [])
+        side = {"side": "backend", "connections": 40,
+                "via": None, "peer": "10.0.0.99"}
+        out = mod.trace_one_peer(side, [])
         self.assertEqual(seen, ["10.0.0.99"])
         self.assertEqual(out["picked"], "the worst-performing destination here")
 
@@ -6630,7 +6724,8 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         stands in for the way out on one of those."""
         mod = fresh()
         mod.cmd_traceroute = lambda t: self.fail("traced with nothing outbound")
-        self.assertIsNone(mod.trace_the_way_out({"tcp_flows": {"by_side": {}}}, []))
+        self.assertIsNone(mod.trace_one_peer(None, []))
+        self.assertIsNone(mod.trace_one_peer({"side": "backend"}, []))
 
     def test_a_healthy_side_is_traced_too_and_only_once(self):
         """The hops are the way out, not a fault report, so they are drawn on a
@@ -6638,7 +6733,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         connections of its own has no use for a probe to a fixed address, and
         two chains pointing at the internet is what this replaced."""
         _, rep = self.report(backend=(10, 9000, 10))
-        self.assertIsNotNone(rep["out_path"])
+        self.assertIsNotNone(traced_side(rep))
         self.assertIsNone(rep["probe_path"],
                           "a box that relays is being drawn a reference probe "
                           "as well as its own way out")
@@ -6650,7 +6745,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         setup, kwargs = S["service_address_unserved"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        self.assertIsNone(rep["out_path"])
+        self.assertIsNone(traced_side(rep))
         self.assertIsNotNone(rep["probe_path"])
 
     def test_quick_mode_traces_nothing(self):
@@ -6661,7 +6756,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
                     sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
                                timers=(10, 9000, 9000)))
         rep = mod.diagnose(quick=True, **scenario_kwargs({}))
-        self.assertIsNone(rep["out_path"])
+        self.assertIsNone(traced_side(rep))
 
     def test_the_four_legs_agree_with_the_box_above_them(self):
         """The column takes its state from the same place the three boxes do.
@@ -13587,6 +13682,14 @@ def fresh():
     quiet_time.sleep = lambda s: None
     mod.time = quiet_time
     mod.which = lambda c: False
+    # A reverse lookup is a real UDP send to a real resolver address. Every
+    # collector here is stubbed; this is not a collector, so it was not, and the
+    # suite was sending to whatever 10.0.0.53 is on the machine it ran on.
+    #
+    # It failed fast here and so cost nothing visible, which is exactly how this
+    # kind of thing survives. The booby-trap that guards "the suite opens no
+    # sockets" watches connect and name resolution; a sendto is neither.
+    mod.dns_ptr = lambda server, ip, timeout=1.0: None
     # ---- healthy baseline for every collector -------------------------
     mod.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr",
                                  "stdout": "2: eth0: <UP>\n    inet 10.0.0.5/24\n"}

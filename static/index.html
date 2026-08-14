@@ -1139,8 +1139,8 @@ function renderDiagnosis(data, opts){
     // that names it. It used to be a probe to a fixed address in a column of its
     // own, which on a box that relays pointed at the internet twice - once at
     // the connections it opens, once at somewhere it never sends anything.
-    const op = data.out_path;
-    const traced = (op && side.side === 'backend') ? `
+    const op = side.traced;
+    const traced = op ? `
       <div class="ptraced">the path to ${named(op.target)} \u2014 ${
         escapeHtml(op.picked)}${op.of > 1
           ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>

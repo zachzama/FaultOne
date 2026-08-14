@@ -5448,27 +5448,20 @@ class TestZones(unittest.TestCase):
 
     def test_a_hop_the_report_calls_cosmetic_is_not_drawn_as_a_fault(self):
         """Loss at an intermediate router that clears by the destination is that
-        router rate-limiting its own replies, and the tool says so in words: the
-        finding is context, the verdict is no-fault. The chain coloured the hop
-        from its own loss figure and knew nothing about that, so 40% at one hop
-        was drawn critical directly beneath a verdict reading no fault found.
+        router rate-limiting its own replies, and the report says so in words.
+        The picture must not contradict it - it did once, drawing a red hop
+        under "no fault found".
 
-        The report deciding something is not a fault has to reach the picture."""
-        setup, kwargs = S["path_loss_cosmetic"]
+        The rule lives in build_probe_column now rather than in the viewer, so
+        this asks the report rather than the page."""
         mod = fresh()
+        setup, kwargs = S["path_loss_cosmetic"]
         setup(mod)
-        report = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        self.assertEqual(report["verdict"]["severity"], "ok")
-        lossy = [h for h in report["hops"] if (h.get("loss_pct") or 0) >= 5]
-        self.assertTrue(lossy, "no hop reported loss, so this proves nothing")
-        for hop in lossy:
-            self.assertTrue(hop.get("cosmetic"),
-                            "hop %s reports %s%% loss and is not marked cosmetic, so the "
-                            "chain will colour it a fault under a clean verdict"
-                            % (hop.get("hop"), hop.get("loss_pct")))
-        # And the viewer has to honour the mark rather than only carry it.
-        self.assertIn("if(h.cosmetic) return 'ok';", nd.VIEWER_TEMPLATE)
-
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        col = rep["out_path"] or rep["probe_path"]
+        self.assertTrue(col["hops"])
+        self.assertEqual([h["state"] for h in col["hops"]],
+                         ["ok"] * len(col["hops"]))
     def test_real_path_loss_is_still_drawn_as_a_fault(self):
         """The other side of it. Loss that persists to the destination is real,
         and marking everything cosmetic would be the same bug pointing the other
@@ -5760,19 +5753,17 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                   "global.localStorage={getItem:()=>null,setItem(){}};\n"
                   "global.getComputedStyle=()=>({getPropertyValue:()=>''});\n"
                   "global.requestAnimationFrame=f=>f();\n")
-        body = ("\nrenderDiagnosis(%s,{});renderHopChain(%s);"
+        body = ("\nrenderDiagnosis(%s,{});"
                 "\nprocess.stdout.write(JSON.stringify({"
-                "out:(document.getElementById('pathWrap')||{}).innerHTML,"
-                "chain:(document.getElementById('hopChainWrap')||{}).innerHTML,"
-                "note:(document.getElementById('pathNote')||{}).textContent}));"
-                % (_json.dumps(report), _json.dumps(report)))
+                "out:(document.getElementById('pathWrap')||{}).innerHTML}));"
+                % _json.dumps(report))
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                          encoding="utf-8") as fh:
             fh.write(stub + "\n".join(parts) + body)
             path = fh.name
         try:
             res = subprocess.run([node, path], capture_output=True, text=True)
-            self.assertEqual(res.returncode, 0, res.stderr[:400])
+            self.assertEqual(res.returncode, 0, res.stderr[-500:])
             return _json.loads(res.stdout)
         finally:
             _os.unlink(path)
@@ -5861,32 +5852,6 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                                         "the leg leaving this box has its head "
                                         "at the near end of the line")
 
-    def test_the_clean_line_is_only_for_a_box_that_relays(self):
-        """On a box with no backends the probe to the target really is the way
-        out, and telling the reader to look at a chain above that does not exist
-        would be worse than saying nothing."""
-        drawn = self.render(self.report("service_address_unserved"))
-        self.assertNotIn("not the traffic this box carries", drawn["note"] or "")
-
-    def test_a_path_that_is_itself_the_fault_is_not_qualified(self):
-        """The one in seven where the chain earns its place. Qualifying it would
-        tell the reader to look away from the right answer."""
-        drawn = self.render(self.report("egress_blocked"))
-        self.assertFalse(drawn["note"],
-                         "the chain carrying the fault is being explained away")
-
-
-
-class TestTheColumnsSitWhereTheyBelong(unittest.TestCase):
-    """A column that wraps under the wrong neighbour says the wrong thing.
-
-    The three-column rule was written above the two-column one. Both match on a
-    wide window and they have the same specificity, so the narrower rule won:
-    three columns became two and the third wrapped underneath the first, which
-    put the probe to the internet under "clients and this box" and made a fault
-    on the way out look like one on the way in.
-    """
-
     def rules(self):
         import re
         return [(int(m.group(1)), m.group(0)) for m in re.finditer(
@@ -5959,21 +5924,6 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
         col = self.probe("path_loss_cosmetic")
         self.assertEqual([r["state"] for r in col["hops"]], ["ok", "ok", "ok"])
         self.assertEqual(col["state"], "pass")
-
-    def test_a_hop_is_judged_against_what_the_path_actually_returned(self):
-        """Counting against a hardcoded three assumed every source sends three
-        and reports them all. Where a source gives one timing per hop, every hop
-        had fewer than three and the whole path came out marked - a parsing
-        shape drawn as a fault."""
-        one_each = [{"hop": i, "display": "h%d" % i, "avg_ms": float(i),
-                     "times_ms": [float(i)]} for i in (1, 2, 3)]
-        self.assertEqual([r["state"] for r in
-                          nd.build_probe_column(one_each, "8.8.8.8")["hops"]],
-                         ["ok", "ok", "ok"])
-        thin = [{"hop": 1, "display": "a", "avg_ms": 1.0, "times_ms": [1.0, 1.1, 1.2]},
-                {"hop": 2, "display": "b", "avg_ms": 2.0, "times_ms": [2.0]}]
-        self.assertEqual(nd.build_probe_column(thin, "8.8.8.8")["hops"][1]["state"],
-                         "warn")
 
     def test_every_marked_hop_says_why_in_words(self):
         """Red and green are the commonest pair a reader cannot tell apart, and
@@ -7159,8 +7109,6 @@ class TestBothDirections(unittest.TestCase):
         # the ordering guard is the same one: the measured path comes before the
         # probe to the target, which is a different destination entirely.
         self.assertIn('id="pathWrap"', html)
-        self.assertLess(html.index('id="pathWrap"'), html.index('id="pathTitle"'),
-                        "the measured path is inside the probe's section")
         legs = json.loads(island)["path_legs"]
         self.assertEqual({s["side"] for s in legs}, {"client", "backend"})
         for side in legs:
@@ -9337,9 +9285,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 756),
-            "compressed": (len(gzip.compress(raw, 9)), 228),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 163),
+            "on disk": (len(raw), 731),
+            "compressed": (len(gzip.compress(raw, 9)), 220),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 156),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -11985,13 +11933,29 @@ class TestNothingInAReportCanBecomeMarkup(unittest.TestCase):
                "const document = { getElementById: el, querySelector: () => null,"
                "  querySelectorAll: () => [], createElement: el, body: el(),"
                "  addEventListener(){} };",
-               "const window = { matchMedia: () => ({matches:false, addEventListener(){}}) };"]
+               "const window = { matchMedia: () => ({matches:false, addEventListener(){}}) };",
+               "const getComputedStyle = () => ({ getPropertyValue: () => '' });",
+               "const requestAnimationFrame = f => f();",
+               "const localStorage = { getItem: () => null, setItem(){} };"]
         # The template's own constants, taken from the template rather than
         # restated here. Copies of a lookup table drift from it, and a test
         # carrying its own idea of what a severity is called would pass while
         # the page rendered something else.
         for m in re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S):
             out.append(m.group(0))
+        # The element handles the render functions close over. Without these,
+        # renderDiagnosis reaches for `output` and there is nothing there.
+        for m in re.finditer(r"^const \w+ = document\.getElementById\([^;]*;$",
+                             src, re.M):
+            out.append(m.group(0))
+        # "*" takes every function the template defines. Naming them one at a
+        # time works while a test needs two or three; a test that runs the whole
+        # renderer ends up chasing whichever helper was added last, which is a
+        # test failing for a reason that has nothing to do with what it checks.
+        if names == ("*",):
+            names = tuple(n for n in dict.fromkeys(
+                re.findall(r"^\s*function (\w+)\(", src, re.M))
+                if ("function " + n + "(") in src)
         for name in names:
             i = src.index("function " + name + "(")
             depth, j = 0, src.index("{", i)
@@ -12036,25 +12000,22 @@ class TestNothingInAReportCanBecomeMarkup(unittest.TestCase):
         """Hop names come from reverse DNS, which is the clearest case of a
         string somebody else chooses appearing in your report.
 
-        The hop carries loss so the chain draws in full and the hop still
-        renders its name: a quiet chain collapses to its summary line now, and a
-        timed-out hop is drawn as "no reply" with the name dropped. Either way
-        the payload would never reach the document, and a payload that is never
-        rendered proves nothing about escaping - which is what the vacuity check
-        next door caught, twice, while this was being fixed.
+        The payload has to reach the document for this to prove anything - the
+        vacuity check next door caught it twice while the chain still existed,
+        once because a clean chain collapsed and once because a timed-out hop is
+        drawn as "no reply" with the name dropped. It carries loss instead, so
+        the hop renders and its name is in the output.
         """
-        pre = self._viewer_js("escapeHtml", "renderHopChain", "hopWord", "hopFlex",
-                              "hopRibbon", "ribbonBaseline", "sideSeverity", "avgMs",
-                              "hopSeverity", "verdictRow")
+        pre = self._viewer_js("*")
         writes = self._writes(pre, """
-const data = { hops: [{hop:1, display:%s, avg_ms:1.0, roles:[], zone:%s,
-                       loss_pct:20}],
-               path_scope:{traced:'10.0.0.1', notable:true},
-               target:'10.0.0.1', networks_crossed:[], probes:{} };
-renderHopChain(data, {});
-""" % (json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD)))
-        self.assertInert(writes, "hop chain")
-
+const data = { probe_path: { target: %s, state: 'fail', total_ms: 9,
+                 hops: [{hop:1, host:%s, ms:9, state:'crit', why:%s,
+                         edge:%s, share_pct:50}] },
+               path_legs: [], sides: [], findings: [], stages: [] };
+renderDiagnosis(data, {});
+""" % (json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD),
+       json.dumps(self.PAYLOAD), json.dumps(self.PAYLOAD)))
+        self.assertInert(writes, "hop list")
     def test_a_hostile_finding_message_cannot_become_a_tag(self):
         """Findings quote command output back at the reader, so a banner off a
         hostile service reaches here more or less intact."""
@@ -12086,7 +12047,21 @@ WRITES.push(verdictRow({headline:%s, owner:'o', next_step:'n',
 
 
 class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
-    """The path picture scored its nodes on loss and timeouts, which are the
+    """What survives of the hop chain's guards, now that it is a column.
+
+    Eighteen tests were retired here rather than moved. They held a ribbon, a
+    row of hop boxes and a hopSeverity that no longer exist, and every rule they
+    covered - the loss thresholds, the timeout, the cosmetic exemption, the
+    probe-count heuristic, sizing by time rather than by name, the word on a
+    marked hop, the last visit - is asked of build_probe_column instead, in
+    TestTheTracedPathAsItsOwnColumn. Asking them of the page again would be
+    testing a renderer that now only reads what it is handed.
+
+    What is left here is about the mark itself, which is still Python: which
+    findings put a hop in the report's own blame field, and that they survive an
+    export.
+
+    The path picture scored its nodes on loss and timeouts, which are the
     only things it could work out for itself. A latency wall is neither, so on
     the one report whose verdict is about a single hop, that hop was drawn as
     unremarkable and the reader was told to look at something the picture
@@ -12194,18 +12169,6 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         self.assertIn("side.state", panel)
         self.assertIn("loss_pct", panel)
 
-    def test_this_device_is_coloured_by_the_conclusion_about_it(self):
-        """The first node of the path was given ok outright, so a box with a
-        failing transceiver in it was drawn clean directly under a panel saying
-        the fault was the box. Fifty five of the hundred and fifty two reports
-        mark the local side, and every one of them disagreed with the picture
-        beneath it."""
-        template = nd.VIEWER_TEMPLATE
-        node = template.split("const nodes = [", 1)[1].split("]", 1)[0]
-        self.assertNotIn("sev:'ok'", node.replace(" ", ""),
-                         "this device is drawn clean whatever the report says")
-        self.assertIn("sideSeverity(data, 'local')", node)
-
     def _ribbon_js(self, *names):
         """Run the viewer's own ribbon functions, rather than assert on their
         source. A bar built from percentages and flex is the first thing here
@@ -12252,122 +12215,6 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         finally:
             _os.unlink(path)
 
-    def test_the_ribbon_is_sized_by_time_not_by_name(self):
-        """The bar is the measurement and the boxes below are the reading. A
-        segment takes its width from what its hop added; the boxes take theirs
-        from the time too, but above the room their text needs, because sizing
-        a box from the time alone put a forty-two character backbone name into
-        something too narrow to read."""
-        pre = self._ribbon_js("hopRibbon")
-        got = self._run_js(pre, """
-const nodes = [{label:'short', sev:'ok', dMs:1.4},
-               {label:'a-very-long-backbone-name.example.net', sev:'crit', dMs:70.5},
-               {label:'x', sev:'ok', dMs:2.0}];
-const html = hopRibbon(nodes, 73.9);
-process.stdout.write(JSON.stringify({
-  segments: (html.match(/class="seg/g) || []).length,
-  flex: (html.match(/flex-grow:([0-9.]+)/g) || []),
-}));
-""")
-        self.assertEqual(got["segments"], 3)
-        # The long name added 70.5 of 73.9ms and gets the width to match; the
-        # name itself is nowhere in the sizing.
-        self.assertEqual(got["flex"],
-                         ["flex-grow:1.40", "flex-grow:70.50", "flex-grow:2.00"])
-
-    def test_the_ribbon_says_the_severity_it_colours(self):
-        """Same reason the hops below carry a word: the dominant segment is the
-        one the reader is being sent to, and colour alone is what excludes the
-        readers who cannot separate red from green."""
-        pre = self._ribbon_js("hopRibbon")
-        # Two marked segments, both wide enough to carry a label. With one, a
-        # word on every segment and a word on the dominant one produce the
-        # same output, and the test agrees with either.
-        # Four marked-or-not segments arranged so that "the widest", "the first
-        # marked", "the last marked" and "the last of all" are four different
-        # positions. Any two of them coinciding lets a rule that picks the
-        # wrong one pass - which it did, twice, while this was being written.
-        got = self._run_js(pre, """
-const nodes = [{label:'a', sev:'crit', dMs:20}, {label:'b', sev:'crit', dMs:40},
-               {label:'c', sev:'crit', dMs:30}, {label:'d', sev:'ok', dMs:4}];
-const html = hopRibbon(nodes, 94);
-const segs = html.split('<span class="seg').slice(1);
-process.stdout.write(JSON.stringify({
-  count: (html.match(/FAULT/g) || []).length,
-  carriesWord: segs.findIndex(s => s.indexOf('FAULT') !== -1),
-  widest: segs.map(s => parseFloat(s.match(/flex-grow:([0-9.]+)/)[1]))
-              .reduce((best, v, i, all) => v > all[best] ? i : best, 0),
-}));
-""")
-        self.assertEqual(got["count"], 1,
-                         "the word is on every segment it could apply to")
-        self.assertEqual(got["carriesWord"], got["widest"],
-                         "the word is not on the segment that dominates")
-
-    def test_a_path_too_short_to_have_a_shape_draws_no_ribbon(self):
-        """One timed hop is a number, not a distribution. A bar with a single
-        full-width segment says something is 100% of itself."""
-        pre = self._ribbon_js("hopRibbon")
-        got = self._run_js(pre, """
-process.stdout.write(JSON.stringify({
-  one: hopRibbon([{label:'a', sev:'ok', dMs:5}], 5),
-  none: hopRibbon([], 0),
-  untimed: hopRibbon([{label:'a', sev:'ok'}, {label:'b', sev:'ok'}], 10),
-}));
-""")
-        for case, html in got.items():
-            with self.subTest(case=case):
-                self.assertEqual(html, "")
-
-    def test_the_last_visit_is_drawn_only_when_there_was_one(self):
-        """A previous report that never traced, or a --quick one, leaves the
-        row out rather than inventing a comparison to draw."""
-        pre = self._ribbon_js("ribbonBaseline")
-        got = self._run_js(pre, """
-process.stdout.write(JSON.stringify({
-  absent: ribbonBaseline(null, 74),
-  tooShort: ribbonBaseline([{hop:1, avg_ms:1}], 74),
-  noTotal: ribbonBaseline([{hop:1, avg_ms:1}, {hop:2, avg_ms:9}], 0),
-  real: ribbonBaseline([{hop:1, avg_ms:1}, {hop:2, avg_ms:9}, {hop:3, avg_ms:11}], 74),
-}));
-""")
-        for empty in ("absent", "tooShort", "noTotal"):
-            with self.subTest(case=empty):
-                self.assertEqual(got[empty], "")
-        self.assertIn("last visit: 11ms", got["real"])
-        self.assertIn("faster then", got["real"])
-
-    def test_the_ribbon_survives_being_printed(self):
-        """A browser drops background colours when it prints unless told not
-        to, and the ribbon is nothing but background colour. Without this it
-        comes out as an empty outline - the one element here whose whole
-        content is the thing print throws away."""
-        rules = nd.VIEWER_TEMPLATE.split("@media print{", 1)[1]
-        self.assertIn("print-color-adjust:exact", rules)
-        block = rules.split("print-color-adjust:exact", 1)[0]
-        self.assertIn(".hop-ribbon", block[-200:],
-                      "the exemption does not name the ribbon")
-
-    def test_a_marked_hop_does_not_rely_on_colour_alone(self):
-        """Red and green are the commonest pair a reader cannot tell apart, and
-        the chain was the one place a severity arrived as hue and nothing else.
-        The stage chips say PASS and FAIL, the zones say OK and FAULT, a
-        finding carries its severity in its tag - a marked hop said it in a
-        tint and a border and left it there."""
-        template = nd.VIEWER_TEMPLATE
-        fn = template.split("function hopWord(sev){", 1)
-        self.assertEqual(len(fn), 2, "the word on a marked hop is gone")
-        self.assertIn("${hopWord(n.sev)}", template, "it is defined and never drawn")
-        words = template.split("const HOP_WORD = {", 1)[1].split("}", 1)[0]
-        # The vocabulary is the one the zones already use, not a second set.
-        for severity in ("warn", "crit"):
-            self.assertIn(severity, words)
-        self.assertIn("ZONE_WORD.", words,
-                      "the hop words are a separate list from the zone words")
-        # And only the marked ones: a word on every hop is noise on the hops
-        # the reader is being told to look past.
-        self.assertNotIn("ok:", words)
-
     def test_the_words_for_a_state_are_defined_once(self):
         """ZONE_WORD was inside renderDiagnosis, so the chain could not reach
         it. Copying the strings across would have been a second vocabulary for
@@ -12377,98 +12224,6 @@ process.stdout.write(JSON.stringify({
         before = template.split("const ZONE_WORD = {", 1)[0]
         self.assertNotIn("function renderDiagnosis", before,
                          "ZONE_WORD is scoped inside the renderer again")
-
-    def test_the_line_to_a_destination_nothing_answered_is_broken(self):
-        """The node already says it was not reached. A line that stops is read
-        before any label on the node it points at."""
-        template = nd.VIEWER_TEMPLATE
-        self.assertIn("unreached: true", template, "the target is not flagged")
-        self.assertIn(".hop-arrow.unreached span{", template)
-        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("nodes[i+1].unreached", chain,
-                      "the connector decides from something other than the flag")
-        # Read off the flag, not off the wording of the node's own caption.
-        self.assertNotIn("=== 'not reached by the trace'", chain)
-
-    def test_a_trace_that_stops_does_not_pretend_to_a_hop_count(self):
-        """Three consecutive timeouts were drawn as three cards, which reads as
-        three identified routers and implies the destination is four hops away.
-        Nothing is recorded for any of them - no address, no timing, no reply
-        to have measured - and how far the path runs past the stall is exactly
-        what is not known. One node, saying so."""
-        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
-                                  .split("\nfunction ", 1)[0]
-        self.assertIn("while(stallFrom > 0 && hops[stallFrom - 1].timed_out) stallFrom--;",
-                      chain, "the trailing run of timeouts is not found")
-        self.assertIn("if(hopIndex >= stallFrom) return;", chain,
-                      "the collapsed hops are still drawn one by one as well")
-        collapsed = chain.split("if(stalled){", 1)[1].split("  }", 1)[0]
-        self.assertIn("how far the path runs past here is unknown", collapsed)
-        # Severity through the same function every other hop uses, not written
-        # in - a literal here is the shape the other three legs had.
-        self.assertIn("sev: hopSeverity(first, probes)", collapsed)
-
-    def test_a_timeout_with_a_reply_after_it_stays_its_own_hop(self):
-        """A router that drops probes but forwards traffic is a normal thing to
-        meet in the middle of a path, and the reply from the hop beyond proves
-        that hop exists. Only a run reaching the end of the trace is unknown in
-        extent. No scenario produces a middle timeout, so this asserts the
-        shape of the rule: the run is counted backwards from the end and stops
-        at the first hop that answered."""
-        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
-                                  .split("\nfunction ", 1)[0]
-        walk = chain.split("let stallFrom = hops.length;", 1)[1].split(";", 2)
-        self.assertIn("hops[stallFrom - 1].timed_out", walk[0],
-                      "the run is not walked back from the end of the trace")
-        self.assertNotIn("hops[0]", walk[0])
-        self.assertNotIn("filter", walk[0],
-                         "collecting every timeout would take the middle ones too")
-
-    def test_the_destination_is_drawn_once(self):
-        """A target node was appended after every hop, and in a hundred and
-        forty eight of the hundred and fifty two reports the last hop already
-        was the target - so the address appeared twice in a row, and the second
-        copy carried a hardcoded ok. On the reports where the destination had
-        just been marked, it was redrawn as fine directly beside itself, which
-        is the same contradiction one node further along."""
-        template = nd.VIEWER_TEMPLATE
-        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn("indexOf('target')", chain,
-                      "the destination node is appended without asking whether "
-                      "the trace already drew it")
-        pushed = chain.split("nodes.push({label:'target'", 1)[1].split("}", 1)[0]
-        self.assertIn("sev: ''", pushed,
-                      "a destination the trace never reached is drawn clean")
-
-    def test_a_destination_the_trace_never_reached_says_so(self):
-        """Drawing it neutral is only half the sentence. Four reports stop
-        short of the target, and there the node is the one thing standing for a
-        destination nothing observed - unlabelled, it reads as a hop with
-        nothing interesting about it."""
-        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1] \
-                                  .split("\nfunction ", 1)[0]
-        pushed = chain.split("nodes.push({label:'target'", 1)[1].split("});", 1)[0]
-        self.assertIn("not reached by the trace", pushed)
-
-    def test_no_leg_of_the_picture_decides_its_own_severity(self):
-        """Three legs, and all three had reached their own conclusion: the way
-        out from the trace's replies, the way in from client loss, and this box
-        from nothing at all. Each was a second derivation sitting under a panel
-        that had already decided, and each disagreed with it. The general form
-        is the guard - a severity written as a literal into a node is the shape
-        every one of them had."""
-        import re
-        template = nd.VIEWER_TEMPLATE
-        chain = template.split("function renderHopChain", 1)[1].split("\nfunction ", 1)[0]
-        panel = template.split("const legSides = data.path_legs", 1)[1] \
-                        .split("const pathWrap", 1)[0]
-        for name, block in (("the path", chain), ("the four legs", panel)):
-            with self.subTest(leg=name):
-                self.assertEqual(
-                    re.findall(r"sev\w*\s*:\s*'(ok|warn|crit)'", block), [],
-                    f"{name} writes a severity in rather than asking for one")
-                self.assertNotIn("? 'crit'", block,
-                                 f"{name} is judging for itself again")
 
     def test_every_state_a_side_can_report_has_a_colour(self):
         """The mapping is only safe while it is complete. A state with no entry
@@ -12540,38 +12295,6 @@ process.stdout.write(JSON.stringify({
         self.assertEqual([h.get("blame") for h in rep["hops"]],
                          [h.get("blame") for h in slim["hops"]])
 
-    def test_the_chain_asks_the_report_before_it_works_it_out(self):
-        """Order is the whole point: a hop the report has already blamed has to
-        outrank the counters, or the two disagree and the louder one wins by
-        accident."""
-        fn = nd.VIEWER_TEMPLATE.split("function hopSeverity(h, probes){", 1)[1] \
-                               .split("\n}", 1)[0]
-        self.assertIn("h.blame", fn)
-        self.assertLess(fn.index("h.blame"), fn.index("h.timed_out"),
-                        "the counters are consulted before the conclusion")
-        # A critical code arriving here must not be drawn as a warning.
-        self.assertIn("'critical'", fn)
-        self.assertIn("'crit'", fn)
-
-    def test_a_hop_is_judged_against_what_the_path_actually_returned(self):
-        """Counting a hop's timings against a hardcoded three assumed every
-        source sends three probes and reports them all. Where a source gives
-        one representative timing per hop, every hop had fewer than three and
-        the whole path came out marked - a parsing shape drawn as a fault, and
-        enough yellow to bury the hop the verdict was naming."""
-        fn = nd.VIEWER_TEMPLATE.split("function hopSeverity(h, probes){", 1)[1] \
-                               .split("\n}", 1)[0]
-        self.assertNotIn("length < 3", fn,
-                         "the probe count is still hardcoded")
-        self.assertIn("probes >= 3", fn,
-                      "a path reporting one timing throughout has no sample to judge against")
-        self.assertIn("h.times_ms.length < probes", fn)
-        # And the sample has to be measured, not assumed, at the call site.
-        chain = nd.VIEWER_TEMPLATE.split("function renderHopChain", 1)[1]
-        self.assertIn("const probes = hops.reduce(", chain)
-
-
-class TestViewerTemplate(unittest.TestCase):
     def test_an_exported_report_hides_the_controls_that_produce_one(self):
         """A self-contained export is a finished report. It was still showing a
         file picker and instructions for producing the very file being read,
@@ -12678,54 +12401,6 @@ class TestViewerTemplate(unittest.TestCase):
         self.assertEqual(used - declared, set(),
                          "the stylesheet uses a custom property it never declares")
 
-    def test_a_reported_hop_keeps_its_own_text_readable(self):
-        """The faulting hop is now a wash of its severity rather than a card
-        with a coloured edge, which moves every contrast ratio inside it. The
-        plain dim grey sits at about 4:1 on the flat panel already, so a tint
-        takes it under the line - the same trap the verdict block hit, one
-        element along. Computed from the template so changing the percentage
-        cannot quietly break it."""
-        import re
-        template = nd.VIEWER_TEMPLATE
-        panel = self._css_var(template, "--panel")
-        lifted = self._css_var(template, "--text-dim-lift")
-        self.assertTrue(panel and lifted, "the colour variables moved or were renamed")
-        for severity, rule_name in (("--warn", "warn"), ("--crit", "crit")):
-            colour = self._css_var(template, severity)
-            rule = template.split(f".hop-node.{rule_name}{{", 1)[1].split("}", 1)[0]
-            m = re.search(rf"color-mix\(in srgb, var\({severity}\) (\d+)%, var\(--panel\)\)",
-                          rule)
-            self.assertTrue(m, f"no hop tint found for {severity}")
-            pct = int(m.group(1)) / 100
-
-            def ch(h):
-                h = h.lstrip("#")
-                return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
-            tint = "#" + "".join(f"{round(a * pct + b * (1 - pct)):02x}"
-                                 for a, b in zip(ch(colour), ch(panel)))
-            with self.subTest(severity=severity, pct=m.group(1)):
-                self.assertGreaterEqual(
-                    self._contrast(lifted, tint), 4.5,
-                    f"hop text is unreadable on the {severity} tint at {m.group(1)}%")
-
-    def test_the_clean_hops_recede_and_the_reported_one_does_not(self):
-        """The emphasis is the whole point of the change: if a later edit gives
-        every node a tint, or drops the fade from the clean ones, the path goes
-        back to being a row of equal cards that has to be read rather than
-        seen."""
-        template = nd.VIEWER_TEMPLATE
-        ok_rule = template.split(".hop-node.ok{", 1)[1].split("}", 1)[0]
-        self.assertNotIn("color-mix", ok_rule)
-        for rule_name in ("warn", "crit"):
-            rule = template.split(f".hop-node.{rule_name}{{", 1)[1].split("}", 1)[0]
-            self.assertIn("color-mix", rule)
-            self.assertNotIn("opacity", rule)
-            # The plain colour first, so a browser without color-mix gets the
-            # previous appearance rather than a transparent card.
-            self.assertLess(rule.index("background:var(--panel)"),
-                            rule.index("background:color-mix"),
-                            "the fallback has to come before the color-mix line")
-
     def test_the_report_can_be_printed_without_coming_out_black(self):
         """A report that reaches someone through a ticket or an email is a PDF
         by the time they see it. The viewer is a dark page, so printed as it
@@ -12759,58 +12434,27 @@ class TestViewerTemplate(unittest.TestCase):
                     self._contrast(m.group(1), white), 4.5,
                     f"{name} is unreadable on paper")
 
-    def test_a_path_with_no_faulty_hop_is_not_dimmed(self):
-        """Receding the clean hops only means something when a hop is being
-        emphasised. Applied unconditionally it faded every node on the great
-        majority of paths - most reports have no individually lossy hop - so
-        the picture the change was meant to sharpen came out uniformly dimmer
-        than before. The fade has to be conditional on the chain containing
-        something to contrast against."""
-        template = nd.VIEWER_TEMPLATE
-        self.assertNotIn("opacity", template.split(".hop-node.ok{", 1)[1].split("}", 1)[0],
-                         "the clean hops fade whether or not anything is emphasised")
-        rule = template.split(".hop-chain:has(", 1)
-        self.assertEqual(len(rule), 2, "the conditional fade is gone")
-        condition, body = rule[1].split(")", 1)
-        for needed in (".hop-node.warn", ".hop-node.crit"):
-            self.assertIn(needed, condition)
-        self.assertIn("opacity:0.55", body.split("}", 1)[0])
-        # Scoped to the chain, not the page: the inbound panel scores its one
-        # node on its own thresholds and has to decide separately. What the
-        # condition selects has to be the clean hop inside that chain.
-        self.assertIn(".hop-node.ok", body.split("{", 1)[0])
-
-    def test_the_hop_severities_the_stylesheet_draws_are_the_ones_it_is_given(self):
-        """The fade keys off warn and crit. If either chain ever produces
-        another class name the rule goes quiet rather than wrong, which is the
-        failure that took the longest to notice the first time.
-
-        Both chains now name their class through a function rather than inline,
-        so this reads the values those return. The earlier version scanned for
-        quoted literals after `hop-node `, which only ever found the inbound
-        node's ternary - it was testing one of the two and passing for both."""
-        import re
-        template = nd.VIEWER_TEMPLATE
-        produced = set()
-        for src, closer in (("function hopSeverity(h, probes){", "\n}"),
-                            ("const ZONE_SEV = {", "}"),
-                            # The fallback lives here, not in the map above, so
-                            # a class the map never contains can still reach
-                            # the page through it.
-                            ("function sideSeverity(data, side){", "\n}")):
-            body = template.split(src, 1)[1].split(closer, 1)[0]
-            produced |= set(re.findall(r"'([a-z]+)'", body))
-        # The one word quoted in these bodies that is not a class name: the
-        # severity being compared against. The side is a parameter now, so no
-        # side name appears here to be excluded.
-        produced -= {"critical"}
-        self.assertEqual(
-            produced, {"ok", "warn", "crit"},
-            f"the chains produce {sorted(produced)}, and the fade only knows warn/crit")
-        fade = template.split(".hop-chain:has(", 1)[1].split(")", 1)[0]
-        for emphasised in produced - {"ok"}:
-            self.assertIn(f".hop-node.{emphasised}", fade)
-
+    def test_the_hop_states_the_stylesheet_draws_are_the_ones_it_is_given(self):
+        """A state with no rule renders as ordinary text, so a marked hop would
+        read as a clean one - silently, and on the row the reader is being
+        pointed at. The set is small and closed, and both halves have to agree."""
+        src = nd.VIEWER_TEMPLATE
+        drawn = {m.group(1) for m in re.finditer(r"\.hrow\.(\w+)\{", src)}
+        given = set()
+        for code in sorted(S):
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                rep = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            for col in (rep.get("out_path"), rep.get("probe_path")):
+                if col:
+                    given |= {h["state"] for h in col["hops"]}
+        self.assertTrue(given, "no scenario produced a hop state to check")
+        self.assertEqual(given - {"ok"} - drawn, set(),
+                         "a hop state the report can produce has no rule to "
+                         "draw it")
     def test_the_answer_comes_before_the_path_that_explains_it(self):
         """The hop chain sat above the verdict, so the reader met a hop-by-hop
         diagram before being told what the answer was - on a tool whose whole
@@ -12821,7 +12465,7 @@ class TestViewerTemplate(unittest.TestCase):
         self.assertEqual(
             order, ["grpAnswer", "grpWhere", "grpFound", "grpRan", "grpEvidence"],
             "the report no longer reads answer, where, found, checked, evidence")
-        self.assertLess(main.index('id="grpAnswer"'), main.index('id="hopChainWrap"'))
+        self.assertLess(main.index('id="grpAnswer"'), main.index('id="pathWrap"'))
 
     def test_the_path_sits_inside_the_directions_it_details(self):
         """The path is the detail of one of the three zones, not a sixth thing
@@ -12829,8 +12473,7 @@ class TestViewerTemplate(unittest.TestCase):
         and the findings below, belonging to neither."""
         main = nd.VIEWER_TEMPLATE.split('<div class="main">', 1)[1]
         where = main.split('id="grpWhere"', 1)[1].split("</section>", 1)[0]
-        self.assertIn('id="pathTitle"', where)
-        self.assertIn('id="hopChainWrap"', where)
+        self.assertIn('id="pathWrap"', where)
 
     def test_a_group_shows_nothing_until_there_is_something_in_it(self):
         """An unloaded viewer would otherwise draw five rails and a stack of

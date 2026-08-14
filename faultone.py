@@ -12398,18 +12398,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* The hops out to the backend, where one was traced. Inside the column it
      belongs to rather than as a second chain elsewhere on the page: the whole
      point of tracing it is that this is the segment the work crosses. */
-  .phops{padding:10px 14px; border-top:1px dashed var(--border);
-    font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
-  .phops .ph{display:inline-block; margin-right:6px;}
-  .phops .ph.gone{color:var(--crit);}
   /* Which destination the hops below are to, and why that one. On a side with
      many peers, one stands in for the rest and the reader has to know which. */
   .ptraced{padding:9px 14px 0; font-family:var(--mono); font-size:10.5px;
     color:var(--text-dim);}
   /* Observations about this side that are not a leg. */
-  .pnotes{padding:10px 14px; border-top:1px dashed var(--border);
-    font-size:11.5px; line-height:1.55; color:var(--text-dim);}
-  .pnotes div + div{margin-top:4px;}
   .zarrow.pass{color:var(--ok);}
   .zarrow.warn{color:var(--warn);}
   .zarrow.fail{color:var(--crit);}
@@ -12445,11 +12438,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* The inbound leg. One hop, because one hop is all that is true - drawn in
      the same shape as the path below it so the two read as two directions of
      one picture rather than two unrelated panels. */
-  .inbound{margin-bottom:16px; padding-bottom:14px; border-bottom:1px dashed var(--border);}
-  .inbound-title{font-family:var(--mono); font-size:12px; color:var(--text-dim);
-                 margin-bottom:8px;}
-  .inbound-note{font-size:12px; color:var(--text-dim-lift); margin-top:8px;
-                line-height:1.45; max-width:70ch;}
   .verdict .vnext{font-size:13px; color:var(--text); line-height:1.55;}
   .verdict .vnext b{color:var(--accent); font-weight:600;}
   /* Stage strip: the whole chain at a glance, the way a handheld tester shows
@@ -12469,13 +12457,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      marked in the warning colour's ink without the filled ground a finding
      gets. It says the green underneath is about a different path - which is a
      limit on what was measured, and stating those is the page's job. */
-  .path-note{
-    font-size:12px; line-height:1.5; margin:-8px 0 16px;
-    padding:8px 10px; border-radius:6px;
-    color:var(--text); border:1px solid var(--border);
-    border-left:3px solid var(--warn);
-    background:color-mix(in srgb, var(--warn) 6%, var(--panel));
-  }
   /* A stage that failed has to look failed from across the room. Colouring only
      the word inside left every chip the same shape, the same border and the same
      background, so a strip with one FAIL in it read as uniformly quiet - which is
@@ -12639,51 +12620,15 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* Wrap rather than scroll: a 12-hop trace with long PTR names ran several
      screens wide, so the end of the path - the part that matters - sat off
      the right edge. Wrapping keeps the whole path visible at any width. */
-  .hop-chain{
-    display:flex; flex-wrap:wrap; align-items:stretch; gap:8px 0;
-    padding:0; margin:0 0 24px;
-  }
   /* One unbroken bar for the whole path, cut into a segment per hop and
      sized by what that hop added. It cannot wrap and the segments touch, so
      neither of the two things that make a path hard to read - a break the eye
      has to follow, and a gap where nothing happened - is a shape it can take.
      A hop that added almost nothing is a sliver, which is its honest size;
-     every name and number is still in the boxes underneath. */
-  .hop-ribbon{
-    display:flex; width:100%; height:30px; border-radius:5px; overflow:hidden;
-    margin:0 0 6px; background:var(--panel-2);
-  }
-  .hop-ribbon .seg{
-    min-width:4px; display:flex; align-items:center; justify-content:center;
-    gap:6px; font-family:var(--mono); font-size:10px; color:var(--bg);
-    background:var(--accent-dim); border-right:1px solid var(--bg);
-    overflow:hidden; white-space:nowrap;
-  }
-  .hop-ribbon .seg:last-child{border-right:0;}
-  .hop-ribbon .seg.warn{background:var(--warn);}
-  .hop-ribbon .seg.crit{background:var(--crit);}
-  .ribbon-scale{
-    display:flex; justify-content:space-between; font-family:var(--mono);
-    font-size:10px; color:var(--text-dim); margin-bottom:14px;
-  }
+     every name and number is still in the boxes underneath. *
   /* The same bar from the last visit, on the same scale, directly under. Two
      of them answer "slower than before, and in the same place" without a
      number being read. */
-  .ribbon-was{height:12px; margin:-8px 0 2px; opacity:0.55;}
-  .ribbon-was-label{
-    font-family:var(--mono); font-size:10px; color:var(--text-dim);
-    margin-bottom:14px;
-  }
-  .hop-node{
-    /* Width follows what the hop added. The proportion is applied above the
-       room the text needs rather than instead of it: sizing from the time
-       alone put a forty-two character backbone name that added a
-       millisecond into a box too narrow to read it. So the box is an
-       indication and the ribbon above is the measurement. */
-    flex:0 1 auto; min-width:118px; max-width:none;
-    background:var(--panel); border:1px solid var(--border);
-    border-left:3px solid var(--node-edge); border-radius:6px; padding:12px 11px;
-  }
   /* A path is read for one thing: which hop the fault lands on. Every node was
      drawn at the same weight with a different coloured edge, so the answer had
      to be looked for rather than seen. The clean hops recede into context and
@@ -12691,7 +12636,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      layout, the emphasis moved onto the hop that is being reported. The plain
      background is declared first so a browser too old for color-mix gets the
      previous appearance rather than a broken one. */
-  .hop-node.ok{border-left-color:var(--ok);}
   /* The clean hops recede only when there is something to recede against.
      Applied unconditionally it faded the whole chain on the great majority of
      reports - most paths have no individually faulty hop, so every node went
@@ -12700,45 +12644,13 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      than the page so the inbound panel, which scores its one node on its own
      thresholds, decides separately. A browser without :has() drops the rule
      and gets the flat chain, which is the safe direction to fail in. */
-  .hop-chain:has(.hop-node.warn, .hop-node.crit) .hop-node.ok{
-    background:transparent; opacity:0.55;
-  }
-  .hop-node.warn{
-    padding:16px 12px;
-    background:var(--panel);
-    background:color-mix(in srgb, var(--warn) 9%, var(--panel));
-    border-color:color-mix(in srgb, var(--warn) 40%, var(--border));
-    border-left-color:var(--warn);
-  }
-  .hop-node.crit{
-    padding:16px 12px;
-    background:var(--panel);
-    background:color-mix(in srgb, var(--crit) 11%, var(--panel));
-    border-color:color-mix(in srgb, var(--crit) 50%, var(--border));
-    border-left-color:var(--crit);
-    box-shadow:0 8px 22px -12px rgba(229,83,75,0.75);
-  }
   /* The dim greys sit at about 4:1 on the flat panel and a tint takes them
      under it, so the text on a reported hop uses the lifted grey instead. */
-  .hop-node.warn .hop-meta, .hop-node.crit .hop-meta{color:var(--text-dim-lift);}
-  .hop-node.warn .hop-label{color:color-mix(in srgb, var(--warn) 75%, var(--text));}
-  .hop-node.crit .hop-label{color:color-mix(in srgb, var(--crit) 75%, var(--text));}
-  .hop-label{font-family:var(--mono); font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em;}
-  .hop-sub{font-family:var(--mono); font-size:13px; margin-top:4px; word-break:break-word;}
-  .hop-arrow{flex:0 0 auto; display:flex; align-items:center; padding:0 8px; color:var(--text-dim); font-family:var(--mono);}
   /* A marked hop says which it is, so the chain does not rely on hue alone. */
-  .hop-sev{
-    font-family:var(--mono); font-size:10px; letter-spacing:0.06em;
-    text-transform:uppercase; padding:0 5px; border-radius:8px;
-    margin-left:6px; border:1px solid currentColor; white-space:nowrap;
-  }
-  .hop-node.warn .hop-sev{color:var(--warn);}
-  .hop-node.crit .hop-sev{color:var(--crit);}
   /* A line that stops is read before any label on the node it points at. */
   .hop-arrow.unreached span{
     display:block; width:22px; border-top:1px dashed var(--text-dim);
   }
-  .hop-meta{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:4px;}
   .hop-meta .jump{color:var(--warn);}
   /* Where traffic stops being the site's network and becomes their ISP's -
      the most useful single boundary on the whole diagram. */
@@ -12791,7 +12703,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     }
     .brand .dot, .led, .finding .sev{box-shadow:none;}
     .verdict{box-shadow:0 1px 3px rgba(16,24,40,.08);}
-    .hop-node.crit{box-shadow:0 6px 16px -10px rgba(179,38,30,.55);}
   }
 
   /* A report often has to reach someone who will not open a file - it goes
@@ -12817,9 +12728,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     /* A browser drops background colours when it prints unless it is told
        not to, and the ribbon is nothing but background colour - without
        this it comes out as an empty outline. */
-    .hop-ribbon, .hop-ribbon .seg{
-      -webkit-print-color-adjust:exact; print-color-adjust:exact;
-    }
     .topbar, .sidebar, #reportControls, .file-input{display:none !important;}
     .layout{display:block; min-height:0;}
     .main{padding:0;}
@@ -12828,12 +12736,12 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     pre{max-height:none; overflow:visible;}
     /* A hop or a finding split across a page break is the one thing on the
        page that has to be read whole. */
-    .verdict, .finding, .hop-node, .zone, .panel{box-shadow:none; break-inside:avoid;}
+    .verdict, .finding, .zone, .panel{box-shadow:none; break-inside:avoid;}
     /* On paper there is no glow to carry a lamp, so the dot needs its edge. */
     .led, .finding .sev{box-shadow:none; border:1px solid var(--border);}
     /* The recede-and-emphasise pass reads as ink density on screen; on paper a
        55% grey hop just looks badly printed. */
-    .hop-node.ok, .zone.skip{opacity:1;}
+    .zone.skip{opacity:1;}
   }
 </style>
 </head>
@@ -12905,9 +12813,6 @@ VIEWER_TEMPLATE = r"""<!doctype html>
            out-and-back is the pair a reader compares when the question is which
            direction stopped. -->
       <div id="pathWrap"></div>
-      <div class="section-title sub" id="pathTitle" style="display:none;">The path out, hop by hop</div>
-    <div class="path-note" id="pathNote" style="display:none;"></div>
-      <div id="hopChainWrap"></div>
     </section>
     <section class="grp" id="grpFound">
       <div id="foundWrap"></div>
@@ -13017,41 +12922,6 @@ function verdictRow(v){
          `<span class="led-state">${escapeHtml(v.severity === 'ok' ? 'clear' : v.severity)}</span></div>`;
 }
 
-function hopSeverity(h, probes){
-  // A hop the report has already blamed outranks anything worked out here. The
-  // rest of this function is what the chain can see for itself - loss and
-  // timeouts - and a latency wall is neither, so the hop the verdict named was
-  // being drawn as clean. The severity travels with the blame so a code that
-  // is critical does not arrive here and get demoted to a warning.
-  if(h.blame) return h.blame.severity === 'critical' ? 'crit' : 'warn';
-  if(h.timed_out) return 'crit';
-  // A hop the report has judged cosmetic. Loss at an intermediate router that
-  // clears by the destination is that router rate-limiting its own replies, and
-  // the finding for it is context rather than a fault - so the chain must not
-  // colour it as one. Without this the page said "no fault found" over a red hop.
-  if(h.cosmetic) return 'ok';
-  // With mtr we have a real loss percentage; use it. Counting timings is a
-  // traceroute-only heuristic (three probes per hop) and mtr reports one
-  // representative timing, which would make every hop look lossy.
-  if(h.loss_pct != null){
-    if(h.loss_pct >= 20) return 'crit';
-    if(h.loss_pct >= 5) return 'warn';
-    return 'ok';
-  }
-  // Fewer timings than the path is getting elsewhere means probes went
-  // missing at this hop. Comparing against a hardcoded three assumed every
-  // source sends three and reported them all: where a source gives one
-  // representative timing per hop, every hop had fewer than three and the
-  // whole path came out marked - a parsing shape drawn as a fault, and enough
-  // yellow to bury the hop the verdict was actually naming. Measured against
-  // what the rest of the path returned, and only where that is a real sample,
-  // so a path that reports one timing throughout says nothing either way.
-  if(probes >= 3 && h.times_ms && h.times_ms.length && h.times_ms.length < probes){
-    return 'warn';
-  }
-  return 'ok';
-}
-
 // A leg of the picture, coloured by what the report concluded about that
 // direction rather than by re-reading a counter underneath it. Both ends were
 // deciding for themselves and both were wrong in the same way: the way in
@@ -13080,9 +12950,6 @@ const ZONE_WORD = {pass: 'OK', warn: 'DEGRADED', fail: 'FAULT',
 // one on the clean hops would be noise across most of the page, and the
 // clean ones are already the ones being told to look past.
 const HOP_WORD = {warn: ZONE_WORD.warn, crit: ZONE_WORD.fail};
-function hopWord(sev){
-  return HOP_WORD[sev] ? `<span class="hop-sev">${HOP_WORD[sev]}</span>` : '';
-}
 function sideSeverity(data, side){
   const z = (data.sides || []).find(s => s.side === side);
   return ZONE_SEV[z && z.state] || 'ok';
@@ -13091,245 +12958,6 @@ function sideSeverity(data, side){
 function avgMs(times){
   if(!times || !times.length) return null;
   return times.reduce((a,b)=>a+b,0) / times.length;
-}
-
-
-// The path as one bar, and the same bar from the last visit under it.
-//
-// A segment per hop, sized by what that hop added rather than by how long its
-// name is - the boxes below carry the names and are sized to stay readable,
-// so this is the measurement and they are the reading. The dominant segment
-// carries its severity in a word as well as a colour, for the same reason the
-// hops below do: red against green is the pair a reader is most likely not to
-// be able to separate, and here it would be the only thing said.
-function hopRibbon(nodes, totalMs){
-  if(!totalMs) return '';
-  const timed = nodes.filter(n => n.dMs != null);
-  if(timed.length < 2) return '';
-  const worst = timed.reduce((a, n) => (!a || n.dMs > a.dMs) ? n : a, null);
-  const segs = timed.map(n => {
-    const wide = n.dMs / totalMs > 0.08;
-    const word = (n === worst && HOP_WORD[n.sev]) ? HOP_WORD[n.sev] : '';
-    return `<span class="seg ${n.sev || ''}" style="flex-grow:${Math.max(0.4, n.dMs).toFixed(2)}"`
-         + ` title="${escapeHtml(n.label)} · ${n.dMs.toFixed(1)}ms">`
-         + `${wide ? n.dMs.toFixed(0) + 'ms' : ''}${wide && word ? ' ' + word : ''}</span>`;
-  }).join('');
-  return `<div class="hop-ribbon">${segs}</div>`
-       + `<div class="ribbon-scale"><span>0</span>`
-       + `<span>${totalMs.toFixed(0)}ms to the target</span></div>`;
-}
-
-// Only drawn when --baseline gave a path to draw. A previous visit that did
-// not record one, or a --quick run that never traced, leaves the row out
-// rather than inventing a comparison.
-function ribbonBaseline(path, totalMs){
-  if(!path || path.length < 2 || !totalMs) return '';
-  let run = 0;
-  const segs = path.map(h => {
-    const d = Math.max(0, (h.avg_ms || 0) - run);
-    run = h.avg_ms || run;
-    return `<span class="seg" style="flex-grow:${Math.max(0.4, d).toFixed(2)}"></span>`;
-  }).join('');
-  const then = run;
-  const how = then > totalMs ? 'slower then' : (then < totalMs ? 'faster then' : 'the same');
-  return `<div class="hop-ribbon ribbon-was">${segs}</div>`
-       + `<div class="ribbon-was-label">last visit: ${then.toFixed(0)}ms · ${how}</div>`;
-}
-
-function hopFlex(deltaMs, totalMs){
-  if(!totalMs || deltaMs == null) return '';
-  return ` style="flex-grow:${Math.max(0.15, deltaMs / totalMs * 10).toFixed(2)}"`;
-}
-
-function renderHopChain(data){
-  const hops = data.hops || [];
-  const pathTitle = document.getElementById('pathTitle');
-  if(hops.length === 0){
-    pathTitle.style.display = 'none';
-    document.getElementById('hopChainWrap').innerHTML = '';
-    const pw = document.getElementById('pathWrap');
-    if(pw) pw.innerHTML = '';
-    return;
-  }
-  // Name the destination. "The path out" reads as *the* way out, so a clean
-  // trace to a public address sat under a red verdict about an internal
-  // segment and looked like the page contradicting itself.
-  const scope = data.path_scope || {};
-  // Not "the path out" any more. That name belonged to this when it was the
-  // only thing drawn beyond the box, and it is wrong now that the connections
-  // this box actually opened have a chain of their own directly above: read in
-  // order, "clients in, backends out, the path out" says traffic leaves for the
-  // backends and carries on to the target, and it does not. This is a probe to
-  // a fixed destination, and on a box that relays it is a reachability check
-  // rather than the route the work takes.
-  pathTitle.textContent = scope.traced
-    ? `The path to ${scope.traced}, hop by hop`
-    : 'The path, hop by hop';
-  pathTitle.style.display = 'block';
-
-  // And say plainly when the fault is on a path these hops do not cross.
-  // Without this the reader has to notice that the address in the verdict is
-  // not the address at the end of the chain, which is asking them to audit the
-  // drawing rather than read it.
-  const pathNote = document.getElementById('pathNote');
-  if(pathNote){
-    const away = scope.fault_elsewhere || [];
-    // A clean chain, on a box whose traffic does not use it. Across the
-    // scenarios this tool has, 150 of 164 draw every hop here clean - it is the
-    // ordinary state, not a result - and it is the largest thing on the panel
-    // and the last, which is where a reader looks for the conclusion. Left
-    // unsaid, "all green" gets read as "the network is fine" on a report whose
-    // verdict is that it is not.
-    const relays = !!(((data.raw || {}).tcp_flows || {}).by_side || {}).backend;
-    if(!away.length && relays){
-      pathNote.textContent =
-        `This is a probe to ${scope.traced}, not the traffic this box carries - `
-        + `its own connections are in the chain above. Nothing is marked here, `
-        + `which says this box can reach the internet and nothing more.`;
-      pathNote.style.display = 'block';
-    } else if(away.length){
-      pathNote.textContent =
-        `These hops are the path to ${scope.traced}, and they were measured `
-        + `clean. The connections this report is about go to ${away.join(', ')}, `
-        + `which this path does not cross - so nothing below says anything `
-        + `about that segment.`;
-      pathNote.style.display = 'block';
-    } else {
-      pathNote.textContent = '';
-      pathNote.style.display = 'none';
-    }
-  }
-
-  // Path summary stats
-  // The most timings any hop on this path reported - the sample size the
-  // per-hop counts are judged against.
-  const probes = hops.reduce((n,h) => Math.max(n, (h.times_ms || []).length), 0);
-  const timeouts = hops.filter(h => h.timed_out).length;
-  const validTimes = hops.flatMap(h => h.times_ms || []);
-  const avgLatency = validTimes.length ? (validTimes.reduce((a,b)=>a+b,0) / validTimes.length).toFixed(1) : null;
-  const summaryParts = [`${hops.length} hops`];
-  if(timeouts) summaryParts.push(`${timeouts} timeout${timeouts > 1 ? 's' : ''}`);
-  if(avgLatency) summaryParts.push(`avg ${avgLatency}ms`);
-  if(data.demarc_hop != null) summaryParts.push(`leaves this site at hop ${data.demarc_hop}`);
-  const wj = data.worst_jump;
-  if(wj && wj.delta_ms >= 10){
-    // The share turns "+65ms" into "is this hop worth chasing".
-    const share = wj.share_pct != null ? ` (${wj.share_pct}% of the path)` : '';
-    summaryParts.push(`biggest jump +${wj.delta_ms}ms at hop ${wj.hop}${share}`);
-  }
-  const nets = (data.networks_crossed || []).map(n => n.network);
-  if(nets.length) summaryParts.push(`crosses ${nets.join(' → ')}`);
-  // summary is escaped at render; nets/hops come from the report file
-  const summary = summaryParts.join(' · ');
-
-  // The end of the path, and how much of it each hop is answerable for.
-  const TOT = Math.max(0, ...hops.map(h => h.avg_ms || 0));
-  let RUN = 0;
-  const nodes = [{label:'source', sub:'this device',
-                  sev: sideSeverity(data, 'local')}];
-
-  // A run of timeouts reaching the end of the trace is one fact, not
-  // several: nothing answered from that TTL onward and the trace stopped.
-  // Drawn as a card each it read as three identified routers that timed
-  // out, and implied the destination is four hops away - which is the one
-  // thing not known. Nothing is recorded for those hops either: no address,
-  // no timing, no reply to have measured. A timeout with a reply after it
-  // is a different fact and stays its own hop, because something forwarded
-  // the probe and that hop is therefore known to exist.
-  let stallFrom = hops.length;
-  while(stallFrom > 0 && hops[stallFrom - 1].timed_out) stallFrom--;
-  const stalled = hops.length - stallFrom;
-
-  hops.forEach((h, hopIndex) => {
-    if(hopIndex >= stallFrom) return;
-    const avg = h.avg_ms != null ? h.avg_ms : avgMs(h.times_ms);
-    // zone: inside the site vs out on the provider's network
-    const zone = h.cgnat ? 'cgnat' : (h.private === true ? 'lan' : (h.private === false ? 'wan' : ''));
-    const roles = (h.roles || []).join(' ');
-    const meta = [];
-    if(h.delta_ms) meta.push(`<span class="jump">+${escapeHtml(String(h.delta_ms))}ms</span>`);
-    const jit = h.jitter_ms != null ? h.jitter_ms : h.stdev_ms;   // mtr reports stdev, traceroute a spread
-    if(jit != null && jit >= 5) meta.push(`jitter ${escapeHtml(String(jit))}ms`);
-    nodes.push({
-      label: `hop ${h.hop}${zone ? ` · ${zone}` : ''}${roles ? ` · ${roles}` : ''}`,
-      sub: h.timed_out ? 'timeout' : `${h.display}${avg != null ? ' · ' + Number(avg).toFixed(1) + 'ms' : ''}`,
-      meta: meta.join(' · '),
-      sev: hopSeverity(h, probes),
-      dMs: (function(){ const d = Math.max(0, (h.avg_ms || 0) - RUN);
-             if(h.avg_ms != null) RUN = h.avg_ms; return d; })(),
-      demarcBefore: data.demarc_hop != null && h.hop === data.demarc_hop,
-      entersNetwork: h.enters_network || null,
-      cgnat: !!h.cgnat,
-    });
-  });
-  if(stalled){
-    const first = hops[stallFrom], last = hops[hops.length - 1];
-    nodes.push({
-      label: stalled === 1 ? `hop ${escapeHtml(String(first.hop))}`
-                           : `hops ${escapeHtml(String(first.hop))}\u2013${escapeHtml(String(last.hop))}`,
-      sub: 'no reply',
-      meta: `${stalled} TTL${stalled === 1 ? '' : 's'} probed, nothing answered \u00b7 `
-          + `how far the path runs past here is unknown`,
-      sev: hopSeverity(first, probes),
-    });
-  }
-
-  // The destination, drawn once. When the trace reached it the last hop IS the
-  // target, and appending a second node put the same address on the page twice
-  // - the second copy carrying a hardcoded ok, so a target the report had just
-  // marked was redrawn as fine immediately beside itself. It is added only
-  // where the trace stopped short, and there it is drawn neutral rather than
-  // clean: nothing here observed that destination, and not reached is not the
-  // same as fine.
-  const lastHop = hops[hops.length - 1];
-  if(!(lastHop && (lastHop.roles || []).indexOf('target') !== -1)){
-    nodes.push({label:'target', sub: data.target || '', sev: '',
-                unreached: true, meta: 'not reached by the trace'});
-  }
-
-  // A quiet chain collapses to its summary line. The bar and the row of nodes
-  // are the largest thing on this panel and the last one, and on 150 of this
-  // tool's 164 scenarios every hop on them is clean - so a reader looking for
-  // the conclusion was finding a full-width picture of a path nobody asked
-  // about, drawn at the size of an answer.
-  //
-  // It cannot simply go. The fourteen that mark a hop include a routing loop, a
-  // latency wall, loss at an intermediate router and a stalled trace, and each
-  // of those is a finding *about a specific hop* - the four legs above have no
-  // way to say "hop 2".
-  const notable = scope.notable !== undefined
-    ? !!scope.notable
-    : hops.some(h => h.timed_out || h.blame);
-  // A quiet chain has no section at all now: its one line moved to the foot of
-  // the column the probe leaves from. It keeps the section wherever there is no
-  // such column - a box with no backends has nowhere to put the line, and on
-  // one of those the probe to the target really is the way out.
-  const hosted = (data.path_legs || []).some(sd => sd.side === 'backend');
-  if(!notable && hosted){
-    pathTitle.style.display = 'none';
-    if(pathNote){ pathNote.textContent = ''; pathNote.style.display = 'none'; }
-    document.getElementById('hopChainWrap').innerHTML = '';
-    return;
-  }
-  const summaryLine = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">${
-      escapeHtml(summary)}</div>`;
-  document.getElementById('hopChainWrap').innerHTML = !notable ? summaryLine :
-    summaryLine +
-    hopRibbon(nodes, TOT) + ribbonBaseline(data.baseline_path, TOT)
-    + '<div class="hop-chain">' + nodes.map((n,i) => `
-      ${n.demarcBefore ? '<div class="hop-arrow demarc">→<span>site edge</span></div>'
-        : (n.entersNetwork ? `<div class="hop-arrow handoff">→<span>${escapeHtml(n.entersNetwork)}</span></div>` : '')}
-      <div class="hop-node ${n.sev}"${hopFlex(n.dMs, TOT)}>
-        <div class="hop-label">${escapeHtml(n.label)}${hopWord(n.sev)}</div>
-        <div class="hop-sub">${escapeHtml(n.sub)}</div>
-        ${n.meta ? `<div class="hop-meta">${n.meta}</div>` : ''}
-      </div>
-      ${i < nodes.length - 1 && !(nodes[i+1] && (nodes[i+1].demarcBefore || nodes[i+1].entersNetwork))
-        ? (nodes[i+1] && nodes[i+1].unreached
-            ? '<div class="hop-arrow unreached" title="the trace never got past here"><span></span></div>'
-            : '<div class="hop-arrow">→</div>')
-        : ''}
-    `).join('') + '</div>';
 }
 
 // Where each finding stands to the verdict. The words come from the report so
@@ -13428,7 +13056,6 @@ function renderDiagnosis(data, opts){
                          data.version && `v${data.version}`].filter(Boolean).join(' · ')
                         || 'report viewer';
 
-  renderHopChain(data);
 
   const findings = data.findings || [];
   const layers = data.layers || {};
@@ -13554,7 +13181,11 @@ function renderDiagnosis(data, opts){
       </div>
       ${hopList(pp)}
     </div>` : '';
-  const pathHtml = legSides.length ? '<div class="pcols">' + legSides.map(side => {
+  // Drawn when there is either a measured side or a traced path. It used to
+  // hang off the measured sides alone, which meant a box with no readable
+  // connections and a perfectly good trace lost the trace as well - the panel
+  // vanished because the other half of it was empty.
+  const pathHtml = (legSides.length || pp) ? '<div class="pcols">' + legSides.map(side => {
     const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
                    side.rtt_ms != null ? side.rtt_ms + 'ms rtt' : '',
                    // A retransmit ratio counts packets this box had to send

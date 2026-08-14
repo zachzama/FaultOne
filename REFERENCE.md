@@ -3773,3 +3773,31 @@ Deliberately **not** on this list:
   handoffs already give most of the value; and it would be the first thing here
   to send site topology to a third party. Considered 2026-08-06 and
   rejected.
+
+- **Measuring loss on the forward path separately from the return path**,
+  the way scamper's `sting` does it. It works by sending crafted TCP
+  segments to a live endpoint and reading the receiver's acknowledgement
+  behaviour to tell which direction lost what. It is the most-wanted answer
+  this tool does not give, and it is not going to be built here.
+
+  It measures by generating load on somebody's connection. That is the same
+  act this tool has already declined once: there is no way to measure the
+  uplink from here without putting traffic on a customer's line, which is
+  why `--uplink-mbps` takes the figure as an input instead. A diagnostic
+  that is safe to run during an incident cannot also be a traffic
+  generator, and being safe to run during an incident is the whole point of
+  it.
+
+  It also would not buy as much as it looks. `flow_delivered` already reads
+  DSACK, which is the far end saying it already had that segment: proof the
+  original arrived, so whatever those retransmits were, they were not the
+  forward path losing packets. That is the same physics `sting` exploits,
+  read passively off connections this box is already carrying, at no cost
+  and with no packets added. What it stops short of is naming the return
+  path, because a DSACK cannot separate a lost acknowledgement from a late
+  one, and that restraint is correct rather than a gap.
+
+  So the split arrows on the report stay as they are. A retransmit ratio
+  counts packets this box had to send again and cannot say which direction
+  lost them, so it sits on the side and never on a leg. Considered
+  2026-08-14 and rejected on principle rather than on cost.

@@ -5852,6 +5852,37 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                                         "the leg leaving this box has its head "
                                         "at the near end of the line")
 
+    def test_the_findings_are_listed_worst_first(self):
+        """The list was in collection order, which is the order the checks
+        happen to run in and means nothing to a reader: the blocked-egress
+        report opened with two notes about things that are fine and put the one
+        fault underneath them.
+
+        Ordered in the report rather than in either renderer - two orderings of
+        the same list is two reports, and the terminal and the page had drifted
+        into exactly that.
+        """
+        worst = {"critical": 2, "warning": 1, "ok": 0}
+        for code in ("egress_blocked", "tcp_flow_loss_backends", "all_clear"):
+            with self.subTest(code=code):
+                mod = fresh()
+                setup, kwargs = S[code]
+                setup(mod)
+                rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+                ranks = [worst.get(f.get("severity"), 0) for f in rep["findings"]]
+                self.assertEqual(ranks, sorted(ranks, reverse=True),
+                                 "a quieter finding is listed above a worse one")
+
+    def test_the_cause_leads_its_equals(self):
+        """Among findings of the same weight the one the verdict is built on
+        comes first, so the list opens on the thing the report is about."""
+        mod = fresh()
+        setup, kwargs = S["egress_blocked"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        top = rep["findings"][0]
+        self.assertEqual(top["code"], rep["verdict"]["based_on"][0])
+
     def test_the_path_heading_sits_with_what_it_introduces(self):
         """It was 4px below the three boxes and 18px above its own columns, so
         it read as a caption on the boxes - a heading belonging to the thing

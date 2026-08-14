@@ -12237,6 +12237,20 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         if _hint in HINT_WORDS:
             _f["hint"] = _hint
 
+    # Worst first, and the cause ahead of its equals.
+    #
+    # The list was in collection order, which is the order the checks happen to
+    # run in and means nothing to a reader: a report could open with two notes
+    # about things that are fine and put the one fault under them. Sorted here
+    # rather than in either renderer, because two orderings of the same list is
+    # two reports.
+    #
+    # Stable, so findings of equal weight keep the order they were found in -
+    # which is roughly outward from this box, and is a better tiebreak than
+    # anything alphabetical.
+    findings.sort(key=lambda f: (-SEVERITY_RANK.get(f.get("severity"), 0),
+                                 0 if f.get("relation") == "cause" else 1))
+
     _sides = build_sides(findings, raw)
     return {
         "verdict": verdict,

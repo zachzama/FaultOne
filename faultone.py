@@ -10362,34 +10362,54 @@ def collect_trace(target, mtr_cycles):
 BACKEND_TRACE_CODES = ("tcp_flow_loss_backends", "tcp_return_stalled_backends")
 
 
-def trace_the_failing_backend(findings, raw, quick=False):
-    """Trace the backend a finding named, when one has been named.
+def trace_the_way_out(raw, findings, quick=False):
+    """Trace a destination this box is actually talking to.
 
-    The path chain traces the target, which defaults to a public address. On a
-    box that relays, that is a reachability check rather than the route the work
-    takes - across this tool's own scenarios, 150 of 164 draw every hop on it
-    clean. The segment that fails is the one out to a backend, and it was never
-    traced, so the hops the fault is actually on were the hops nobody had.
+    The path chain traced the target, which defaults to a public address chosen
+    for being reliably reachable. On a box that relays, that is a reachability
+    check rather than the route the work takes, and it left the page carrying
+    two things that both pointed at the internet: the connections this box
+    opened, with no hop detail, and hops to somewhere it never sends anything.
 
-    Only when a backend finding has fired. A second trace costs seconds, and
-    spending them on every healthy run to draw a second clean chain is the
-    problem this is meant to fix rather than a second helping of it.
+    So it traces a peer from the connections themselves. Which one is a
+    judgement on a box with hundreds of them, so it is made in this order and
+    recorded, because "hop 2 is slow" means nothing without knowing hop 2 of
+    what:
+
+      - the peer a finding named, if one did. That is the connection the report
+        is already about.
+      - the peer carrying most of the side, if one dominates. That is the
+        load-balancer shape, and its path is the path nearly everything takes.
+      - otherwise the worst-performing peer, which is the one worth looking at.
+
+    Returns None where there is nothing outbound to trace, and on --quick, which
+    skips the first trace too.
     """
     if quick:
-        return None                       # --quick skips the first trace too
-    named = [f for f in findings if f["code"] in BACKEND_TRACE_CODES]
-    if not named:
         return None
     near = ((raw.get("tcp_flows") or {}).get("by_side") or {}).get("backend") or {}
-    peer = str(near.get("worst_peer") or "")
+    if not near:
+        return None                       # nothing outbound; the probe stands in
+    named = [f for f in (findings or []) if f["code"] in BACKEND_TRACE_CODES]
+    if named:
+        peer, why = near.get("worst_peer"), "the connection this report is about"
+    elif near.get("via"):
+        peer, why = near.get("via"), "carrying most of this side"
+    else:
+        peer, why = near.get("worst_peer"), "the worst-performing of them"
+    peer = str(peer or "")
     host = peer.rsplit(":", 1)[0] if peer.count(":") == 1 else peer
     if not host or not valid_target(host):
         return None
     res = cmd_traceroute(host)
     hops = parse_traceroute_hops(res.get("stdout", "")) if res.get("ok") else []
-    if not hops:
-        return None
-    return {"target": host, "hops": hops, "why": named[0]["code"]}
+    column = build_probe_column(hops, host)
+    if column:
+        # Said on the page, because one destination is standing in for a side
+        # that may have many, and a reader has to know which.
+        column["picked"] = why
+        column["of"] = near.get("connections") or 0
+    return column
 
 
 def collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles, parallel=True):
@@ -12148,11 +12168,19 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # cannot end up with two versions of which direction stopped.
         "path_legs": build_path_legs(raw, _sides),
         # The traced path, as the third column. Present whenever a trace ran.
-        "probe_path": build_probe_column(hops, target, baseline_path),
+        # The reference probe, kept only where this box opens no connections of
+        # its own. On a box that relays it duplicated the column beside it -
+        # both pointing at the internet, one of them at an address the box
+        # never sends anything to.
+        "probe_path": (build_probe_column(hops, target, baseline_path)
+                       if not (((raw.get("tcp_flows") or {}).get("by_side")
+                                or {}).get("backend")) else None),
         # The hops out to the backend a finding named, where one was named.
         # The chain to the target is a reachability check on a box that relays;
         # this is the segment the work actually crosses.
-        "backend_path": trace_the_failing_backend(findings, raw, quick),
+        # The hops out to a destination this box actually uses. Where there
+        # are none, the reference probe below stands in for the way out.
+        "out_path": trace_the_way_out(raw, findings, quick),
         "call_quality": call_quality,
         "neighbours": neighbours,
         "inventory": inventory_data,
@@ -12450,6 +12478,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
   .phops .ph{display:inline-block; margin-right:6px;}
   .phops .ph.gone{color:var(--crit);}
+  /* Which destination the hops below are to, and why that one. On a side with
+     many peers, one stands in for the rest and the reader has to know which. */
+  .ptraced{padding:9px 14px 0; font-family:var(--mono); font-size:10.5px;
+    color:var(--text-dim);}
   /* Observations about this side that are not a leg. */
   .pnotes{padding:10px 14px; border-top:1px dashed var(--border);
     font-size:11.5px; line-height:1.55; color:var(--text-dim);}
@@ -13568,6 +13600,20 @@ function renderDiagnosis(data, opts){
   // drawing one anyway is the mistake the boundary arrow carried for two
   // releases. Every state here was decided in build_probe_column; nothing on
   // this side of the wire judges a hop.
+  // One hop list, drawn the same way wherever it lands. The way out and the
+  // reference probe are the same measurement of two different destinations, and
+  // two copies of this markup would be two chances for them to diverge.
+  const hopList = col => `<div class="hops">${col.hops.map(h => `
+      <div class="hrow ${h.state === 'ok' ? '' : h.state}">
+        <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
+        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
+        <span class="ht">${h.timed_out ? 'no reply'
+          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+      </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+        h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
+    </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
+
   const pp = data.probe_path;
   const probeHtml = pp ? `<div class="pcol ${pp.state}">
       <div class="pcol-hd"><span class="pwho">reachability probe</span>
@@ -13582,17 +13628,7 @@ function renderDiagnosis(data, opts){
           <span class="pend">${escapeHtml(pp.target)}</span></div>
         <div class="pev">a probe to one address, not the traffic this box carries \u2014 and the only thing that can see a fault at a single hop</div>
       </div>
-      <div class="hops">${pp.hops.map(h => `
-        <div class="hrow ${h.state === 'ok' ? '' : h.state}">
-          <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-          <span class="hh">${escapeHtml(h.host)}</span>
-          <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
-          <span class="ht">${h.timed_out ? 'no reply'
-            : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-        </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
-          h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
-      </div>
-      ${pp.baseline ? `<div class="base">${escapeHtml(pp.baseline)}</div>` : ''}
+      ${hopList(pp)}
     </div>` : '';
   const pathHtml = legSides.length ? '<div class="pcols">' + legSides.map(side => {
     const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
@@ -13645,14 +13681,15 @@ function renderDiagnosis(data, opts){
     const noteHtml = (notes.length && side.side === 'backend')
       ? `<div class="pnotes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : '';
 
-    // The traced segment, when this side is the one that was traced. Only the
-    // backend gets one, and only when a finding named it.
-    const bp = data.backend_path;
-    const traced = (bp && side.side === 'backend') ? `<div class="phops">
-        hops to ${escapeHtml(bp.target)}:
-        ${(bp.hops || []).map(h => `<span class="ph ${h.timed_out ? 'gone' : ''}">${
-          escapeHtml(h.display || String(h.hop))}</span>`).join('&rarr; ')}
-      </div>` : '';
+    // The hops out to a destination this side actually uses, inside the column
+    // that names it. It used to be a probe to a fixed address in a column of its
+    // own, which on a box that relays pointed at the internet twice - once at
+    // the connections it opens, once at somewhere it never sends anything.
+    const op = data.out_path;
+    const traced = (op && side.side === 'backend') ? `
+      <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
+        escapeHtml(op.picked)}${op.of > 1 ? ' of ' + op.of + ' connections' : ''}</div>
+      ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>

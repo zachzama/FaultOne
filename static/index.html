@@ -261,6 +261,10 @@
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
   .phops .ph{display:inline-block; margin-right:6px;}
   .phops .ph.gone{color:var(--crit);}
+  /* Which destination the hops below are to, and why that one. On a side with
+     many peers, one stands in for the rest and the reader has to know which. */
+  .ptraced{padding:9px 14px 0; font-family:var(--mono); font-size:10.5px;
+    color:var(--text-dim);}
   /* Observations about this side that are not a leg. */
   .pnotes{padding:10px 14px; border-top:1px dashed var(--border);
     font-size:11.5px; line-height:1.55; color:var(--text-dim);}
@@ -1379,6 +1383,20 @@ function renderDiagnosis(data, opts){
   // drawing one anyway is the mistake the boundary arrow carried for two
   // releases. Every state here was decided in build_probe_column; nothing on
   // this side of the wire judges a hop.
+  // One hop list, drawn the same way wherever it lands. The way out and the
+  // reference probe are the same measurement of two different destinations, and
+  // two copies of this markup would be two chances for them to diverge.
+  const hopList = col => `<div class="hops">${col.hops.map(h => `
+      <div class="hrow ${h.state === 'ok' ? '' : h.state}">
+        <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
+        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
+        <span class="ht">${h.timed_out ? 'no reply'
+          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+      </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+        h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
+    </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
+
   const pp = data.probe_path;
   const probeHtml = pp ? `<div class="pcol ${pp.state}">
       <div class="pcol-hd"><span class="pwho">reachability probe</span>
@@ -1393,17 +1411,7 @@ function renderDiagnosis(data, opts){
           <span class="pend">${escapeHtml(pp.target)}</span></div>
         <div class="pev">a probe to one address, not the traffic this box carries \u2014 and the only thing that can see a fault at a single hop</div>
       </div>
-      <div class="hops">${pp.hops.map(h => `
-        <div class="hrow ${h.state === 'ok' ? '' : h.state}">
-          <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-          <span class="hh">${escapeHtml(h.host)}</span>
-          <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
-          <span class="ht">${h.timed_out ? 'no reply'
-            : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-        </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
-          h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
-      </div>
-      ${pp.baseline ? `<div class="base">${escapeHtml(pp.baseline)}</div>` : ''}
+      ${hopList(pp)}
     </div>` : '';
   const pathHtml = legSides.length ? '<div class="pcols">' + legSides.map(side => {
     const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
@@ -1456,14 +1464,15 @@ function renderDiagnosis(data, opts){
     const noteHtml = (notes.length && side.side === 'backend')
       ? `<div class="pnotes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : '';
 
-    // The traced segment, when this side is the one that was traced. Only the
-    // backend gets one, and only when a finding named it.
-    const bp = data.backend_path;
-    const traced = (bp && side.side === 'backend') ? `<div class="phops">
-        hops to ${escapeHtml(bp.target)}:
-        ${(bp.hops || []).map(h => `<span class="ph ${h.timed_out ? 'gone' : ''}">${
-          escapeHtml(h.display || String(h.hop))}</span>`).join('&rarr; ')}
-      </div>` : '';
+    // The hops out to a destination this side actually uses, inside the column
+    // that names it. It used to be a probe to a fixed address in a column of its
+    // own, which on a box that relays pointed at the internet twice - once at
+    // the connections it opens, once at somewhere it never sends anything.
+    const op = data.out_path;
+    const traced = (op && side.side === 'backend') ? `
+      <div class="ptraced">the path to ${escapeHtml(op.target)} \u2014 ${
+        escapeHtml(op.picked)}${op.of > 1 ? ' of ' + op.of + ' connections' : ''}</div>
+      ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${escapeHtml(side.peer)}<br>${escapeHtml(facts)}</span></div>

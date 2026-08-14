@@ -6330,22 +6330,83 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         self.assertIn("1 of 1", self.finding(rep)["message"])
         self.assertNotIn("of that side's traffic", self.finding(rep)["message"])
 
-    def test_the_backend_that_failed_is_the_one_traced(self):
-        """The chain to the target is a reachability check on a box that
-        relays - 150 of this tool's 164 scenarios draw every hop on it clean.
-        The segment that fails is the one out to a backend, and it was never
-        traced, so the hops the fault is on were the hops nobody had."""
-        _, rep = self.report(backend=(10, 9000, 9000))
-        bp = rep["backend_path"]
-        self.assertEqual(bp["target"], "10.0.0.90")
-        self.assertTrue(bp["hops"])
-        self.assertEqual(bp["why"], "tcp_return_stalled_backends")
+    def test_the_destination_traced_is_one_this_box_actually_uses(self):
+        """The trace used to go to the target, a public address picked for being
+        reliably reachable. On a box that relays that is a reachability check
+        rather than the route the work takes, and it left the page pointing at
+        the internet twice - at the connections this box opens, and at somewhere
+        it never sends anything.
 
-    def test_a_healthy_box_is_not_traced_twice(self):
-        """A second trace costs seconds. Spending them on every healthy run to
-        draw a second clean chain is the problem this fixes, served twice."""
+        Where a finding has named a peer, that is the one traced: it is the
+        connection the report is already about.
+        """
+        _, rep = self.report(backend=(10, 9000, 9000))
+        out = rep["out_path"]
+        self.assertEqual(out["target"], "10.0.0.90")
+        self.assertTrue(out["hops"])
+        self.assertEqual(out["picked"], "the connection this report is about")
+
+    def test_the_peer_carrying_most_of_the_side_is_the_one_traced(self):
+        """The load-balancer shape. Where one address carries most of a side,
+        its path is the path nearly everything takes, and tracing the worst
+        performer instead would follow an outlier. Nothing has failed here, so
+        the choice falls to the dominant peer rather than to a finding."""
+        mod = fresh()
+        seen = []
+        mod.cmd_traceroute = lambda t: (seen.append(t) or {
+            "ok": True, "cmd": "traceroute", "stdout":
+            " 1  10.0.0.1 (10.0.0.1)  1.0 ms  1.1 ms  1.2 ms\n"
+            " 2  %s (%s)  9.0 ms  9.1 ms  9.2 ms\n" % (t, t)})
+        raw = {"tcp_flows": {"by_side": {"backend": {
+            "connections": 40, "via": "10.0.0.7:443",
+            "worst_peer": "10.0.0.99:443"}}}}
+        out = mod.trace_the_way_out(raw, [])
+        self.assertEqual(seen, ["10.0.0.7"], "it traced the outlier, not the path "
+                                             "nearly every connection takes")
+        self.assertEqual(out["picked"], "carrying most of this side")
+        self.assertEqual(out["of"], 40)
+
+    def test_the_worst_performer_is_traced_when_nothing_dominates(self):
+        """A spread of destinations is the ordinary forward-proxy shape, and
+        there is no representative one - so it takes the one worth looking at."""
+        mod = fresh()
+        seen = []
+        mod.cmd_traceroute = lambda t: (seen.append(t) or {
+            "ok": True, "cmd": "traceroute",
+            "stdout": " 1  %s (%s)  9.0 ms  9.1 ms  9.2 ms\n" % (t, t)})
+        raw = {"tcp_flows": {"by_side": {"backend": {
+            "connections": 40, "via": None, "worst_peer": "10.0.0.99:443"}}}}
+        out = mod.trace_the_way_out(raw, [])
+        self.assertEqual(seen, ["10.0.0.99"])
+        self.assertEqual(out["picked"], "the worst-performing of them")
+
+    def test_a_box_with_nothing_outbound_traces_nothing_here(self):
+        """There is no connection to follow, and the reference probe is what
+        stands in for the way out on one of those."""
+        mod = fresh()
+        mod.cmd_traceroute = lambda t: self.fail("traced with nothing outbound")
+        self.assertIsNone(mod.trace_the_way_out({"tcp_flows": {"by_side": {}}}, []))
+
+    def test_a_healthy_side_is_traced_too_and_only_once(self):
+        """The hops are the way out, not a fault report, so they are drawn on a
+        healthy run as well. What must not happen is both: a box that opens
+        connections of its own has no use for a probe to a fixed address, and
+        two chains pointing at the internet is what this replaced."""
         _, rep = self.report(backend=(10, 9000, 10))
-        self.assertIsNone(rep["backend_path"])
+        self.assertIsNotNone(rep["out_path"])
+        self.assertIsNone(rep["probe_path"],
+                          "a box that relays is being drawn a reference probe "
+                          "as well as its own way out")
+
+    def test_a_box_that_opens_nothing_keeps_the_reference_probe(self):
+        """There is no outbound connection to trace, and on one of those the
+        probe to the target really is the way out."""
+        mod = fresh()
+        setup, kwargs = S["service_address_unserved"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertIsNone(rep["out_path"])
+        self.assertIsNotNone(rep["probe_path"])
 
     def test_quick_mode_traces_nothing(self):
         mod = fresh()
@@ -6355,7 +6416,7 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
                     sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
                                timers=(10, 9000, 9000)))
         rep = mod.diagnose(quick=True, **scenario_kwargs({}))
-        self.assertIsNone(rep["backend_path"])
+        self.assertIsNone(rep["out_path"])
 
     def test_the_four_legs_agree_with_the_box_above_them(self):
         """The column takes its state from the same place the three boxes do.
@@ -9413,9 +9474,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 702),
-            "compressed": (len(gzip.compress(raw, 9)), 211),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 151),
+            "on disk": (len(raw), 756),
+            "compressed": (len(gzip.compress(raw, 9)), 228),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 163),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

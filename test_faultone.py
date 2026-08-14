@@ -6674,6 +6674,112 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestSeeingANATRatherThanSuspectingOne(unittest.TestCase):
+    """An ICMP error carries the header of the packet that provoked it. That is
+    the router repeating our packet back as it saw it, and a NAT is exactly a
+    device that changes what the next router sees. So a quote carrying a source
+    that is not the one we sent from has a translation in front of it.
+
+    Which is what separates this from `double_nat`. That reads private
+    addresses and says two networks, then concedes in its own message that a
+    trace cannot tell a translating router from one that only routes. This can:
+    routed subnets hand the packet on unchanged and translating ones do not.
+
+    It needs the constant-flow walk, because only that keeps the quote. A text
+    traceroute prints the router's address and throws the quote away, so on
+    every other trace this is silent and the inference carries on alone.
+    """
+
+    SENT_FROM = ("10.0.0.5", 51000)
+
+    @staticmethod
+    def hops(pairs):
+        return [{"hop": i + 1, "display": host, "host": host,
+                 "quoted": {"src": src} if src else None}
+                for i, (host, src) in enumerate(pairs)]
+
+    def seen(self, pairs, sent_from=SENT_FROM):
+        return [(t["hop"], t["from"], t["to"])
+                for t in nd.translations_seen(self.hops(pairs), sent_from)]
+
+    def test_a_path_that_rewrites_nothing_reports_nothing(self):
+        """The ordinary case, and the one that decides whether this is safe to
+        rank: a routed path hands the packet on unchanged at every hop."""
+        self.assertEqual(self.seen([("10.0.0.1", "10.0.0.5"),
+                                    ("172.16.0.1", "10.0.0.5"),
+                                    ("8.8.8.8", "10.0.0.5")]), [])
+
+    def test_the_hop_the_address_changed_at_is_named(self):
+        self.assertEqual(self.seen([("10.0.0.1", "10.0.0.5"),
+                                    ("203.0.113.9", "198.51.100.7")]),
+                         [(2, "10.0.0.5", "198.51.100.7")])
+
+    def test_a_change_at_the_first_hop_has_no_earlier_hop_to_blame(self):
+        """Compared against what we sent from rather than against the hop
+        before it, because there is no hop before it. A difference here means
+        the translation is in front of everything the walk can see."""
+        self.assertEqual(self.seen([("10.0.0.1", "198.51.100.7"),
+                                    ("8.8.8.8", "198.51.100.7")]),
+                         [(None, "10.0.0.5", "198.51.100.7")])
+
+    def test_it_is_not_reported_twice_for_one_translation(self):
+        """The first version compared the last address seen against what was
+        sent, after already recording the change at the hop it happened at, so
+        a single NAT was announced once at its hop and once as being in front
+        of the whole path."""
+        got = self.seen([("10.0.0.1", "10.0.0.5"), ("203.0.113.9", "198.51.100.7"),
+                         ("8.8.8.8", "198.51.100.7")])
+        self.assertEqual(len(got), 1)
+
+    def test_two_translations_are_two(self):
+        self.assertEqual(self.seen([("10.0.0.1", "10.0.0.5"),
+                                    ("172.16.0.1", "172.16.9.9"),
+                                    ("203.0.113.9", "198.51.100.7")]),
+                         [(2, "10.0.0.5", "172.16.9.9"),
+                          (3, "172.16.9.9", "198.51.100.7")])
+
+    def test_a_silent_hop_does_not_break_the_chain(self):
+        """A hop that did not answer has no quote, so it says nothing either
+        way and the comparison carries on across it.
+
+        The second path is the one that matters. A silent hop after a
+        translation must not lose track of what the address has become: if it
+        did, the next hop that answers would be compared against what we sent
+        from and report the same NAT a second time, on a path where silent hops
+        are ordinary.
+        """
+        self.assertEqual(self.seen([("10.0.0.1", "10.0.0.5"), ("*", None),
+                                    ("8.8.8.8", "10.0.0.5")]), [])
+        self.assertEqual(self.seen([("10.0.0.1", "10.0.0.5"),
+                                    ("203.0.113.9", "198.51.100.7"),
+                                    ("*", None),
+                                    ("8.8.8.8", "198.51.100.7")]),
+                         [(2, "10.0.0.5", "198.51.100.7")])
+
+    def test_a_trace_that_kept_no_quote_says_nothing(self):
+        """Every trace but the walk. The inference in double_nat is still
+        there and still says what it always said."""
+        self.assertEqual(self.seen([("10.0.0.1", "198.51.100.7")], None), [])
+        self.assertEqual(self.seen([("10.0.0.1", None), ("8.8.8.8", None)]), [])
+
+    def test_the_finding_says_it_measured_rather_than_guessed(self):
+        mod = fresh()
+        setup, kwargs = S["nat_observed"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"] if f["code"] == "nat_observed")
+        self.assertIn("measured rather than guessed", said)
+        self.assertIn("hop 2", said)
+        self.assertNotIn("It happens", said, "one translation is not several")
+
+    def test_it_outranks_the_inference_it_replaces(self):
+        """Both are about the same thing and only one of them saw it happen, so
+        where both fire the observation has to be the headline and the
+        inference has to read as backing it up."""
+        codes = [c for c, _o, _h, _w in nd.VERDICT_RULES]
+        self.assertLess(codes.index("nat_observed"), codes.index("double_nat"))
+
+
 class TestATraceThatKeepsTheFlowConstant(unittest.TestCase):
     """Classic traceroute varies the destination port on every probe, because
     that is how it tells which reply belongs to which probe. That port is part
@@ -15205,6 +15311,22 @@ def ping_map(nd, gw_loss=0, inet_loss=0, avg=20.0, mdev=2.0, sent=20):
 def trace(nd, text):
     nd.cmd_traceroute = lambda t: {"ok": True, "cmd": "traceroute", "stdout": text}
 
+def walked(nd, hops, sent_from=("10.0.0.5", 51000), arrived=True):
+    """A constant-flow walk, with the router's quote on each hop.
+
+    hops is (address, quoted_source). The quote is what the router says our
+    packet looked like when it saw it, so a quoted source that is not what we
+    sent from is a translation between here and there.
+    """
+    rows = [{"hop": i + 1, "host": host, "display": host, "times_ms": [float(i + 1)],
+             "timed_out": False, "flags": None,
+             "quoted": {"src": src, "dst": "8.8.8.8", "src_port": 51000,
+                        "dst_port": 33434, "ip_id": i}}
+            for i, (host, src) in enumerate(hops)]
+    nd.trace_constant_flow = lambda target, **kw: {
+        "hops": rows, "target": "8.8.8.8", "arrived": arrived,
+        "sent_from": sent_from, "dest_port": 33434}
+
 def mtr(nd, hubs):
     nd.cmd_mtr = lambda t, c=10: {"ok": True, "cmd": "mtr", "cycles": c, "stdout": "",
                                   "hops": nd.parse_mtr_json(json.dumps({"report": {"hubs": hubs}}))}
@@ -15944,6 +16066,10 @@ def _(nd): trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  10.0.0.2 (10.0.0.2)  
 @scenario("double_nat")
 def _(nd): trace(nd, " 1  192.168.1.1 (192.168.1.1)  1.0 ms\n 2  10.0.0.1 (10.0.0.1)  2.0 ms\n"
                      " 3  8.8.8.8 (8.8.8.8)  20.0 ms\n")
+
+@scenario("nat_observed")
+def _(nd): walked(nd, [("192.168.1.1", "10.0.0.5"), ("203.0.113.9", "198.51.100.7"),
+                       ("8.8.8.8", "198.51.100.7")])
 
 @scenario("cgnat")
 def _(nd): trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  100.64.0.1 (100.64.0.1)  8.0 ms\n"

@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 164
+difference is which one it puts at the top, and that is the whole product: 165
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1358,11 +1358,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **36** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
-| **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1325 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **165** | Distinct conclusions it can reach and state in plain language. 138 are faults; 27 are context, like which switch port you're on. |
+| **Ranked causes** | **138** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1334 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 164 findings are the useful figure** if you want to know what the tool can
+**The 165 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1480,6 +1480,51 @@ subnets are both there, the router really did answer twice. Only the claim
 about what sits between them is softened, and only when the trace shows it
 fanning out **between the two hops in question**: a path that splits after
 hop 6 says nothing about whether hops 1 and 2 are adjacent.
+
+### Walking the path without changing the flow
+
+Where the box will give us a socket to hear ICMP on, the trace is walked
+here instead of shelled out. A UDP socket, a fixed destination port, a
+fixed source port, and the TTL stepped from 1 upward: the five-tuple never
+changes, so a per-flow balancer sends every probe down the same branch and
+the numbered list is one path again.
+
+Paris traceroute solves the same problem by keeping the five-tuple fixed
+and encoding the probe number in the UDP checksum, choosing payload bytes
+that make the checksum come out right. That needs the sender to build its
+own IP header. This does it the other way round: nothing varies at all, and
+the probes go one at a time so the ordering is the identifier. Serial where
+Paris is parallel, which costs seconds and no correctness.
+
+The send side needs no privilege. Only the socket that catches the replies
+does, so most boxes fall through to the traceroute binary, and so does a
+walk that opens a socket and hears nothing: twenty silent hops are not a
+path. It sits under `mtr`, which sends many cycles and gets per-hop loss out
+of them, and over the binary.
+
+Replies are matched on where the packet was going, never on where it came
+from. A translating router rewrites the source on the way out, so a router
+past a NAT quotes a packet whose source is not ours and never was. Matching
+on the source would throw away every hop past the first NAT.
+
+### Seeing a NAT rather than suspecting one
+
+An ICMP error carries the header of the packet that provoked it. That is the
+router repeating our packet back as it saw it, and a NAT is exactly a device
+that changes what the next router sees. So a quote carrying a source that is
+not the one we sent from has a translation in front of it, and the hop it
+first appears at is where that happened.
+
+This is the one thing here that **observes** a NAT. `double_nat` reads
+private addresses and infers two networks, and concedes in its own message
+that a trace cannot tell a translating router from one that only routes.
+This can, because routed subnets hand the packet on unchanged and
+translating ones do not, so `nat_observed` ranks above it: where both fire,
+the observation is the headline and the inference backs it up.
+
+It needs the walk, because only the walk keeps the quote. A text traceroute
+prints the router's address and throws the quote away, and on those traces
+this is silent and the inference carries on alone.
 
 ### The 36 things it inspects
 
@@ -2107,7 +2152,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1325 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1334 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3595,7 +3640,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1325 tests, no dependencies, no network, a few seconds, so they run
+1334 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3674,7 +3719,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 164 findings with readable rules instead of
+> way out - and who owns it. Ranks 165 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

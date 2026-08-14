@@ -5895,6 +5895,48 @@ def parse_traceroute_hops(output):
     return hops
 
 
+def translations_seen(hops, sent_from):
+    """Where a router quoted our packet back with a different source on it.
+
+    An ICMP error carries the header of the packet that provoked it. That is
+    the router repeating our packet back as it saw the packet, and a NAT is
+    exactly a device that changes what the next router sees. So the first hop
+    whose quote carries an address that is not the one we sent from has a
+    translation in front of it, and this is the one thing here that observes a
+    NAT rather than inferring one from an address range.
+
+    Which is what separates it from double_nat. That reads private addresses
+    and says two networks, then concedes in its own message that a trace cannot
+    tell a translating router from one that only routes. This can: routed
+    subnets do not rewrite a source address and translating ones do.
+
+    Needs the constant-flow walk, because the quote is only kept there. A text
+    traceroute prints the router's address and throws the quote away.
+    """
+    if not sent_from:
+        return []
+    was, seen, out = sent_from[0], None, []
+    for hop in hops or []:
+        now = (hop.get("quoted") or {}).get("src")
+        if not now:
+            continue
+        if seen is None:
+            # The first hop that answered. Comparing it against what we sent
+            # from, rather than against the hop before it, because there is no
+            # hop before it: a difference here means the translation is in
+            # front of everything this walk can see.
+            seen = now
+            if now != was:
+                out.append({"hop": None, "from": was, "to": now,
+                            "host": "before the first hop that answered"})
+            continue
+        if now != seen:
+            out.append({"hop": hop["hop"], "from": seen, "to": now,
+                        "host": hop.get("display") or hop.get("host")})
+            seen = now
+    return out
+
+
 def balanced_hops(hops):
     """Hop numbers where more than one router answered.
 
@@ -5963,7 +6005,7 @@ def subnet24(ip):
     return ".".join(parts[:3]) if len(parts) == 4 else None
 
 
-def annotate_hops(hops, gateway=None, target=None):
+def annotate_hops(hops, gateway=None, target=None, sent_from=None):
     """Add per-hop insight derived from what we already measured: average and
     spread of the probe times, how much latency this hop added over the last
     one, whether it's inside the site, and its role in the path.
@@ -6071,6 +6113,11 @@ def annotate_hops(hops, gateway=None, target=None):
     # several paths they are not.
     balanced = balanced_hops(hops)
 
+    # Where a router quoted our packet back with a different source on it. Only
+    # the constant-flow walk keeps the quote, so this is empty on every other
+    # trace and the inference below carries on alone.
+    translations = translations_seen(hops, sent_from)
+
     # The same router answering at two hop numbers is a loop (or a path that
     # doubles back), which stalls traffic well before it reaches the target.
     seen, loop_at = {}, None
@@ -6112,6 +6159,7 @@ def annotate_hops(hops, gateway=None, target=None):
         "networks_crossed": networks,
         "double_nat": double_nat,
         "balanced_hops": balanced,
+        "translations": translations,
         "loop_at": loop_at,
         "cgnat_hop": cgnat_hop,
         "demarc_hop": demarc,
@@ -6840,6 +6888,16 @@ VERDICT_RULES = [
      "The path stops responding before reaching the target",
      "Confirm against the ping result - many routers forward traffic fine while "
      "ignoring traceroute probes."),
+    # Ranked above double_nat because it is about the same thing and knows it
+    # rather than suspecting it. Where both fire, the observation should be the
+    # headline and the inference should read as backing it up.
+    ("nat_observed", "the site network",
+     "A device on the way out is rewriting this box's address",
+     "This is measured rather than guessed: a router past that point quoted our own "
+     "packet back with a different source on it, which is what translation is. Inbound "
+     "connections and port forwarding do not survive it without configuration, and it "
+     "puts a device in the path that holds state per connection - worth knowing about "
+     "before chasing an intermittent fault through it."),
     ("double_nat", "the site network",
      "Two routers in series before traffic leaves the site",
      "Works for outbound, breaks inbound and port forwarding. Worth simplifying "
@@ -7318,6 +7376,7 @@ FINDING_SIDE.update({
     "loop": "upstream",
     "cgnat": "upstream",
     "double_nat": "upstream",
+    "nat_observed": "upstream",
     "pmtu_blackhole": "upstream",
     "pmtu_reduced": "upstream",
     "pmtu_unmeasurable": "upstream",
@@ -7462,7 +7521,7 @@ STAGE_RULES = [
       "tcp_flow_sendbuf_limited", "tcp_flow_receiver_limited",
       # What sits between this site and the internet. Neither is a fault on
       # its own, and both change what the way out can do.
-      "cgnat", "double_nat"}),
+      "cgnat", "double_nat", "nat_observed"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -11670,7 +11729,12 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             elif tcp_res:
                 path_source += " (TCP probe also stopped short)"
 
-        path_insight = annotate_hops(hops, gw, target)
+        # The walk records what it sent from, which is what a translation
+        # is a difference against. Absent on every other trace.
+        path_insight = annotate_hops(
+            hops, gw, target,
+            sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")
+            if isinstance(((trace or {}).get("raw") or {}).get("walk"), dict) else None)
 
         # Per-hop loss is only meaningful with mtr's repeated probes. Read it
         # from the destination backwards: loss at an intermediate hop that
@@ -11834,6 +11898,29 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                 f"loop stops traffic dead; if {target} is answering at all, this is the "
                 f"second reading. Confirm with a trace that holds the flow constant "
                 f"before escalating it as a loop."),
+        })
+
+    if path_insight.get("translations"):
+        seen = path_insight["translations"]
+        first = seen[0]
+        where = ("before the first hop that answered"
+                 if first["hop"] is None else
+                 "at hop %s (%s)" % (first["hop"], first["host"]))
+        findings.append({
+            "severity": "warning",
+            "code": "nat_observed",
+            "layer": 3,
+            "message": f"Something {where} is rewriting this box's address: it sent from "
+                       f"{first['from']} and a router past that point quoted the packet "
+                       f"back as coming from {first['to']}. That is a NAT, measured rather "
+                       f"than guessed - a router that only routes hands the packet on "
+                       f"unchanged."
+                       + (f" It happens {len(seen)} times along this path, so there is more "
+                          f"than one translating device between here and the target."
+                          if len(seen) > 1 else "")
+                       + " Inbound connections and port forwarding do not survive it "
+                         "without configuration, and it puts a device in the path holding "
+                         "state per connection.",
         })
 
     if path_insight.get("double_nat"):
@@ -13134,7 +13221,7 @@ FINDING_HINT = {
     "gw_unreachable": "LAN",
     "gw_partial_loss": "LAN",
     "duplicate_ip": "LAN",
-    "double_nat": "LAN",
+    "double_nat": "LAN", "nat_observed": "LAN",
     "virtual_router_conflict": "LAN",
 
     # --- not a fault, a limit --------------------------------------------

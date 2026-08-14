@@ -5432,6 +5432,21 @@ class TestZones(unittest.TestCase):
                                 "fallback, so a browser without color-mix is "
                                 "left with no marking" % state)
 
+    def test_a_split_arrow_sits_level_with_the_boxes_it_joins(self):
+        """The split arrow stacks its two heads, which turns the flex main axis
+        vertical - so `align-items:center` from the base rule started centring
+        them sideways and stopped centring them at all. They rode up to the top
+        of the zone row while every unsplit arrow stayed level, which is the one
+        place the eye reads as "these two are joined".
+        """
+        src = nd.VIEWER_TEMPLATE
+        i = src.index(".zarrow.split{")
+        rule = src[i:src.index("}", i)]
+        self.assertIn("flex-direction:column", rule)
+        self.assertIn("justify-content:center", rule,
+                      "the stacked heads have nothing centring them on the "
+                      "axis they stack along")
+
     def test_every_state_a_split_head_can_take_is_drawn_differently(self):
         """Three states, three appearances. Without a rule of its own the
         unknown head falls back to the inherited colour, which is the muddle
@@ -6271,28 +6286,23 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         self.assertEqual(peers & set(pinged), set(),
                          "a side's peer was pinged on --quick")
 
-    def test_the_page_prints_the_assumption_with_the_count(self):
+    def test_the_assumption_is_reachable_without_being_printed(self):
+        """The count is two words on the page - "2 out, 7 back" - because the
+        report is meant to be read quickly and a paragraph explaining TTL is not
+        that. But the number rests on a guess about where the TTL started, and a
+        reading whose assumption cannot be recovered is folklore.
+
+        So it is on the element, not in the prose: hover and it says what it
+        assumed and why the two counts are not the same measurement.
+        """
         src = nd.VIEWER_TEMPLATE
-        i = src.index("hops out, ")
-        block = src[i:i + 320]
-        self.assertIn("ttl_seen", block)
+        i = src.index('class="pboth"')
+        block = src[max(0, i - 400):i + 400]
+        self.assertIn("round trip", block, "the tooltip no longer says what the "
+                                           "hop timings are")
         self.assertIn("ttl_assumed", block)
-        self.assertIn("asymmetric", block,
-                      "the page does not say what the two counts differing means")
-
-
-class TestTheOneWordHint(unittest.TestCase):
-    """The thing to go and touch, in one word.
-
-    `owner` already says who owns a finding, but it is prose - 106 distinct
-    phrases across the ranked findings, nearly one each. This is a label to
-    scan, and the whole value is that the set is small enough to learn.
-
-    A wrong one is worse than none, because a single word carries more
-    authority than the paragraph under it. So the table is allowed to be
-    incomplete and is not allowed to be loose.
-    """
-
+        self.assertIn("ttl_seen", block)
+        self.assertIn("out, ", block)
     def hints(self):
         return nd.FINDING_HINT
 
@@ -6572,21 +6582,18 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
 
     def test_the_column_is_divided_where_it_changes_subject(self):
         """A column carries two things: what the connections on that side are
-        doing, and the path to one of the destinations they go to. The rule that
-        separates them belongs between those, at the top of the traced block.
+        doing, and the path to one of the destinations they go to. The rule
+        separating them belongs between those.
 
-        It sat on the hop list instead, which put it between the traced block's
-        own heading and its rows - splitting a block from its title, and leaving
-        the connections and the path running together above it.
+        It has moved once already - it used to sit between the traced block's
+        heading and its rows, splitting a block from its title. That heading has
+        since gone for over-explaining, so the rule lives on the hop list, which
+        is now the whole traced block.
         """
         css = nd.VIEWER_TEMPLATE[:nd.VIEWER_TEMPLATE.index("</style>")]
-        traced = css[css.index(".ptraced{"):css.index("}", css.index(".ptraced{"))]
-        self.assertIn("border-top", traced,
-                      "nothing separates the connections from the path below them")
         hops = css[css.index(".hops{"):css.index("}", css.index(".hops{"))]
-        self.assertNotIn("border-top", hops,
-                         "the hop rows are still cut off from their own heading")
-
+        self.assertIn("border-top", hops,
+                      "nothing separates the connections from the path below")
     def test_a_hop_timing_is_not_offered_as_one_direction(self):
         """A traceroute time is a round trip: the probe goes out with a short
         TTL and the router at that hop answers, so the reply that stops the

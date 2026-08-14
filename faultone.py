@@ -12714,7 +12714,8 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
-  .zarrow.split{flex-direction:column; line-height:1; font-size:15px;}
+  .zarrow.split{flex-direction:column; justify-content:center;
+    line-height:1; font-size:15px;}
   .zarrow.split .pass{color:var(--ok);}
   .zarrow.split .fail{color:var(--crit);}
   /* A direction with no evidence either way. Muted rather than coloured,
@@ -12735,7 +12736,8 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   /* The traced path's hops, inside its own column. A bar per hop for the share
      of the total it added - the one thing the full-width ribbon did that a
      number cannot, which is show proportion without being read. */
-  .hops{padding:6px 14px 10px;}
+  .hops{padding:9px 14px 10px; margin-top:2px;
+    border-top:1px dashed var(--border);}
   .hrow{display:flex; align-items:center; gap:8px; padding:3px 0;
     font-family:var(--mono); font-size:11px; color:var(--text-dim);}
   .hrow.crit{color:var(--crit);} .hrow.warn{color:var(--warn);}
@@ -12825,9 +12827,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      It used to sit on .hops, which put it between this heading and its own
      rows - splitting a block from its title rather than separating the two
      things the column carries. */
-  .ptraced{padding:11px 14px 0; margin-top:2px;
-    border-top:1px dashed var(--border);
-    font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
+
   /* The hop timings are round trips. Under a heading reading "request out" they
      would be read as one way, which is a claim no traceroute can make: the
      reply that stops the clock is the router's own, so out and back are in
@@ -13612,12 +13612,9 @@ function renderDiagnosis(data, opts){
       </div>${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
           h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
-      <div class="pboth">each time is a round trip to that hop, out and back
-        together \u2014 a traceroute cannot separate them${
-        col.hops_in ? `<br>${col.hops.length} hops out, ${col.hops_in} back \u2014
-          off a reply that arrived with ttl ${col.ttl_seen}, assuming it left at
-          ${col.ttl_assumed}${col.hops_in !== col.hops.length
-            ? '. The two differ, so the routing is asymmetric' : ''}` : ''}</div>
+      ${col.hops_in ? `<div class="pboth" title="Each time above is a round trip to that hop, out and back together - a traceroute cannot separate them. The count back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}.">${
+        col.hops.length} out, ${col.hops_in} back${
+        col.hops_in !== col.hops.length ? ' \u00b7 asymmetric' : ''}</div>` : ''}
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 
   const pp = data.probe_path;
@@ -13678,11 +13675,7 @@ function renderDiagnosis(data, opts){
     // own, which on a box that relays pointed at the internet twice - once at
     // the connections it opens, once at somewhere it never sends anything.
     const op = side.traced;
-    const traced = op ? `
-      <div class="ptraced">the path to ${named(op.target)} \u2014 ${
-        escapeHtml(op.picked)}${op.of > 1
-          ? ' \u00b7 this side has ' + op.of + ' connections' : ''}</div>
-      ${hopList(op)}` : '';
+    const traced = op ? hopList(op) : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
           <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}${

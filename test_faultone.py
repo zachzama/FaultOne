@@ -6567,6 +6567,108 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
             self.assertNotEqual(f.get("hint"), "gremlins")
 
 
+class TestWhichBoxTheVerdictBlames(unittest.TestCase):
+    """The three boxes are coloured by direction, which answers which way
+    stopped working. It does not answer whose fault it is, and those are
+    different questions.
+
+    On the port-exhaustion report they gave different answers: the verdict said
+    "this box is running out of ports" and "not the network", and the panel left
+    this box green and warned the side it had just exonerated. A reader met that
+    contradiction before anything else on the page.
+
+    The direction is right and is kept - running out of ports really does break
+    the way out. What was missing is who owns it.
+    """
+
+    # Findings whose owner disclaims the network and whose direction is
+    # nonetheless right, because the thing being blamed does sit on that side.
+    # Kept here rather than in the tool: it is a record of a review, and nothing
+    # in the tool reads it.
+    REVIEWED_AND_RIGHT = frozenset({
+        "connections_reset_by_peer",   # the far end, and the far end is upstream
+        "destination_unresponsive",    # the destination, likewise
+        "own_service_upstream_error",  # what this box depends on
+        "tls_expired",                 # the service being dialled
+        "tls_handshake_slow",
+    })
+
+    DISCLAIMS = ("not the network", "not the path", "not this device",
+                 "not this box")
+
+    def disclaiming(self):
+        """Findings that say the network is not to blame, and face a side."""
+        out = {}
+        for code, owner, _h, _w in nd.VERDICT_RULES:
+            if any(d in owner.lower() for d in self.DISCLAIMS) \
+                    and nd.finding_side(code) != "local":
+                out[code] = owner
+        return out
+
+    def test_every_finding_that_disclaims_the_network_has_been_classified(self):
+        """The guard that stops this falling behind. The wording cannot tell the
+        two cases apart, so each one has to be put in a list by hand, and a new
+        finding of that shape fails here until somebody does."""
+        unclassified = sorted(set(self.disclaiming())
+                              - nd.CAUSE_OWNED_BY_BOX - self.REVIEWED_AND_RIGHT)
+        self.assertEqual(unclassified, [],
+                         "these disclaim the network and face a side, and "
+                         "nobody has said whether that side is the owner: %s"
+                         % unclassified)
+
+    def test_no_finding_is_in_both_lists(self):
+        self.assertEqual(
+            sorted(nd.CAUSE_OWNED_BY_BOX & self.REVIEWED_AND_RIGHT), [])
+
+    def test_neither_list_names_a_finding_that_does_not_exist(self):
+        codes = {c for c, _o, _h, _w in nd.VERDICT_RULES}
+        for name, listed in (("owned by the box", nd.CAUSE_OWNED_BY_BOX),
+                             ("reviewed", self.REVIEWED_AND_RIGHT)):
+            with self.subTest(list=name):
+                self.assertEqual(sorted(listed - codes), [])
+
+    def test_the_box_that_owns_it_is_marked_even_when_it_is_not_the_lit_one(self):
+        """The case this exists for."""
+        mod = fresh()
+        setup, kwargs = S["ephemeral_ports_low"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        owning = [z for z in rep["sides"] if z["owns_cause"]]
+        self.assertEqual([z["side"] for z in owning], ["local"])
+        self.assertEqual(owning[0]["state"], "pass",
+                         "the box the verdict blames is not the lit one here, "
+                         "which is the whole point")
+
+    def test_it_marks_the_lit_box_where_they_agree(self):
+        """The ordinary case, and the one that says whether this is worth
+        carrying: with two boxes lit the colours cannot say which is the cause,
+        so the tag earns itself even when it agrees with the direction."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        owning = [z for z in rep["sides"] if z["owns_cause"]]
+        self.assertEqual([z["side"] for z in owning], ["upstream"])
+
+    def test_exactly_one_box_owns_it(self):
+        """Two would be a contradiction of its own, and none would leave the
+        reader where they started."""
+        for code in ("ephemeral_ports_low", "fd_pressure", "tcp_flow_loss_clients",
+                     "gw_unreachable", "clock_skewed"):
+            with self.subTest(code=code):
+                mod = fresh()
+                setup, kwargs = S[code]
+                setup(mod)
+                rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+                self.assertEqual(sum(1 for z in rep["sides"] if z["owns_cause"]), 1)
+
+    def test_the_page_draws_it(self):
+        """Computing which box owns the cause and not drawing it is how the
+        traced peer spent a day being right and invisible."""
+        self.assertIn("z.owns_cause", nd.VIEWER_TEMPLATE)
+        self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
+
+
 class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
     """One line decides which side a connection is on:
 

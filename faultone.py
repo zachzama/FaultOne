@@ -7143,6 +7143,41 @@ def build_path_legs(raw=None, sides=None):
     return out or None
 
 
+# Which box the verdict blames, where that is not the box its direction lights.
+#
+# FINDING_SIDE answers which direction stopped working. The owner answers whose
+# fault it is. For most findings those are the same box; for these they are not,
+# and the panel drew only the first - so the port-exhaustion report coloured the
+# way out while its own owner said "not the network", and left the box it blamed
+# green. It was the first thing a reader looked at and disbelieved.
+#
+# Running out of ephemeral ports really does break the way out, and running out
+# of descriptors really does break the way in: the direction is right and is
+# kept. What is added is who owns it.
+CAUSE_OWNED_BY_BOX = frozenset({
+    "ephemeral_ports_low",       # this box's port range, breaks opening outward
+    "fd_pressure",               # this box's descriptor limit, breaks accepting
+    "reqq_full_drops",
+    "syncookies_live",
+    "syncookies_historical",
+    "own_service_silent",        # the service is on this box; the network is not
+    "own_service_erroring",
+})
+
+def cause_owner_side(code):
+    """The zone that owns a finding, which is not always the one it faces.
+
+    Everything not listed above owns the direction it faces. Which of the two a
+    finding belongs in cannot be read off its owner text - "the destination, not
+    the path to it" and "this box's file descriptor limit, not the network" are
+    the same sentence shape with opposite answers - so the suite keeps the
+    review and fails on a new finding of that shape until somebody says which.
+    """
+    if code in CAUSE_OWNED_BY_BOX:
+        return "local"
+    return finding_side(code)
+
+
 def build_sides(findings, raw=None):
     """Where the fault is, in the three places it can be.
 
@@ -7185,7 +7220,11 @@ def build_sides(findings, raw=None):
             state = "skip"
         entry = {"side": side, "label": label, "detail": detail, "state": state,
                  "because": sorted(f.get("code") for f in mine),
-                 "worst": None}
+                 "worst": None,
+                 # Whether this is the box the verdict blames. Two boxes lit is
+                 # ordinary and the colours cannot say which of them is the
+                 # cause, so it is said here.
+                 "owns_cause": False}
         if mine:
             entry["worst"] = sorted(mine, key=lambda f: -rank.get(
                 "fail" if f["severity"] == "critical" else "warn", 0))[0]["message"]
@@ -12461,6 +12500,14 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
                                  0 if f.get("relation") == "cause" else 1))
 
     _sides = build_sides(findings, raw)
+    # Which box the verdict blames. The colours say which direction stopped
+    # working, and for seven findings that is a different box - so on those the
+    # panel pointed at a side the verdict had just exonerated.
+    _cause = (verdict.get("based_on") or [None])[0]
+    if _cause:
+        _owner = cause_owner_side(_cause)
+        for _z in _sides:
+            _z["owns_cause"] = _z["side"] == _owner
     report = {
         "verdict": verdict,
         "stages": build_stages(findings, raw, checked_ports=bool(check_ports), quick=quick),
@@ -12858,7 +12905,12 @@ VIEWER_TEMPLATE = r"""<!doctype html>
           font-size:18px;}
   .zone{flex:1 1 180px; min-width:150px; padding:10px 12px; border-radius:8px;
         border:1px solid var(--border); background:var(--panel-2);}
+  /* The colour of a zone says which direction stopped working. On a report with
+     two zones lit it cannot say which of them is the cause, and on the seven
+     findings whose owner is this box it points at the wrong one entirely - so
+     the box the verdict blames says so, in the words the findings already use. */
   .zone .zname{font-size:12px; color:var(--text-dim-lift); line-height:1.35;}
+  .zone .zname .rel{vertical-align:1px; margin-left:6px;}
   .zone .zvia{font-family:var(--mono); font-size:11px; color:var(--text-dim);
               margin-top:2px; word-break:break-all;}
   .zone .zstate{font-size:15px; font-weight:700; letter-spacing:.04em; margin-top:6px;}
@@ -13490,7 +13542,8 @@ function renderDiagnosis(data, opts){
       ${sides.map((z, i) => `
         ${i ? boundaryArrow(sides, i, sideFlows) : ''}
         <div class="zone ${z.state}">
-          <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}</div>
+          <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}${
+            z.owns_cause ? `<span class="rel rel-cause">the cause</span>` : ''}</div>
           ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
           <div class="zstate">${ZONE_WORD[z.state] || z.state}</div>
           ${z.worst ? `<div class="zwhy">${escapeHtml(z.worst)}</div>` : ''}

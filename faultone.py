@@ -12348,13 +12348,18 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .hwhy.edge{color:var(--text-dim); opacity:.7;}
   .base{padding:8px 14px; border-top:1px dashed var(--border);
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim); opacity:.8;}
-  @media (min-width: 780px){ .pcols{grid-template-columns:1fr 1fr;} }
-  /* After the two-column rule, not before it. Both match above 1100px and they
-     have the same specificity, so source order decides - and with this first,
-     three columns silently became two and the third wrapped underneath the
-     first, which put the probe under "clients and this box" and made a fault on
-     the way out look like one on the way in. */
-  @media (min-width: 1100px){ .pcols{grid-template-columns:repeat(3, 1fr);} }
+  /* However many columns there are, they share the width equally.
+     Fixed track counts were wrong twice over: at two tracks a third column
+     wrapped underneath the first, and at three tracks - once the traced path
+     moved into the column it belongs to and most reports were back to two - the
+     third track stayed empty and the two columns sat squeezed against the left
+     under three boxes that filled the row.
+     A box that relays has two boundaries; one that opens nothing has one and a
+     probe. Neither number is worth a breakpoint. */
+  @media (min-width: 780px){
+    .pcols{grid-auto-flow:column; grid-auto-columns:1fr;
+      grid-template-columns:none;}
+  }
   .pcol{border:1px solid var(--border); border-radius:9px; background:var(--panel-2);
     overflow:hidden; min-width:0;}
   .pcol.fail{border-color:var(--crit);

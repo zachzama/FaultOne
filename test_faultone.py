@@ -5852,24 +5852,38 @@ class TestTheWayOutIsDrawnFromTheConnections(unittest.TestCase):
                                         "the leg leaving this box has its head "
                                         "at the near end of the line")
 
-    def rules(self):
-        import re
-        return [(int(m.group(1)), m.group(0)) for m in re.finditer(
-            r"@media \(min-width: (\d+)px\)\{ \.pcols\{[^}]*\}", nd.VIEWER_TEMPLATE)]
+    def test_the_columns_share_the_width_however_many_there_are(self):
+        """A fixed track count has now been wrong in both directions.
 
-    def test_the_wider_layout_is_declared_last(self):
-        widths = [w for w, _ in self.rules()]
-        self.assertEqual(widths, sorted(widths),
-                         "a narrower breakpoint is declared after a wider one, "
-                         "so it wins on a wide window and the columns wrap")
+        At two tracks a third column wrapped underneath the first, which put the
+        probe to the internet under "clients and this box" and drew a fault on
+        the way out in the position of one on the way in. At three tracks - once
+        the traced path moved into the column that names its destination and
+        most reports were back to two - the third track stayed empty and the two
+        columns sat squeezed against the left, under three boxes that filled the
+        row.
 
-    def test_every_column_count_has_a_rule(self):
-        """One, two and three - the panel carries three columns on a box that
-        relays and two on one that opens nothing."""
-        text = " ".join(r for _, r in self.rules())
-        self.assertIn("1fr 1fr", text)
-        self.assertIn("repeat(3, 1fr)", text)
+        A box that relays has two boundaries. One that opens nothing has one and
+        a reference probe. Neither number is worth a breakpoint.
+        """
+        i = nd.VIEWER_TEMPLATE.index(".pcols{grid-auto-flow")
+        rule = nd.VIEWER_TEMPLATE[i:nd.VIEWER_TEMPLATE.index("}", i)]
+        self.assertIn("grid-auto-flow:column", rule)
+        self.assertIn("grid-auto-columns:1fr", rule)
 
+    def test_no_fixed_track_count_survives(self):
+        """A `1fr 1fr` or a `repeat(3, 1fr)` is a column count written down, and
+        the count is a property of the box being diagnosed."""
+        for fixed in ("grid-template-columns:1fr 1fr", "repeat(3, 1fr)"):
+            with self.subTest(rule=fixed):
+                self.assertNotIn(fixed, nd.VIEWER_TEMPLATE,
+                                 "the panel is assuming how many columns a "
+                                 "report has again")
+
+    def test_a_narrow_window_still_stacks_them(self):
+        """Two or three columns on a phone is two or three unreadable ones."""
+        self.assertIn(".pcols{display:grid; grid-template-columns:1fr;",
+                      nd.VIEWER_TEMPLATE)
 
 class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
     """The traced path, decided in the report rather than in the page.

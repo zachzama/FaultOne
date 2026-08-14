@@ -144,6 +144,97 @@ because two scenarios on one box often produce only one finding. Expect roughly
 one bug per fifty pairs at several minutes of thought each, and do not treat the
 remaining 576 as a backlog to burn down.
 
+## Open: the fan-out is used but not drawn
+
+`balanced_hops` finds the hops where more than one router answered, and three
+findings now say so in their own words. The HTML report does not draw it. The
+terminal has always printed the extra names; the page never has.
+
+Not obviously wrong. The findings carry the qualification in prose, which is
+where a reader meets it, and the hop list is the panel that was thinned
+deliberately. But a reader looking at the hop list cannot see why the loop
+below it hedges, and that is the gap. Decide it as a drawing question, not a
+data one: the data is in the report already.
+
+## Open: the resume card quotes numbers that moved again
+
+`zachzama/zachzama.github.io` carries a FaultOne project card with the finding
+and test counts on it. They are now **165 findings and 1,334 tests** as of
+v1.16.0, and nothing checks the card against the tool. Every release makes it
+staler. Either update it with the release or stop quoting the numbers.
+
+## Settled: three of the last four capability gaps were never gaps
+
+Worth recording because the mistake repeated and the shape of it is
+transferable.
+
+Four tools were reviewed against this one on 2026-08-14: Paris and Dublin
+traceroute for multipath and NAT, scamper and ZMap/Zgrab2 for active probing.
+The review concluded that Paris, Dublin and sting-style directional loss were
+**structurally out of reach**, because this tool runs unprivileged.
+
+That premise was wrong. The box this is aimed at is reached through a jump
+server and arrives privileged, and more to the point the privilege question was
+never checked before being used as an argument. Three of the four
+recommendations rested on it.
+
+What the corrected review found, in the order the cost actually falls:
+
+- **`tc -s qdisc` needs no privilege at all.** It was filed under "what root
+  buys" and is a read-only netlink dump. Nothing was ever in the way.
+- **Paris needs privilege only on the receive side.** A UDP socket with a fixed
+  destination port and `IP_TTL` stepped is already a constant flow; only the
+  raw ICMP socket that hears the replies is privileged. About 130 lines, not
+  the 200+ estimated.
+- **Dublin is nearly free once the walk exists.** The quoted header is in the
+  ICMP message the walk already parses to match probes.
+- **The firewall counters could not name a rule by reading the ruleset**, which
+  is what the first review promised. Simulating a vendor ruleset would be wrong
+  quietly. Reading the counters either side of the probes and reporting what
+  moved is the design that works, and it reuses the sampling window that was
+  already there.
+
+**The rule: check whether a limit is real before building an argument on it.**
+Twice in one session a conclusion rested on an unchecked premise about what
+could not be measured, and both times the answer was in the code or one command
+away.
+
+## Settled: adding a collection is five files, and two of them are counts
+
+Every new collector this release tripped the same guards in the same order, so
+here is the list. `cmd_socket_owners`, `cmd_qdisc` and `cmd_firewall_counters`
+all needed:
+
+1. an entry in the raw registry in `faultone.py` (label, layer, desc),
+2. an entry in `RAW_STAGE` saying which stage of the strip it answers,
+3. `COLLECTOR_IS_DOCUMENTED_AS` in the suite, whose phrase must appear verbatim
+   in the REFERENCE list,
+4. the numbered list in REFERENCE.md, renumbered from the insertion point,
+5. the count in three places: the REFERENCE table, the REFERENCE heading, and
+   the README sentence, plus the pinned number in the suite.
+
+The counts are pinned rather than derived on purpose - "a thing inspected" is a
+human grouping, not a function - so the suite tells you every time and the fix
+is manual each time.
+
+**One capability read twice is one collection.** The firewall counters were
+carried as `firewall_before` and `firewall_after` at first, which made a box
+that cannot read rules count as two checks that could not run and marked the
+confidence of every verdict down twice for one gap. `equivalence.py` caught it
+on two unrelated scenarios. A pair of reads belongs behind one raw key with the
+difference already taken.
+
+## Settled: a box with no firewall is not a box that failed a check
+
+`collection_coverage` excludes checks that cannot apply here, which is why a
+cloud instance is not marked down for having no fibre optics. The firewall
+reader now follows the same rule: no `nft` and no `iptables` means
+`applicable: False`, not a failed read. A tool that is present and refuses is
+still a failure, because that is a thing that could have been read and was not.
+
+The distinction is worth keeping in mind for anything added next. It is the
+difference between "there is nothing here to look at" and "I could not look".
+
 ## Settled: the picture had its own bugs, and the suite could not see them
 
 Four contradictions between the ranked verdict and what the page drew, all
@@ -337,6 +428,17 @@ assertion they were missing. Checked by running the whole suite with `connect`,
 The reason to keep it that way is not tidiness. A test that touches the network
 is a test whose result depends on where it ran, and this suite is the thing
 that decides whether a release goes out.
+
+**The booby-trap has a known blind spot, and it has now been walked into
+twice.** It watches `connect`, `connect_ex` and name resolution. It does not
+watch `sendto`, and it does not watch socket *creation*. `dns_ptr` went through
+that hole with a UDP datagram; `trace_constant_flow` would have gone through it
+with a raw socket and a `sendto`. Both are stubbed in `fresh()` by hand, which
+works and does not generalise.
+
+Anything added that sends without connecting has to be stubbed deliberately,
+because nothing will tell you. Widening the trap to cover `socket.socket` for
+`SOCK_RAW` and `sendto` would close it properly and has not been done.
 
 ## Settled: a green test is not a tested rule
 

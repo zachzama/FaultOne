@@ -243,6 +243,23 @@ def on_a_vpc(mod):
         setattr(mod, name, (lambda f: lambda *a, **k: renumber(f(*a, **k)))(fn))
 
 
+# What a reply from each of these arrives with, so the hop count differs by
+# destination the way it would on a real network: a database two hops inside the
+# rack, clients seven hops out across the internet.
+TTL_SEEN = {"10.0.0.90": 62, "10.0.2.40": 62, "8.8.8.8": 57,
+            "10.0.0.1": 64, "10.0.1.1": 64}
+
+# Names the addresses on these pages answer to. A report is a map of the network
+# it was taken on, and these are the map's legend.
+PTR_NAMES = {
+    "10.0.0.90": "db-primary.data.internal",
+    "10.0.2.40": "db-primary.data.internal",
+    "10.0.0.1": "gw-core-1.net.internal",
+    "10.0.1.1": "gw-core-1.net.internal",
+    "198.51.100.1": "lb-edge-1.net.internal",
+}
+
+
 DEMOS = [
     ("1-inbound-loss",    "tcp_flow_loss_clients",    traffic_both_ways),
     ("2-outbound-loss",   "tcp_flow_loss_backends",   None),
@@ -269,6 +286,19 @@ def main():
         setup(mod)
         if arrange:
             arrange(mod)
+        # Two readings a synthetic corpus cannot produce on its own, and which a
+        # demo has to show or the page looks like it is missing them.
+        #
+        # A ping reply's TTL, so the inbound hop count exists: the corpus stub
+        # prints only the summary lines, because no finding depends on a TTL.
+        # And reverse names, so an address on the page reads as the thing it is
+        # - the resolver here answers nothing, being a fixture.
+        _ping = mod.cmd_ping
+        mod.cmd_ping = lambda t, c=4, w=2, _p=_ping: dict(
+            _p(t, c, w),
+            stdout="64 bytes from %s: icmp_seq=1 ttl=%d time=12.4 ms\n%s"
+                   % (t, TTL_SEEN.get(t, 57), _p(t, c, w).get("stdout", "")))
+        mod.dns_ptr = lambda server, ip, timeout=1.0: PTR_NAMES.get(ip)
         on_a_vpc(mod)
         report = mod.diagnose(quick=False, **T.scenario_kwargs(kwargs))
         named = (report["verdict"].get("based_on") or ["-"])[0]

@@ -6165,6 +6165,53 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
         self.assertIsNone(rep["out_path"].get("hops_in"))
 
+    def test_the_way_in_gets_a_hop_count_of_its_own(self):
+        """The point of the whole thing. The way in has never had a path -
+        a traceroute goes outward and cannot watch a client's packets arrive -
+        so the clients' side was described only by what its connections were
+        doing. A reply's TTL is the one reading that carries how far away they
+        are."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        mod.cmd_ping = lambda t, c=4, w=2: {
+            "ok": True, "cmd": "ping",
+            "stdout": "64 bytes from %s: icmp_seq=1 ttl=%d time=12.4 ms\n"
+                      "4 packets transmitted, 4 received, 0%% packet loss\n"
+                      "rtt min/avg/max/mdev = 1.0/20.0/30.0/2.0 ms\n"
+                      % (t, 57 if t.startswith("203.") else 62)}
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        by = {s["side"]: s for s in rep["path_legs"]}
+        self.assertEqual(by["client"]["hops_in"], 7)
+        self.assertEqual(by["backend"]["hops_in"], 2)
+        self.assertEqual(by["client"]["ttl_assumed"], 64)
+
+    def test_a_side_whose_peer_is_silent_shows_no_distance(self):
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        for side in rep["path_legs"]:
+            with self.subTest(side=side["side"]):
+                self.assertIsNone(side.get("hops_in"))
+
+    def test_quick_mode_pings_no_peer_for_a_distance(self):
+        """--quick already pings the gateway and the target; what it must not do
+        is add one per side. Asserted on which addresses were pinged rather than
+        on whether ping was called at all, which the first version of this got
+        wrong and passed for the wrong reason."""
+        pinged = []
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        real = mod.cmd_ping
+        mod.cmd_ping = lambda t, c=4, w=2: (pinged.append(t) or real(t, c, w))
+        rep = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+        peers = {s.get("peer") for s in (rep.get("path_legs") or [])}
+        self.assertTrue(peers, "no sides to check")
+        self.assertEqual(peers & set(pinged), set(),
+                         "a side's peer was pinged on --quick")
+
     def test_the_page_prints_the_assumption_with_the_count(self):
         src = nd.VIEWER_TEMPLATE
         i = src.index("hops out, ")

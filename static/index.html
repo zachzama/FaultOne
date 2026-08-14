@@ -239,6 +239,10 @@
     font-family:var(--mono); font-size:12px;}
   .pcol-hd .pwho{color:var(--text);}
   .pcol-hd .pfacts{color:var(--text-dim); font-size:11px; text-align:right;}
+  /* The assumption behind a hop count, kept with it. A host starting at 255
+     read as starting at 64 gives a nonsense number, and a reader who can see
+     what was assumed can tell. */
+  .pcol-hd .ttlnote{opacity:.65;}
   .plane{padding:13px 14px;}
   .plane + .plane{border-top:1px solid var(--border);}
   .plane .ptop{display:flex; justify-content:space-between; align-items:baseline;
@@ -1095,6 +1099,11 @@ function renderDiagnosis(data, opts){
   const pathHtml = (legSides.length || pp) ? '<div class="pcols">' + legSides.map(side => {
     const facts = [side.connections + ' connection' + (side.connections === 1 ? '' : 's'),
                    side.rtt_ms != null ? side.rtt_ms + 'ms rtt' : '',
+                   // How far away this side is on the way in, off the TTL of a
+                   // reply from it. The only hop count the inbound direction can
+                   // have: a traceroute goes outward and cannot watch a client's
+                   // packets arrive.
+                   side.hops_in ? side.hops_in + ' hops away' : '',
                    // A retransmit ratio counts packets this box had to send
                    // again and cannot say which direction lost them, so it sits
                    // on the side and never on a leg.
@@ -1132,7 +1141,9 @@ function renderDiagnosis(data, opts){
       ${hopList(op)}` : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
-          <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}</span></div>
+          <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}${
+            side.hops_in ? `<br><span class="ttlnote">counted from a reply that left at ttl ${
+              side.ttl_assumed}</span>` : ''}</span></div>
         ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');

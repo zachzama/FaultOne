@@ -6672,6 +6672,161 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhichRuleStoppedThem(unittest.TestCase):
+    """`egress_blocked` said nothing reaches the target and offered "probably
+    by design", which is a guess about somebody else's intent made from the
+    outside. The kernel counts every rule, so the box can be asked instead.
+
+    Not by reading the ruleset and working out what it would do to a packet.
+    That is a simulation of a vendor-generated ruleset and it would be wrong
+    quietly. The counters are read once before the probes and once after, and a
+    drop rule whose count moved across that window dropped something while they
+    were in flight. What comes out is a shortlist, and it says so.
+    """
+
+    IPT = ("*filter\n"
+           ":INPUT ACCEPT [1000:50000]\n"
+           ":OUTPUT ACCEPT [0:0]\n"
+           "[100:8000] -A OUTPUT -d 10.0.0.0/8 -j ACCEPT\n"
+           "[12:1008] -A OUTPUT -d 0.0.0.0/0 -j DROP\n"
+           "[3:200] -A OUTPUT -p udp -j REJECT --reject-with icmp-port-unreachable\n"
+           "COMMIT\n")
+    NFT = ("table inet filter {\n"
+           "\tchain output {\n"
+           "\t\ttype filter hook output priority filter; policy accept;\n"
+           "\t\tip daddr 10.0.0.0/8 counter packets 100 bytes 8000 accept # handle 4\n"
+           "\t\tcounter packets 12 bytes 1008 drop # handle 7\n"
+           "\t}\n"
+           "}\n")
+
+    def bracket(self, before, after, parser=None):
+        parser = parser or nd.parse_iptables_save
+        return {"firewall": nd.firewall_window(dict(parser(before), ok=True),
+                                               dict(parser(after), ok=True))}
+
+    def test_both_readers_find_the_rule_and_its_verdict(self):
+        for name, parser, text in (("iptables-save", nd.parse_iptables_save, self.IPT),
+                                   ("nft", nd.parse_nft_ruleset, self.NFT)):
+            with self.subTest(reader=name):
+                stopping = [r for r in parser(text)["rules"]
+                            if r["verdict"] in nd.STOPS_A_PACKET]
+                self.assertTrue(stopping)
+                self.assertEqual(stopping[0]["packets"], 12)
+
+    def test_both_readers_find_the_chain_default(self):
+        """The second-best answer depends on it. nft writes the policy on the
+        hook line rather than beside the chain name, so it is read from a
+        different place than iptables writes it and had to be looked for."""
+        self.assertEqual(nd.parse_iptables_save(self.IPT)["policies"]["filter/OUTPUT"],
+                         "ACCEPT")
+        self.assertEqual(nd.parse_nft_ruleset(self.NFT)["policies"],
+                         {"inet filter/output": "accept"})
+
+    def test_a_jump_to_a_user_chain_is_not_a_verdict(self):
+        """Only DROP and REJECT stop a packet. A rule that hands off to another
+        chain has not decided anything, and counting it would put the busiest
+        dispatcher on a vendor box at the top of every shortlist."""
+        rules = nd.parse_iptables_save(
+            "*filter\n[99:9000] -A OUTPUT -j VENDOR_EGRESS\nCOMMIT\n")["rules"]
+        self.assertEqual(rules[0]["verdict"], "VENDOR_EGRESS")
+        self.assertNotIn(rules[0]["verdict"], nd.STOPS_A_PACKET)
+
+    def test_only_the_rules_that_moved_and_that_stop_a_packet(self):
+        """The ACCEPT rule moves too, and by more. It has to be absent from the
+        result, because a busy allow rule is what a working box looks like and
+        putting it on the shortlist would make every report name one."""
+        after = (self.IPT.replace("[12:1008]", "[20:1700]")
+                         .replace("[100:8000]", "[900:70000]"))
+        moved = nd.rules_that_counted(nd.parse_iptables_save(self.IPT),
+                                      nd.parse_iptables_save(after))
+        self.assertEqual([(r["verdict"], r["gained"]) for r in moved], [("DROP", 8)])
+
+    def test_the_shortlist_is_worst_first(self):
+        after = self.IPT.replace("[12:1008]", "[13:1100]").replace("[3:200]", "[99:9000]")
+        moved = nd.rules_that_counted(nd.parse_iptables_save(self.IPT),
+                                      nd.parse_iptables_save(after))
+        self.assertEqual([r["verdict"] for r in moved], ["REJECT", "DROP"])
+
+    def test_a_rule_that_appeared_mid_run_is_not_counted_from_zero(self):
+        """Somebody reloading the firewall while this ran is not evidence about
+        the probe, and a new rule's whole lifetime count would outrank every
+        real one on the list."""
+        added = self.IPT.replace(
+            "COMMIT\n", "[500:40000] -A OUTPUT -d 192.0.2.0/24 -j DROP\nCOMMIT\n")
+        moved = nd.rules_that_counted(nd.parse_iptables_save(self.IPT),
+                                      nd.parse_iptables_save(added))
+        self.assertEqual(moved, [])
+
+    def test_a_counter_going_backwards_is_a_reset_and_not_a_negative(self):
+        after = self.IPT.replace("[12:1008]", "[2:100]")
+        self.assertEqual(nd.rules_that_counted(nd.parse_iptables_save(self.IPT),
+                                               nd.parse_iptables_save(after)), [])
+
+    # ---- what it is willing to say ---------------------------------------
+
+    def test_it_says_a_rule_fired_not_that_it_fired_on_this_traffic(self):
+        """The honest limit of the method. On a busy relay several rules move
+        during any window, and the counters cannot tie one to our packets."""
+        said = nd._dropped_by(self.bracket(self.IPT, self.IPT.replace("[12:1008]",
+                                                                     "[20:1700]")))
+        self.assertIn("not that it fired on this traffic", said)
+        self.assertIn("-j DROP", said)
+
+    def test_a_default_of_drop_is_the_answer_when_no_rule_moved(self):
+        """Second best and still an answer: nothing counted, and the chain's
+        default is to drop, so they were stopped by the policy rather than by a
+        rule written for them."""
+        policy = self.IPT.replace(":OUTPUT ACCEPT", ":OUTPUT DROP")
+        said = nd._dropped_by(self.bracket(policy, policy))
+        self.assertIn("default on", said)
+        self.assertIn("rather than by a rule", said)
+
+    def test_nothing_moved_and_nothing_defaults_to_drop_says_nothing(self):
+        self.assertEqual(nd._dropped_by(self.bracket(self.IPT, self.IPT)), "")
+
+    def test_a_run_that_could_not_read_the_rules_says_nothing(self):
+        """Both readers need privilege, and the finding has to read as it did
+        before on a run without it.
+
+        The failed reads carry parsed content, because a command that exits
+        non-zero can still have printed something first. An empty pair proves
+        nothing here: it says nothing whether or not the ok flag is read.
+        """
+        self.assertEqual(nd._dropped_by({}), "")
+        drop_policy = self.IPT.replace(":OUTPUT ACCEPT", ":OUTPUT DROP")
+        refused = self.bracket(drop_policy,
+                               drop_policy.replace("[12:1008]", "[20:1700]"))
+        self.assertNotEqual(nd._dropped_by(refused), "", "the fixture proves nothing")
+        for key in ("before", "after"):
+            with self.subTest(unreadable=key):
+                reads = {k: dict(refused["firewall"][k],
+                                 **({"ok": False} if k == key else {}))
+                         for k in ("before", "after")}
+                self.assertEqual(
+                    nd._dropped_by({"firewall": nd.firewall_window(**reads)}), "")
+
+    def test_it_reaches_the_finding(self):
+        mod = fresh()
+        setup, kwargs = S["egress_blocked"]
+        setup(mod)
+        reads = [dict(nd.parse_iptables_save(self.IPT), ok=True),
+                 dict(nd.parse_iptables_save(self.IPT.replace("[12:1008]", "[20:1700]")),
+                      ok=True)]
+        mod.cmd_firewall_counters = lambda: reads.pop(0) if reads else {"ok": False}
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"] if f["code"] == "egress_blocked")
+        self.assertIn("-j DROP", said)
+
+    def test_and_the_finding_is_unchanged_where_the_rules_cannot_be_read(self):
+        mod = fresh()
+        setup, kwargs = S["egress_blocked"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"] if f["code"] == "egress_blocked")
+        self.assertIn("check the egress rules before the carrier.", said)
+        self.assertNotIn("in flight", said)
+
+
 class TestWhatThisRunWasAllowedToSee(unittest.TestCase):
     """Several checks read something only a privileged user can read. Each of
     them already says "couldn't look" instead of "nothing happened", which is
@@ -10837,9 +10992,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 731),
-            "compressed": (len(gzip.compress(raw, 9)), 220),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 156),
+            "on disk": (len(raw), 791),
+            "compressed": (len(gzip.compress(raw, 9)), 239),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 168),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -10851,8 +11006,8 @@ class TestDocsMatchReality(unittest.TestCase):
                     f"the readme says {quoted} KB {label}, it is now "
                     f"{measured / 1024:.0f} KB")
         cut = 100 * (1 - len(gzip.compress(stripped, 9)) / len(raw))
-        self.assertIn("78%", readme)
-        self.assertLess(abs(cut - 78), 4, f"the quoted 78% saving is now {cut:.0f}%")
+        self.assertIn("79%", readme)
+        self.assertLess(abs(cut - 79), 4, f"the quoted 79% saving is now {cut:.0f}%")
 
     def test_the_readme_tells_ssh_to_compress(self):
         """OpenSSH does not compress by default, so an example without -C sends
@@ -10896,8 +11051,8 @@ class TestDocsMatchReality(unittest.TestCase):
             # times, and some are helpers rather than collections. Raised to
             # 33 when proxy configuration was added, 34 when the socket
             # table gained the process holding each socket, 35 with the
-            # interface queues.
-            "collections": (35, [r"\*\*(\d+)\s+things are inspected",
+            # interface queues, 36 with the firewall rule counters.
+            "collections": (36, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -10974,6 +11129,8 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_ping": "reachability and loss",
         "cmd_routes": "Routing table and default gateway",
         "cmd_socket_owners": "Which process holds each socket",
+        "cmd_firewall_counters": "Firewall rule counters, read either side of "
+                                 "the probes",
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
                      "holding and dropping",
         "cmd_socket_states": "TCP socket states",

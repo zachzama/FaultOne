@@ -2208,6 +2208,222 @@ def cmd_socket_owners():
 
 
 # ---------------------------------------------------------------------------
+# Which firewall rule dropped it.
+#
+# `egress_blocked` says nothing reaches the target and offers "probably by
+# design", which is a guess about somebody else's intent made from the outside.
+# The kernel counts every rule, so the box can be asked instead.
+#
+# Not by reading the ruleset and working out what it would do to a packet. That
+# is a simulation of a vendor-generated ruleset and it would be wrong quietly.
+# The counters are read once before the probes and once after, and a drop rule
+# whose packet count moved across that window dropped something during it. The
+# probes are what this box sent during it. That is not a proof, and on a busy
+# relay several rules will have moved, so what comes out is a shortlist in the
+# order they counted rather than a verdict.
+#
+# Both readers need privilege. A run without it gets nothing here and the
+# finding reads as it did before.
+# ---------------------------------------------------------------------------
+
+FIREWALL_READ_BYTES = 4_000_000
+# The verdicts that stop a packet. Both spellings, because nft is lowercase and
+# iptables is not, and a rule that jumps to a user chain is not a verdict at all.
+STOPS_A_PACKET = ("DROP", "REJECT", "drop", "reject")
+
+_IPT_RULE = re.compile(r"^\[(\d+):(\d+)\]\s+(-A\s+(\S+)\s+.*)$")
+_IPT_JUMP = re.compile(r"-j\s+(\S+)")
+_NFT_TABLE = re.compile(r"^table\s+(\S+)\s+(\S+)\s*\{")
+_NFT_CHAIN = re.compile(r"^\s*chain\s+(\S+)\s*\{")
+_NFT_POLICY = re.compile(r"policy\s+(\w+)")
+_NFT_COUNTER = re.compile(r"counter packets (\d+) bytes (\d+)")
+
+
+def parse_iptables_save(text):
+    """`iptables-save -c`: a counter in brackets before every rule.
+
+    Preferred over `iptables -L -v -n` because the format is meant to be read
+    by a program rather than by a person, so it does not reflow, and because
+    the chain policy comes with it.
+    """
+    rules, policies, table = [], {}, None
+    for line in (text or "").splitlines():
+        if line.startswith("*"):
+            table = line[1:].strip()
+            continue
+        if line.startswith(":"):
+            parts = line[1:].split()
+            if len(parts) >= 2:
+                policies["%s/%s" % (table, parts[0])] = parts[1]
+            continue
+        m = _IPT_RULE.match(line)
+        if not m:
+            continue
+        jump = _IPT_JUMP.search(m.group(3))
+        rules.append({"table": table, "chain": m.group(4),
+                      "packets": int(m.group(1)), "bytes": int(m.group(2)),
+                      "verdict": jump.group(1) if jump else None,
+                      "rule": m.group(3).strip()})
+    return {"rules": rules, "policies": policies}
+
+
+def parse_nft_ruleset(text):
+    """`nft -a list ruleset`.
+
+    nft only counts a rule that was written with a `counter` statement, so a
+    ruleset can be complete and tell us nothing. That is a real limit of the
+    reader rather than an answer about the box, and it is why iptables-save is
+    tried as well rather than instead.
+    """
+    rules, policies = [], {}
+    table, chain = None, None
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        t = _NFT_TABLE.match(line)
+        if t:
+            table, chain = "%s %s" % (t.group(1), t.group(2)), None
+            continue
+        c = _NFT_CHAIN.match(raw_line)
+        if c:
+            chain = c.group(1)
+            continue
+        if "type filter hook" in line:
+            p = _NFT_POLICY.search(line)
+            if p and table and chain:
+                policies["%s/%s" % (table, chain)] = p.group(1)
+            continue
+        counter = _NFT_COUNTER.search(line)
+        if not counter or not chain:
+            continue
+        verdict = next((v for v in ("drop", "reject") if re.search(r"\b%s\b" % v, line)),
+                       None)
+        rules.append({"table": table, "chain": chain,
+                      "packets": int(counter.group(1)), "bytes": int(counter.group(2)),
+                      "verdict": verdict, "rule": line})
+    return {"rules": rules, "policies": policies}
+
+
+def cmd_firewall_counters():
+    """Every rule's packet count, from whichever tool this box uses.
+
+    nft first: on a modern box it sees the inet tables the iptables compat
+    layer does not. iptables-save behind it rather than instead, because a
+    ruleset with no counter statements parses perfectly and says nothing, and
+    the older tool counts every rule whether it was asked to or not.
+    """
+    if OS_NAME != "Linux":
+        return {"ok": False, "cmd": "nft list ruleset", "applicable": False,
+                "error": "firewall rule counters are Linux-only"}
+    attempts = [(["nft", "-a", "list", "ruleset"], parse_nft_ruleset),
+                (["iptables-save", "-c"], parse_iptables_save)]
+    # A box with neither tool has no rules to read, which is not the same as a
+    # box that has them and would not answer. Counting it as a check that
+    # failed marks down the confidence of every verdict on a machine for not
+    # having a firewall, which is the mistake collection_coverage exists to
+    # avoid making about fibre optics.
+    if not any(which(cmd[0]) for cmd, _p in attempts):
+        return {"ok": False, "cmd": "nft list ruleset", "applicable": False,
+                "error": "no firewall tool here to read counters from"}
+    fallback = None
+    for cmd, parser in attempts:
+        if not which(cmd[0]) or parser is None:
+            continue
+        res = run(cmd, timeout=15, limit=FIREWALL_READ_BYTES)
+        if not res.get("ok") or res.get("code"):
+            continue
+        parsed = parser(res.get("stdout") or "")
+        res.update(parsed)
+        res["stdout"] = _cap(res.get("stdout"))
+        # A reader that found rules and no counters on any of them has read the
+        # box correctly and learned nothing, so the next one still gets a turn.
+        # Its policies are worth keeping in the meantime.
+        if any(r["packets"] for r in parsed["rules"]) or not parsed["rules"]:
+            return res
+        fallback = fallback or res
+    return fallback or {"ok": False, "cmd": "nft list ruleset",
+                        "error": "no firewall rule counters here (tried nft, "
+                                 "iptables-save); this usually needs root"}
+
+
+def firewall_window(before, after):
+    """The two reads as one result, with the difference already taken.
+
+    One capability read twice is one collection, not two. Carrying them as two
+    raw keys counted a box that cannot read rules as two checks that could not
+    run, and marked the confidence of every verdict down twice for one gap.
+    """
+    ok = bool(before.get("ok") and after.get("ok"))
+    out = {"ok": ok, "cmd": after.get("cmd") or before.get("cmd"),
+           "before": before, "after": after,
+           "moved": rules_that_counted(before, after) if ok else [],
+           "policies": (after.get("policies") if ok else None) or {}}
+    if not ok:
+        # Both reads have to work for the difference to mean anything, so the
+        # reason the pair failed is whichever of them failed.
+        failed = before if not before.get("ok") else after
+        out["error"] = failed.get("error") or "the rule counters could not be read"
+        if failed.get("applicable") is False:
+            out["applicable"] = False
+    return out
+
+
+def _rule_key(rule):
+    return (rule.get("table"), rule.get("chain"), rule.get("rule"))
+
+
+def rules_that_counted(before, after):
+    """Drop and reject rules whose packet count moved between two reads.
+
+    Worst first, so a shortlist reads as one. A rule that appeared between the
+    two reads is skipped rather than counted from zero: somebody reloading the
+    firewall mid-run is not evidence about the probe.
+    """
+    was = {_rule_key(r): r["packets"] for r in (before or {}).get("rules") or []}
+    moved = []
+    for rule in (after or {}).get("rules") or []:
+        if rule.get("verdict") not in STOPS_A_PACKET:
+            continue
+        key = _rule_key(rule)
+        if key not in was:
+            continue
+        gained = rule["packets"] - was[key]
+        if gained > 0:
+            moved.append(dict(rule, gained=gained))
+    return sorted(moved, key=lambda r: -r["gained"])
+
+
+def _dropped_by(raw):
+    """The sentence naming what stopped the probes, or nothing.
+
+    Three answers, in descending order of how much they say: the rules that
+    counted while the probes were in flight, the chain policy where no rule
+    counted but the default is to drop, and nothing at all.
+    """
+    window = (raw or {}).get("firewall") or {}
+    if not window.get("ok"):
+        return ""
+    moved = window.get("moved") or []
+    if moved:
+        shown = "; ".join("%s/%s %s (%d packet(s))"
+                          % (r["chain"], r["verdict"], r["rule"], r["gained"])
+                          for r in moved[:2])
+        return (" While those probes were in flight this box's firewall counted "
+                "%d packet(s) on %d %s rule(s): %s. That is what stopped them, or "
+                "what was busy at the same moment: the counters say a rule fired, "
+                "not that it fired on this traffic."
+                % (sum(r["gained"] for r in moved), len(moved),
+                   "drop or reject", shown))
+    dropping = [name for name, policy in (window.get("policies") or {}).items()
+                if policy in STOPS_A_PACKET and "OUTPUT" in name.upper()]
+    if dropping:
+        return (" No rule counted while the probes were in flight, and the "
+                "default on %s is to drop, so they were stopped by the policy "
+                "rather than by a rule written for them."
+                % ", ".join(sorted(dropping)))
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # What this run was allowed to see.
 #
 # Several checks read something only a privileged user can read: the kernel
@@ -5267,6 +5483,13 @@ PANEL_HELP = {
                 "nothing is answering; a pile of CLOSE_WAIT means an application isn't closing "
                 "its sockets, which is not a network fault.",
     },
+    "firewall": {
+        "label": "firewall rule counters, either side of the probes", "layer": 3,
+        "desc": "Every rule's packet count, read once before anything was sent and once "
+                "after. Only the difference means anything: a ruleset says what could happen "
+                "to a packet, and a pair of reads says which rules actually fired while the "
+                "probes were in flight. Needs root, and says nothing without it.",
+    },
     "qdisc": {
         "label": "interface queues", "layer": 2,
         "desc": "What this box's own egress queues are holding and dropping. Three findings "
@@ -7132,6 +7355,8 @@ RAW_STAGE = {
     # An egress queue is the link stage: it is this box's own interface
     # holding traffic, which is what that stage is about.
     "qdisc": "link",
+    # Egress rules are the way out, which is the internet stage.
+    "firewall": "internet",
     # This box's own service and the certificate it serves, both read from the
     # outside in. They belong to the ports stage for the same reason the port
     # checks do: they answer whether what is listening here actually works.
@@ -12550,7 +12775,8 @@ def _check_internet(raw, findings, target, probes):
                                f"in the direction that matters for a service. This is outbound "
                                f"internet access, which on a server is usually absent on "
                                f"purpose. Only a fault if this box is supposed to reach the "
-                               f"internet - check the egress rules before the carrier.",
+                               f"internet - check the egress rules before the carrier."
+                               + _dropped_by(raw),
                 })
             elif _trace_got_there(probes, target):
                 # The path carried probes all the way there and the host itself
@@ -12910,8 +13136,14 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # Collected together: the gateway ping, the target ping and the trace don't
     # depend on each other, and the trace is the long pole. Serial under --soak,
     # where measurement isolation is the point.
+    # The firewall counters, read either side of the probes so a rule that
+    # counted can be attributed to the window they were in flight. Bracketing
+    # them is the whole design: the ruleset on its own says what could happen,
+    # and the pair says what did.
+    _rules_before = cmd_firewall_counters()
     probes = collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles,
                             parallel=not soak)
+    raw["firewall"] = firewall_window(_rules_before, cmd_firewall_counters())
     _check_gateway(raw, findings, gw, probes, arp_entries)
 
     _check_proxy(raw, findings, target)

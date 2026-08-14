@@ -436,6 +436,39 @@ GitHub already renders a table of contents from the heading icon on every
 file - it would have been a row of links above content that fits on two
 screens.
 
+## Settled: the hint table is incomplete on purpose
+
+Each finding card can carry a one-word chip for the thing to go and touch -
+`cable`, `DNS`, `ISP`, `switch port` - from a closed vocabulary of seventeen
+words. `owner` already answers who owns a finding, but it is prose: 106 distinct
+phrases across 137 ranked findings, very nearly one each. The chip is the part
+you can read without reading.
+
+**Ninety-nine of the 137 are classified. The other 38 are deliberately blank and
+are not a backlog.** They are the ones where no single noun is right -
+`latency_wall`, `regression_since_baseline`, `retrans_spurious`, and the
+`unclear - the check couldn't run` family, where the honest hint would be a
+shrug. A missing chip reads as "not classified"; a wrong one reads as an answer,
+and a single word carries more authority than the paragraph under it.
+
+So the rule is: **add one only when the noun is obvious, and never to make the
+table look finished.** `test_a_finding_with_no_hint_gets_no_chip` fails if the
+table is ever completed, which is the tripwire for exactly that impulse.
+
+Two entries exist to contradict the obvious reading and must not be "corrected":
+
+- `duplex_mismatch` and `collisions` point at the **switch port**, not the
+  cable. Climbing error counters look like a cable, and on a full-duplex link
+  they are the port disagreeing about duplex, which no cable will fix. This is
+  the case the README uses to explain why the ranking is the point.
+- `tls_not_yet_valid` points at the **clock**, not the certificate. It is not
+  expired; the device's clock is wrong.
+
+A third guard holds the direction: no hint may face the opposite way from the
+finding it labels, so `the client path` cannot appear on a fault about the way
+out. The vocabulary also gates the way out rather than only the table, so a word
+added without being agreed on renders as nothing rather than as a new word.
+
 ## Settled: why the path view looks the way it does
 
 Thirteen ideas were tried on the path view. Five shipped. The rest are recorded

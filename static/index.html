@@ -519,57 +519,6 @@
     font-family:var(--mono); font-size:11px; color:var(--text-dim);
     text-transform:uppercase; letter-spacing:0.08em; margin:0 0 12px;
   }
-  /* Wrap rather than scroll: a 12-hop trace with long PTR names ran several
-     screens wide, so the end of the path - the part that matters - sat off
-     the right edge. Wrapping keeps the whole path visible at any width. */
-  /* One unbroken bar for the whole path, cut into a segment per hop and
-     sized by what that hop added. It cannot wrap and the segments touch, so
-     neither of the two things that make a path hard to read - a break the eye
-     has to follow, and a gap where nothing happened - is a shape it can take.
-     A hop that added almost nothing is a sliver, which is its honest size;
-     every name and number is still in the boxes underneath. *
-  /* The same bar from the last visit, on the same scale, directly under. Two
-     of them answer "slower than before, and in the same place" without a
-     number being read. */
-  /* A path is read for one thing: which hop the fault lands on. Every node was
-     drawn at the same weight with a different coloured edge, so the answer had
-     to be looked for rather than seen. The clean hops recede into context and
-     the faulting one carries a wash of its own severity - same cards, same
-     layout, the emphasis moved onto the hop that is being reported. The plain
-     background is declared first so a browser too old for color-mix gets the
-     previous appearance rather than a broken one. */
-  /* The clean hops recede only when there is something to recede against.
-     Applied unconditionally it faded the whole chain on the great majority of
-     reports - most paths have no individually faulty hop, so every node went
-     to 55% and nothing was emphasised, which is dimmer than what it replaced
-     and says the opposite of what the fade is for. Scoped to the chain rather
-     than the page so the inbound panel, which scores its one node on its own
-     thresholds, decides separately. A browser without :has() drops the rule
-     and gets the flat chain, which is the safe direction to fail in. */
-  /* The dim greys sit at about 4:1 on the flat panel and a tint takes them
-     under it, so the text on a reported hop uses the lifted grey instead. */
-  /* A marked hop says which it is, so the chain does not rely on hue alone. */
-  /* A line that stops is read before any label on the node it points at. */
-  .hop-arrow.unreached span{
-    display:block; width:22px; border-top:1px dashed var(--text-dim);
-  }
-  .hop-meta .jump{color:var(--warn);}
-  /* Where traffic stops being the site's network and becomes their ISP's -
-     the most useful single boundary on the whole diagram. */
-  .hop-arrow.demarc{
-    flex-direction:column; justify-content:center; gap:2px; padding:0 10px;
-    color:var(--accent); border-left:1px dashed var(--accent-dim);
-    margin-left:6px; padding-left:14px;
-  }
-  .hop-arrow.demarc span{font-size:9px; letter-spacing:0.06em; text-transform:uppercase;}
-  /* Entering a different operator's network - the same kind of boundary as the
-     site edge, one level out. Dimmer, so the site edge stays the loudest. */
-  .hop-arrow.handoff{
-    flex-direction:column; justify-content:center; gap:2px;
-    color:var(--text-dim); border-left:1px dashed var(--border);
-    margin-left:6px; padding-left:14px;
-  }
-  .hop-arrow.handoff span{font-size:9px; letter-spacing:0.04em;}
 
   /* Proportional digits change width as they change value, so a column of
      latencies shifts sideways every time one of them ticks over - the numbers
@@ -577,7 +526,7 @@
      figures fix the advance width; slashed zero keeps a zero from reading as a
      capital O in an interface name or a hex address. Applied only where digits
      are load-bearing, since tabular figures in prose are worse than neither. */
-  .hop-sub, .hop-meta, .verdict .vmeta, .stage, .led-row, .report-meta,
+  .verdict .vmeta, .stage, .led-row, .report-meta, .hrow,
   .finding .tag, .changes .row, pre{
     font-variant-numeric:tabular-nums;
     font-feature-settings:"tnum" 1, "zero" 1;
@@ -852,15 +801,6 @@ const ZONE_WORD = {pass: 'OK', warn: 'DEGRADED', fail: 'FAULT',
 // one on the clean hops would be noise across most of the page, and the
 // clean ones are already the ones being told to look past.
 const HOP_WORD = {warn: ZONE_WORD.warn, crit: ZONE_WORD.fail};
-function sideSeverity(data, side){
-  const z = (data.sides || []).find(s => s.side === side);
-  return ZONE_SEV[z && z.state] || 'ok';
-}
-
-function avgMs(times){
-  if(!times || !times.length) return null;
-  return times.reduce((a,b)=>a+b,0) / times.length;
-}
 
 // Where each finding stands to the verdict. The words come from the report so
 // the page and the terminal say the same thing.
@@ -1063,7 +1003,23 @@ function renderDiagnosis(data, opts){
   // One hop list, drawn the same way wherever it lands. The way out and the
   // reference probe are the same measurement of two different destinations, and
   // two copies of this markup would be two chances for them to diverge.
-  const hopList = col => `<div class="hops">${col.hops.map(h => `
+  // The whole honest footnote for a traced path, on the list rather than in it.
+  // Which destination, why that one out of however many the side holds, that a
+  // hop time is a round trip, and what the count back assumed. None of it is
+  // worth a line on a report meant to be read in a hurry, and all of it is
+  // worth being able to recover - a reading whose assumption cannot be
+  // recovered is folklore.
+  //
+  // On the list, not on the counts underneath it: those only appear when the
+  // peer answered ICMP, so hanging this there hid the choice on every report
+  // where it did not.
+  const hopWhy = col => [
+    `Traced to ${col.target}` + (col.picked ? `, ${col.picked}` : ''),
+    col.of > 1 ? `out of ${col.of} connections on this side` : '',
+    'each time is a round trip to that hop, out and back together, which a traceroute cannot separate',
+    col.hops_in ? `the ${col.hops_in} back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}` : '',
+  ].filter(Boolean).join(' \u00b7 ') + '.';
+  const hopList = col => `<div class="hops" title="${escapeHtml(hopWhy(col))}">${col.hops.map(h => `
       <div class="hrow ${h.state === 'ok' ? '' : h.state}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
         <span class="hh">${escapeHtml(h.host)}</span>
@@ -1074,7 +1030,7 @@ function renderDiagnosis(data, opts){
       </div>${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
           h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
-      ${col.hops_in ? `<div class="pboth" title="Each time above is a round trip to that hop, out and back together - a traceroute cannot separate them. The count back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}.">${
+      ${col.hops_in ? `<div class="pboth">${
         col.hops.length} out, ${col.hops_in} back${
         col.hops_in !== col.hops.length ? ' \u00b7 asymmetric' : ''}</div>` : ''}
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;

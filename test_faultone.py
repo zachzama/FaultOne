@@ -6286,23 +6286,46 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         self.assertEqual(peers & set(pinged), set(),
                          "a side's peer was pinged on --quick")
 
-    def test_the_assumption_is_reachable_without_being_printed(self):
-        """The count is two words on the page - "2 out, 7 back" - because the
-        report is meant to be read quickly and a paragraph explaining TTL is not
-        that. But the number rests on a guess about where the TTL started, and a
-        reading whose assumption cannot be recovered is folklore.
+    def test_everything_the_hops_rest_on_is_reachable_from_them(self):
+        """A traced path carries four things a reader may need and none of
+        which is worth a line on a report meant to be read quickly: which
+        destination was traced, why that one out of however many the side
+        holds, that a hop time is a round trip, and what the count back assumed
+        about where the TTL started.
 
-        So it is on the element, not in the prose: hover and it says what it
-        assumed and why the two counts are not the same measurement.
+        They live on the hop list. The choice of peer was computed, tested and
+        documented for a while with nowhere on the page showing it, because the
+        line that used to was removed for over-explaining and nothing took its
+        place.
+
+        On the list rather than on the counts underneath it: those only render
+        when the peer answered ICMP, which for internet clients is the
+        exception, so hanging this there hid the choice on most reports.
         """
         src = nd.VIEWER_TEMPLATE
-        i = src.index('class="pboth"')
-        block = src[max(0, i - 400):i + 400]
-        self.assertIn("round trip", block, "the tooltip no longer says what the "
-                                           "hop timings are")
-        self.assertIn("ttl_assumed", block)
-        self.assertIn("ttl_seen", block)
-        self.assertIn("out, ", block)
+        i = src.index("const hopWhy")
+        block = src[i:src.index("const hopList", i)]
+        for needed in ("col.target", "col.picked", "col.of", "round trip",
+                       "col.ttl_assumed", "col.ttl_seen"):
+            with self.subTest(part=needed):
+                self.assertIn(needed, block)
+        self.assertIn('class="hops" title="', src,
+                      "the footnote is not attached to the hop list")
+
+    def test_the_choice_of_peer_is_recoverable_when_the_peer_is_silent(self):
+        """The common case on a forward proxy. Nothing about which destination
+        was traced may depend on whether that destination answers a ping."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        col = traced_side(rep)
+        self.assertIsNone(col.get("hops_in"), "this fixture answers no ping")
+        self.assertTrue(col.get("picked"), "the choice was not recorded")
+        src = nd.VIEWER_TEMPLATE
+        i = src.index("const hopWhy")
+        self.assertNotIn("hops_in ?", src[i:src.index("col.target", i)],
+                         "the whole footnote is behind the ping having answered")
     def hints(self):
         return nd.FINDING_HINT
 
@@ -6624,13 +6647,16 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         direction, and the page says which they are where they are drawn.
         """
         src = nd.VIEWER_TEMPLATE
-        i = src.index('class="pboth"')
-        block = src[i:src.index("</div>", i)]
+        i = src.index("const hopWhy")
+        block = src[i:src.index("const hopList", i)]
         self.assertIn("round trip", block,
                       "the hop timings do not say they are round trips")
         # Under the timings, not above them: it describes what has just been
         # read, and above the list it was a preamble to numbers not yet seen.
         self.assertLess(src.index('class="hrow'), src.index('class="pboth"'))
+        # And not on the page at all - it is a footnote, not a sentence the
+        # reader has to step over on the way to the numbers.
+        self.assertNotIn("round trip", src[src.index('class="pboth"'):][:400])
 
     def test_a_hop_with_no_timing_says_so_rather_than_printing_null(self):
         """Hops traced to a backend come straight from the parser and carry only
@@ -13292,8 +13318,14 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         rule = template.split("font-variant-numeric:tabular-nums", 1)
         self.assertEqual(len(rule), 2, "tabular figures are gone")
         selectors = rule[0].rsplit("}", 1)[1]
-        for carries_numbers in (".hop-sub", ".hop-meta", ".verdict .vmeta", "pre"):
-            self.assertIn(carries_numbers, selectors)
+        # .hrow is where the path's numbers live now: the hop chain that used
+        # to carry them in .hop-sub and .hop-meta is gone, and its rows moved
+        # inside the column that names the destination.
+        for carries_numbers in (".hrow", ".verdict .vmeta", "pre"):
+            self.assertIn(carries_numbers, selectors,
+                      "the element carrying the path's numbers is not in the "
+                      "tabular-figures rule, so a column of latencies shifts "
+                      "sideways as the values tick over")
         # The message text is prose and must not be caught by it.
         self.assertNotIn(".finding .msg", selectors)
 

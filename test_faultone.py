@@ -6394,6 +6394,62 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         self.assertEqual(peers & set(pinged), set(),
                          "a side's peer was pinged on --quick")
 
+    def test_the_site_edge_is_drawn_where_the_path_leaves_the_site(self):
+        """The boundary between this site's network and somebody else's is the
+        one annotation that answers who to escalate to, and the page lost it
+        when the hop chain went. The terminal never stopped drawing it.
+
+        The rule is the one the path pipeline already applies to the target's
+        trace: the first hop that is public, or the carrier's own NAT range.
+        Asked again where the hops are, because a path traced to a peer comes
+        straight from the parser and carries none of that enrichment.
+        """
+        mod = fresh()
+        setup, kwargs = S["latency_wall"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        col = rep["probe_path"]
+        edges = [h["hop"] for h in col["hops"] if h["site_edge"]]
+        self.assertEqual(edges, [rep["demarc_hop"]],
+                         "the column and the report disagree about where the "
+                         "site ends")
+        # And the page draws it. Computing a boundary nothing renders is how
+        # `picked` spent a day being right and invisible.
+        self.assertIn("h.site_edge ?", nd.VIEWER_TEMPLATE,
+                      "the site edge is worked out and never drawn")
+        self.assertIn("past here is the provider's network", nd.VIEWER_TEMPLATE)
+
+    def test_a_path_that_never_leaves_the_site_has_no_edge(self):
+        """Every hop private means the trace stayed inside, and drawing a
+        boundary there would invent one."""
+        col = nd.build_probe_column(
+            [{"hop": 1, "display": "10.0.0.1", "times_ms": [1.0]},
+             {"hop": 2, "display": "10.0.0.90", "times_ms": [2.0]}], "10.0.0.90")
+        self.assertEqual([h["site_edge"] for h in col["hops"]], [False, False])
+
+    def test_only_the_first_crossing_is_marked(self):
+        """Everything past the edge is also outside it. Marking each of them
+        would draw the boundary once per hop."""
+        col = nd.build_probe_column(
+            [{"hop": 1, "display": "10.0.0.1", "times_ms": [1.0]},
+             {"hop": 2, "display": "203.0.113.1", "times_ms": [2.0]},
+             {"hop": 3, "display": "203.0.113.9", "times_ms": [3.0]}], "203.0.113.9")
+        self.assertEqual([h["site_edge"] for h in col["hops"]],
+                         [False, True, False])
+
+    def test_the_distance_no_longer_spends_a_line_on_its_own_caveat(self):
+        """"7 hops away" is the reading. That it was counted from a reply
+        assuming a starting TTL is the caveat behind it, and a caveat given
+        equal billing to the number it qualifies is what makes a report long.
+        It went the same way as the round-trip note: reachable, not printed.
+        """
+        src = nd.VIEWER_TEMPLATE
+        self.assertNotIn("ttlnote", src, "the caveat still has a line of its own")
+        # The side's heading, not the probe column's, which has no distance.
+        i = src.index('class="pfacts"${side.hops_in')
+        self.assertIn("ttl_assumed", src[i:i + 400],
+                      "and now it is not reachable at all")
+
     def test_everything_the_hops_rest_on_is_reachable_from_them(self):
         """A traced path carries four things a reader may need and none of
         which is worth a line on a report meant to be read quickly: which

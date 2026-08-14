@@ -6980,6 +6980,23 @@ def build_probe_column(hops, target, baseline_path=None):
         row["share_pct"] = (round(row["delta_ms"] / total * 100)
                             if row["delta_ms"] and total else None)
 
+    # Where this site's network stops and somebody else's begins: the first hop
+    # that is public, or the carrier's own NAT range if there is one. The same
+    # rule the path pipeline applies to the target's trace, asked again here so
+    # that a path traced to a peer gets it too - those hops come straight from
+    # the parser and carry none of that enrichment.
+    #
+    # It is the most useful single boundary on a path, because it is the one
+    # that answers who to escalate to, and the page lost it with the hop chain.
+    for row in rows:
+        host = row["host"] or ""
+        private = is_private_ip(host) if host and host != "*" else None
+        row["site_edge"] = bool(private is False
+                                or (host.startswith("100.") and private))
+    first = next((r for r in rows if r["site_edge"]), None)
+    for row in rows:
+        row["site_edge"] = row is first
+
     # The same path on the last visit, where there was one. A line rather than a
     # second ribbon: it is a comparison, not a measurement, and it only exists
     # on runs given --baseline.
@@ -12785,10 +12802,15 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     font-family:var(--mono); font-size:12px;}
   .pcol-hd .pwho{color:var(--text);}
   .pcol-hd .pfacts{color:var(--text-dim); font-size:11px; text-align:right;}
-  /* The assumption behind a hop count, kept with it. A host starting at 255
-     read as starting at 64 gives a nonsense number, and a reader who can see
-     what was assumed can tell. */
-  .pcol-hd .ttlnote{opacity:.65;}
+  /* Where this site's network stops and somebody else's begins, drawn as a
+     place in the path because that is what it is. The single most useful
+     annotation on a path: it is the one that says who to escalate to. */
+  .edge{display:flex; align-items:center; gap:8px; margin:5px 0 4px 46px;
+    font-family:var(--mono); font-size:9.5px; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--text-dim); opacity:.8;}
+  .edge:before, .edge:after{content:""; flex:1; height:1px;
+    background:var(--border);}
+  .edge span{white-space:nowrap;}
   .plane{padding:13px 14px;}
   .plane + .plane{border-top:1px solid var(--border);}
   .plane .ptop{display:flex; justify-content:space-between; align-items:baseline;
@@ -13545,6 +13567,7 @@ function renderDiagnosis(data, opts){
     col.hops_in ? `the ${col.hops_in} back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}` : '',
   ].filter(Boolean).join(' \u00b7 ') + '.';
   const hopList = col => `<div class="hops" title="${escapeHtml(hopWhy(col))}">${col.hops.map(h => `
+      ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
       <div class="hrow ${h.state === 'ok' ? '' : h.state}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
         <span class="hh">${escapeHtml(h.host)}</span>
@@ -13621,9 +13644,9 @@ function renderDiagnosis(data, opts){
     const traced = op ? hopList(op) : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
-          <span class="pfacts">${named(side.peer)}<br>${escapeHtml(facts)}${
-            side.hops_in ? `<br><span class="ttlnote">counted from a reply that left at ttl ${
-              side.ttl_assumed}</span>` : ''}</span></div>
+          <span class="pfacts"${side.hops_in
+            ? ` title="The distance is counted from a reply that arrived here, assuming it left at ttl ${side.ttl_assumed}. Each router on the way decrements it, so the difference is the hops it crossed."`
+            : ''}>${named(side.peer)}<br>${escapeHtml(facts)}</span></div>
         ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');

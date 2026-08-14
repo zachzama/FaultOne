@@ -6672,6 +6672,143 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhereTheTraceStoppedFollowingOnePath(unittest.TestCase):
+    """Classic traceroute varies the destination port on every probe, and that
+    port is part of the flow identifier a per-flow load balancer hashes on. So
+    under ECMP each probe can take a different branch, and the numbered list
+    stops being a path and becomes a sample of several. Paris traceroute exists
+    to fix that and needs raw sockets to do it.
+
+    It is visible without them. Several routers answering for one hop is the
+    fan-out happening in the output, and the parser has kept those since it
+    learned to read continuation lines. Nothing ever read them back: the
+    terminal printed the extra names and no conclusion was allowed to depend on
+    them, while three conclusions went on reading consecutive hops as adjacent.
+
+    What changes is how hard each claim is made, never whether the reading is
+    reported. The numbers are real either way.
+    """
+
+    FAN = ("    10.2.0.2 (10.2.0.2)  3.2 ms\n")
+
+    def trace_says(self, code, text, want):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        mod.cmd_traceroute = lambda target: {"ok": True, "cmd": "traceroute",
+                                             "stdout": text}
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next((f for f in rep["findings"] if f["code"] == want), None)
+        return rep, found
+
+    def test_the_extra_responders_are_read_back_at_all(self):
+        hops = nd.parse_traceroute_hops(
+            " 1  10.0.0.1  1.0 ms\n"
+            " 2  10.2.0.1  3.0 ms\n" + self.FAN +
+            " 3  10.3.0.1  4.0 ms\n")
+        self.assertEqual(nd.balanced_hops(hops), [2])
+
+    def test_a_fan_out_somewhere_else_does_not_count(self):
+        """Whether an observation about two hops survives depends on what
+        happened between them. A fan-out past the target says nothing about a
+        jump at hop 2."""
+        self.assertEqual(nd.balanced_between([9], 2, 3), [])
+        self.assertEqual(nd.balanced_between([3], 2, 5), [3])
+        self.assertEqual(nd.balanced_between([3], 5, 2), [3], "either order")
+        self.assertEqual(nd.balanced_between(None, 1, 9), [])
+
+    # ---- a router answering twice ----------------------------------------
+
+    LOOP = (" 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+            " 2  10.1.0.1 (10.1.0.1)  2.0 ms\n"
+            " 3  10.2.0.1 (10.2.0.1)  3.0 ms\n")
+    LOOP_TAIL = (" 4  10.2.0.9 (10.2.0.9)  4.0 ms\n"
+                 " 5  10.1.0.1 (10.1.0.1)  9.0 ms\n")
+
+    def test_one_path_still_calls_it_a_loop(self):
+        """The change must not cost the tool the finding. With a single path
+        there is nothing else a router answering twice can be."""
+        _rep, found = self.trace_says("loop", self.LOOP + self.LOOP_TAIL, "loop")
+        self.assertEqual(found["severity"], "critical")
+        self.assertIn("Routing loop", found["message"])
+
+    def test_a_fan_out_between_the_repeats_makes_it_a_warning(self):
+        """A router answering twice is a loop, or it is one router that two
+        branches of an unequal-length path both reach. Those are identical in a
+        trace that changes flow on every probe, and calling it critical is a
+        claim the measurement cannot carry."""
+        _rep, found = self.trace_says(
+            "loop", self.LOOP + self.FAN + self.LOOP_TAIL, "loop")
+        self.assertEqual(found["severity"], "warning")
+        self.assertIn("either a routing loop or", found["message"])
+        self.assertIn("hop 3", found["message"], "it has to say where it fanned out")
+
+    def test_the_hop_marked_on_the_page_matches_the_finding(self):
+        """The severity travels with the hop so the drawing and the text cannot
+        disagree, which is the whole reason it is carried rather than derived
+        twice."""
+        rep, found = self.trace_says(
+            "loop", self.LOOP + self.FAN + self.LOOP_TAIL, "loop")
+        marked = [h for h in rep["hops"] if h.get("blame")]
+        self.assertTrue(marked, "the loop hops are not marked at all")
+        for hop in marked:
+            self.assertEqual(hop["blame"]["severity"], found["severity"])
+
+    # ---- two private networks --------------------------------------------
+
+    NAT = (" 1  192.168.1.1 (192.168.1.1)  1.0 ms\n"
+           " 2  10.50.0.1 (10.50.0.1)  2.0 ms\n")
+    NAT_FAN = "    10.50.0.2 (10.50.0.2)  2.2 ms\n"
+    NAT_TAIL = " 3  203.0.113.1 (203.0.113.1)  9.0 ms\n"
+
+    def test_two_subnets_in_series_is_unqualified_on_one_path(self):
+        _rep, found = self.trace_says("double_nat", self.NAT + self.NAT_TAIL,
+                                      "double_nat")
+        self.assertNotIn("side by side", found["message"])
+
+    def test_a_fan_out_before_the_edge_takes_in_series_away(self):
+        """"In series" is the claim, and two branches each holding their own
+        subnet look exactly like two subnets one behind the other once the
+        answers are written down as a numbered list."""
+        _rep, found = self.trace_says(
+            "double_nat", self.NAT + self.NAT_FAN + self.NAT_TAIL, "double_nat")
+        self.assertIn("side by side", found["message"])
+        self.assertEqual(found["severity"], "warning", "the reading itself is unchanged")
+
+    # ---- the jump between two hops ---------------------------------------
+
+    WALL = (" 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+            " 2  100.64.0.1 (100.64.0.1)  620.0 ms\n")
+    WALL_FAN = "    100.64.0.2 (100.64.0.2)  621.0 ms\n"
+    WALL_TAIL = " 3  8.8.8.8 (8.8.8.8)  640.0 ms\n"
+
+    def test_a_jump_on_one_path_is_the_cost_of_that_link(self):
+        _rep, found = self.trace_says("latency_wall", self.WALL + self.WALL_TAIL,
+                                      "latency_wall")
+        self.assertNotIn("different branches", found["message"])
+
+    def test_a_jump_across_a_fan_out_is_the_gap_between_two_routes(self):
+        """The difference between two hops is the cost of the link between them
+        only if there is a link between them."""
+        _rep, found = self.trace_says(
+            "latency_wall", self.WALL + self.WALL_FAN + self.WALL_TAIL, "latency_wall")
+        self.assertIn("different branches", found["message"])
+        self.assertIn("real either way", found["message"],
+                      "the measurement stands; only its attribution moves")
+
+    def test_a_fan_out_past_the_jump_leaves_the_jump_alone(self):
+        """The window is the pair the difference was taken across, not the
+        whole trace. A path that fans out after hop 3 says nothing about
+        whether hops 1 and 2 are adjacent, and qualifying the jump on it would
+        be hedging a reading that is not in doubt.
+        """
+        _rep, found = self.trace_says(
+            "latency_wall",
+            self.WALL + self.WALL_TAIL + "    203.0.113.44 (203.0.113.44)  641.0 ms\n",
+            "latency_wall")
+        self.assertNotIn("different branches", found["message"])
+
+
 class TestNamingTheProcessBehindASocket(unittest.TestCase):
     """Six findings blamed "a service on this device" and could not say which.
 

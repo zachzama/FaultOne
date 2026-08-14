@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **34** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **164** | Distinct conclusions it can reach and state in plain language. 137 are faults; 27 are context, like which switch port you're on. |
 | **Ranked causes** | **137** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1274 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1284 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 164 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1444,6 +1444,42 @@ thing there is to the other direction.
 
 A box that opens no connections of its own has nothing to trace, and there
 the probe to `--target` really is its way out, so it keeps one.
+
+### When the numbered list is not one path
+
+A traceroute is a column of hop numbers, which reads as a route. It is a
+set of separate probes, and whether they all took the same route is a
+question the ordinary tool cannot answer about itself.
+
+Classic traceroute varies the destination port on every probe, because that
+is how it matches a reply to the probe that caused it. That port is part of
+the flow identifier a per-flow load balancer hashes on, so under ECMP -
+ordinary in carrier cores, universal in cloud fabrics - each probe can be
+sent down a different branch. The list is then a sample of several paths
+written out as though it were one. Paris traceroute exists to fix exactly
+this, by holding the flow constant and varying something the balancer does
+not look at, and doing that needs raw sockets.
+
+The fan-out is visible without them. When several routers answer for one
+hop, the output carries all of them, and that is the balancer being caught
+in the act. Three conclusions here read consecutive hops as adjacent, and
+where the path fanned out between them they are not:
+
+| Conclusion | What a fan-out costs it |
+|---|---|
+| a routing loop | One router answering at two hop numbers is a loop, or it is one router that two branches of an unequal-length path both reach |
+| two private networks in series | Two branches each holding their own subnet look the same as two subnets one behind the other |
+| a latency jump | The difference between two hops is the cost of the link between them only if there is a link between them |
+
+Each of those says so in its own words now, and the loop drops from a fault
+to something to confirm, because a routing loop stops traffic dead and the
+report is being written on a box whose traffic is arriving.
+
+What does not change is the reading. The jump is the same size, the two
+subnets are both there, the router really did answer twice. Only the claim
+about what sits between them is softened, and only when the trace shows it
+fanning out **between the two hops in question**: a path that splits after
+hop 6 says nothing about whether hops 1 and 2 are adjacent.
 
 ### The 34 things it inspects
 
@@ -2069,7 +2105,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1274 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1284 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3557,7 +3593,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1274 tests, no dependencies, no network, a few seconds, so they run
+1284 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

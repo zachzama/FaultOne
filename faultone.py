@@ -5334,6 +5334,28 @@ def parse_traceroute_hops(output):
     return hops
 
 
+def balanced_hops(hops):
+    """Hop numbers where more than one router answered.
+
+    The parser has kept these since it learned to read continuation lines, and
+    nothing has ever read them back: the terminal prints the extra names and no
+    conclusion has been allowed to depend on them. That is the collected and
+    discarded case, and this is what it is worth.
+    """
+    return [h["hop"] for h in hops or [] if h.get("also")]
+
+
+def balanced_between(balanced, first, last):
+    """Did the path fan out anywhere between two hop numbers, inclusive.
+
+    Whether an observation about two hops survives depends on what happened
+    between them, not on whether the trace load balanced somewhere else
+    entirely: a fan-out past the target says nothing about a jump at hop 2.
+    """
+    lo, hi = min(first, last), max(first, last)
+    return [h for h in balanced or [] if lo <= h <= hi]
+
+
 def is_private_ip(ip):
     """RFC1918 / link-local / loopback / CGNAT. Used to work out where traffic
     stops being the site's network and starts being their ISP's."""
@@ -5473,6 +5495,21 @@ def annotate_hops(hops, gateway=None, target=None):
                 private_subnets.append(sn)
     double_nat = private_subnets if len(private_subnets) > 1 else []
 
+    # Where the trace stopped following one path.
+    #
+    # Classic traceroute varies the destination port on every probe, which is
+    # part of the flow identifier a per-flow load balancer hashes on. So under
+    # ECMP - ordinary in carrier cores and universal in cloud fabrics - each
+    # probe can take a different branch, and the numbered list stops being a
+    # path and becomes a sample of several. Paris traceroute exists to fix
+    # exactly this and needs raw sockets to do it.
+    #
+    # It is visible without them. Several routers answering for one hop is that
+    # happening, and the parser has always kept them. Three conclusions here
+    # read consecutive hops as adjacent, and where the list is a sample of
+    # several paths they are not.
+    balanced = balanced_hops(hops)
+
     # The same router answering at two hop numbers is a loop (or a path that
     # doubles back), which stalls traffic well before it reaches the target.
     seen, loop_at = {}, None
@@ -5513,6 +5550,7 @@ def annotate_hops(hops, gateway=None, target=None):
     return {
         "networks_crossed": networks,
         "double_nat": double_nat,
+        "balanced_hops": balanced,
         "loop_at": loop_at,
         "cgnat_hop": cgnat_hop,
         "demarc_hop": demarc,
@@ -11161,24 +11199,49 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
 
     if path_insight.get("loop_at"):
         lp = path_insight["loop_at"]
-        # Both ends of the circle, since the loop is the pair and marking one
-        # of them would read as a single bad hop rather than traffic going
-        # back where it came from.
+        # A router answering twice is a loop, or it is one router that two
+        # branches of an unequal-length path both reach. The two are identical
+        # in a trace that changes flow on every probe, which is what this one
+        # does, and telling them apart is the whole reason Paris traceroute
+        # exists. So the fan-out between the repeats decides how hard the claim
+        # can be made: with one path there is nothing else this can be, and
+        # with several the alternative is at least as likely as the loop.
+        fanned = balanced_between(path_insight.get("balanced_hops"),
+                                  lp["hops"][0], lp["hops"][1])
+        severity = "warning" if fanned else "critical"
         for hop in hops:
             if hop.get("hop") in lp["hops"]:
-                hop["blame"] = {"code": "loop", "severity": "critical"}
+                hop["blame"] = {"code": "loop", "severity": severity}
         findings.append({
-            "severity": "critical",
+            "severity": severity,
             "code": "loop",
             "layer": 3,
-            "message": f"Routing loop: {lp['host']} answers at both hop {lp['hops'][0]} and hop "
-                       f"{lp['hops'][1]}. Traffic is circling between routers instead of moving "
-                       f"toward {target}, and will die when the TTL runs out. This is a routing "
-                       f"misconfiguration upstream, not a fault on this device.",
+            "message": (
+                f"Routing loop: {lp['host']} answers at both hop {lp['hops'][0]} and hop "
+                f"{lp['hops'][1]}. Traffic is circling between routers instead of moving "
+                f"toward {target}, and will die when the TTL runs out. This is a routing "
+                f"misconfiguration upstream, not a fault on this device."
+                if not fanned else
+                f"{lp['host']} answers at both hop {lp['hops'][0]} and hop {lp['hops'][1]}, "
+                f"which is either a routing loop or one router that two branches of the "
+                f"path both reach. More than one router answered at hop"
+                f"{'s' if len(fanned) > 1 else ''} "
+                f"{', '.join(str(h) for h in fanned)}, so the path fans out between those "
+                f"two points and this trace changes flow on every probe - which means the "
+                f"hops either side of the repeat are not necessarily on one path. A real "
+                f"loop stops traffic dead; if {target} is answering at all, this is the "
+                f"second reading. Confirm with a trace that holds the flow constant "
+                f"before escalating it as a loop."),
         })
 
     if path_insight.get("double_nat"):
         subnets = path_insight["double_nat"]
+        # "In series" is the claim, and a fan-out before the edge is what takes
+        # it away: two branches of a load-balanced path each holding their own
+        # subnet look exactly like two subnets one behind the other once the
+        # answers are written down as a numbered list.
+        fanned = balanced_between(path_insight.get("balanced_hops"), 1,
+                                  path_insight.get("demarc_hop") or len(hops) or 1)
         findings.append({
             "severity": "warning",
             "code": "double_nat",
@@ -11199,7 +11262,13 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                        f"only routes, and several internal subnets are ordinary in "
                        f"themselves. If it is NAT, it breaks inbound connections and port "
                        f"forwarding, and either way it makes an intermittent fault harder "
-                       f"to place - there is a second device in the path to rule out.",
+                       f"to place - there is a second device in the path to rule out."
+                       + (f" Read that carefully here: more than one router answered at "
+                          f"hop{'s' if len(fanned) > 1 else ''} "
+                          f"{', '.join(str(h) for h in fanned)}, so these two networks may "
+                          f"be side by side on a load-balanced path rather than one behind "
+                          f"the other."
+                          if fanned else ""),
         })
 
     if path_insight.get("cgnat_hop"):
@@ -11246,6 +11315,13 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             if hop.get("hop") == wj["hop"]:
                 hop["blame"] = {"code": "latency_wall", "severity": "warning"}
                 break
+        # The jump is the difference between this hop's time and the one above
+        # it, which is a cost of the link between them only if there is a link
+        # between them. Where the path fans out across the pair, the two times
+        # can be from different branches and the difference is the gap between
+        # two routes rather than a wall on one.
+        fanned = balanced_between(path_insight.get("balanced_hops"),
+                                  max(1, wj["hop"] - 1), wj["hop"])
         findings.append({
             "severity": "warning",
             "code": "latency_wall",
@@ -11257,7 +11333,12 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                  f"Latency jumps {wj['delta_ms']:.0f}ms at hop {wj['hop']} "
                  f"({wj['host']}), {side}. ")
                 + "Everything past that hop inherits the delay, so the hops after it "
-                  "looking slow is expected rather than separate."),
+                  "looking slow is expected rather than separate."
+                + (" More than one router answered across that pair of hops, so the two "
+                   "times may be from different branches of a load-balanced path: the "
+                   "jump is then the difference between two routes rather than the cost "
+                   "of one link, and the size of it is real either way."
+                   if fanned else "")),
         })
     return hops, path_insight, path_source
 

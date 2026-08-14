@@ -7145,6 +7145,16 @@ def build_path_legs(raw=None, sides=None):
 
 # Which box the verdict blames, where that is not the box its direction lights.
 #
+# Membership is not a judgement call: it is every finding whose owner names this
+# box, or something running on it, as the thing at fault. The suite derives that
+# list from the owner text and fails if this set is not exactly it.
+#
+# The first version of this was built by hand from the findings that said "not
+# the network", which read like the right filter and was not: egress_blocked
+# owns this box's own policy without using the phrase, so the blocked-egress
+# report went on saying "no outbound internet from here" over a box drawn OK.
+# Twelve of the nineteen were missed that way.
+#
 # FINDING_SIDE answers which direction stopped working. The owner answers whose
 # fault it is. For most findings those are the same box; for these they are not,
 # and the panel drew only the first - so the port-exhaustion report coloured the
@@ -7155,13 +7165,28 @@ def build_path_legs(raw=None, sides=None):
 # of descriptors really does break the way in: the direction is right and is
 # kept. What is added is who owns it.
 CAUSE_OWNED_BY_BOX = frozenset({
-    "ephemeral_ports_low",       # this box's port range, breaks opening outward
-    "fd_pressure",               # this box's descriptor limit, breaks accepting
-    "reqq_full_drops",
-    "syncookies_live",
-    "syncookies_historical",
-    "own_service_silent",        # the service is on this box; the network is not
+    # The way in: something on this box turns clients away, or answers them
+    # wrongly, or runs out of room to accept them.
+    "accept_overflow_historical",
+    "accept_overflow_live",
+    "close_wait_backlog",
+    "fd_pressure",
     "own_service_erroring",
+    "own_service_silent",
+    "own_tls_expired",
+    "own_tls_expiring",
+    "own_tls_handshake_failed",
+    "own_tls_untrusted",
+    "reqq_full_drops",
+    "syn_recv_backlog",
+    "syncookies_historical",
+    "syncookies_live",
+    # The way out: something on this box stops it reaching what it needs.
+    "dns_no_resolvers",
+    "egress_blocked",
+    "ephemeral_ports_low",
+    "no_gateway",
+    "tls_not_yet_valid",
 })
 
 def cause_owner_side(code):
@@ -12791,8 +12816,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  /* Two heads stacked. line-height:1 still leaves the glyphs' own leading
+     between them, which reads as a gap rather than as one arrow split in two,
+     so the stack is tightened until they sit as a pair. */
   .zarrow.split{flex-direction:column; justify-content:center;
-    line-height:1; font-size:15px;}
+    line-height:.72; font-size:15px;}
   .zarrow.split .pass{color:var(--ok);}
   .zarrow.split .fail{color:var(--crit);}
   /* A direction with no evidence either way. Muted rather than coloured,

@@ -176,8 +176,11 @@
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  /* Two heads stacked. line-height:1 still leaves the glyphs' own leading
+     between them, which reads as a gap rather than as one arrow split in two,
+     so the stack is tightened until they sit as a pair. */
   .zarrow.split{flex-direction:column; justify-content:center;
-    line-height:1; font-size:15px;}
+    line-height:.72; font-size:15px;}
   .zarrow.split .pass{color:var(--ok);}
   .zarrow.split .fail{color:var(--crit);}
   /* A direction with no evidence either way. Muted rather than coloured,

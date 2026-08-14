@@ -6581,51 +6581,35 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
     the way out. What was missing is who owns it.
     """
 
-    # Findings whose owner disclaims the network and whose direction is
-    # nonetheless right, because the thing being blamed does sit on that side.
-    # Kept here rather than in the tool: it is a record of a review, and nothing
-    # in the tool reads it.
-    REVIEWED_AND_RIGHT = frozenset({
-        "connections_reset_by_peer",   # the far end, and the far end is upstream
-        "destination_unresponsive",    # the destination, likewise
-        "own_service_upstream_error",  # what this box depends on
-        "tls_expired",                 # the service being dialled
-        "tls_handshake_slow",
-    })
+    # The owner's subject, when it is this box or something running on it.
+    # Derived rather than listed: a hand-built set was how twelve of these got
+    # missed, because the filter used was "says not the network" and
+    # egress_blocked owns this box's own policy without saying it.
+    OWNED_BY_BOX = re.compile(
+        r"^(this (box|device)('s)?\b|an application on this device"
+        r"|the service on this box)")
 
-    DISCLAIMS = ("not the network", "not the path", "not this device",
-                 "not this box")
+    def owned_by_the_box(self):
+        """Every finding whose owner blames this box, and which faces a side."""
+        return {code for code, owner, _h, _w in nd.VERDICT_RULES
+                if nd.finding_side(code) != "local"
+                and self.OWNED_BY_BOX.match(owner.lower())}
 
-    def disclaiming(self):
-        """Findings that say the network is not to blame, and face a side."""
-        out = {}
-        for code, owner, _h, _w in nd.VERDICT_RULES:
-            if any(d in owner.lower() for d in self.DISCLAIMS) \
-                    and nd.finding_side(code) != "local":
-                out[code] = owner
-        return out
-
-    def test_every_finding_that_disclaims_the_network_has_been_classified(self):
-        """The guard that stops this falling behind. The wording cannot tell the
-        two cases apart, so each one has to be put in a list by hand, and a new
-        finding of that shape fails here until somebody does."""
-        unclassified = sorted(set(self.disclaiming())
-                              - nd.CAUSE_OWNED_BY_BOX - self.REVIEWED_AND_RIGHT)
-        self.assertEqual(unclassified, [],
-                         "these disclaim the network and face a side, and "
-                         "nobody has said whether that side is the owner: %s"
-                         % unclassified)
-
-    def test_no_finding_is_in_both_lists(self):
-        self.assertEqual(
-            sorted(nd.CAUSE_OWNED_BY_BOX & self.REVIEWED_AND_RIGHT), [])
+    def test_the_set_is_exactly_the_findings_that_blame_this_box(self):
+        """Both directions. A finding whose owner names this box and is missing
+        from the set draws a green box under a verdict blaming it, which is the
+        contradiction this exists to remove. One in the set whose owner names
+        something else moves the blame to the wrong box, which is worse.
+        """
+        derived = self.owned_by_the_box()
+        self.assertEqual(sorted(derived - nd.CAUSE_OWNED_BY_BOX), [],
+                         "these blame this box and are not listed")
+        self.assertEqual(sorted(nd.CAUSE_OWNED_BY_BOX - derived), [],
+                         "these are listed and do not blame this box")
 
     def test_neither_list_names_a_finding_that_does_not_exist(self):
         codes = {c for c, _o, _h, _w in nd.VERDICT_RULES}
-        for name, listed in (("owned by the box", nd.CAUSE_OWNED_BY_BOX),
-                             ("reviewed", self.REVIEWED_AND_RIGHT)):
-            with self.subTest(list=name):
-                self.assertEqual(sorted(listed - codes), [])
+        self.assertEqual(sorted(nd.CAUSE_OWNED_BY_BOX - codes), [])
 
     def test_the_box_that_owns_it_lights_even_with_nothing_facing_it(self):
         """The case this exists for.

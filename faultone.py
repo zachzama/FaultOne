@@ -2107,6 +2107,61 @@ PING_STATS_RE = re.compile(
     r"=\s*([\d.]+)\s*/\s*([\d.]+)\s*/\s*([\d.]+)(?:\s*/\s*([\d.]+))?\s*ms")
 
 
+# The hop count on the way *in*, off the TTL of a ping reply.
+#
+# A traceroute only goes outward. Nothing on this box can watch the route a
+# client's packets took to arrive - which is why the inbound side has always
+# been measured on the connections themselves rather than drawn as a path.
+#
+# But every ping reply carries the TTL it arrived with, and TTL is decremented
+# by each router on the way here. The sender starts it at a well-known value, so
+# the difference is the number of hops that reply crossed getting to us. The
+# tool has been running pings and keeping min/avg/max off them since the
+# beginning, and throwing this away.
+#
+# What it measures is the path *from that host to this one*, which is the
+# direction a traceroute cannot see and the one worth having.
+PING_TTL_RE = re.compile(r"\bttl[=\s](\d{1,3})\b", re.I)
+
+# What senders start it at. Almost every stack uses one of these three, and a
+# reply cannot have arrived with more than it started with - so the smallest of
+# them that is not below what arrived is the one it started at.
+TTL_INITIALS = (64, 128, 255)
+
+
+def parse_ping_ttl(ping_result):
+    """The TTL a ping reply arrived with, if the output carried one.
+
+    Linux prints `ttl=57`, BSD and macOS the same, Windows `TTL=57`. Every reply
+    line has one; the first is enough, and taking the first rather than the
+    lowest avoids reading a rewritten TTL from one odd reply as the truth.
+    """
+    if not (ping_result or {}).get("ok"):
+        return None
+    m = PING_TTL_RE.search(ping_result.get("stdout") or "")
+    return int(m.group(1)) if m else None
+
+
+def hops_from_ttl(arrived):
+    """(hops, the initial value assumed) from a TTL that arrived here.
+
+    Returns None where the reading cannot mean anything: a TTL above every
+    initial value is a rewritten one, and zero hops is a reply from this box.
+
+    The assumption is returned with the answer rather than buried, because it is
+    a guess - a host starting at 255 read as starting at 64 would give a
+    nonsense count, and a reader who can see "assuming 64" can tell.
+    """
+    if not arrived or arrived <= 0:
+        return None
+    for initial in TTL_INITIALS:
+        if arrived <= initial:
+            hops = initial - arrived
+            # Same host, or one rewriting TTL to a round number on the way out.
+            return (hops, initial) if hops else None
+    return None                      # above 255: nothing standard starts there
+
+
 def parse_ping_stats(ping_result):
     """min/avg/max/stddev from a ping summary, on Linux (mdev) or BSD (stddev)."""
     if not ping_result.get("ok"):
@@ -10345,6 +10400,19 @@ def trace_the_way_out(raw, findings, quick=False):
     hops = parse_traceroute_hops(res.get("stdout", "")) if res.get("ok") else []
     column = build_probe_column(hops, host)
     if column:
+        # The way back, off the TTL of a reply from the same host. The trace
+        # counts hops out; this counts hops in, and the two differing is
+        # asymmetric routing - which nothing else here can see, because a
+        # traceroute only goes one way.
+        #
+        # One extra probe, to a host this box already has connections to and has
+        # just traced. Absent whenever the host does not answer ICMP, which on a
+        # forward proxy's clients is most of the time.
+        seen = parse_ping_ttl(cmd_ping(host, 1, 1))
+        inbound = hops_from_ttl(seen)
+        if inbound:
+            column["hops_in"], column["ttl_assumed"] = inbound
+            column["ttl_seen"] = seen
         # Said on the page, because one destination is standing in for a side
         # that may have many, and a reader has to know which.
         column["picked"] = why
@@ -13390,7 +13458,11 @@ function renderDiagnosis(data, opts){
       </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       <div class="pboth">each time is a round trip to that hop, out and back
-        together \u2014 a traceroute cannot separate them</div>
+        together \u2014 a traceroute cannot separate them${
+        col.hops_in ? `<br>${col.hops.length} hops out, ${col.hops_in} back \u2014
+          off a reply that arrived with ttl ${col.ttl_seen}, assuming it left at
+          ${col.ttl_assumed}${col.hops_in !== col.hops.length
+            ? '. The two differ, so the routing is asymmetric' : ''}` : ''}</div>
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 
   const pp = data.probe_path;

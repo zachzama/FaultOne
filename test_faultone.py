@@ -6018,6 +6018,89 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
         self.assertIsNone(nd.build_probe_column([], "8.8.8.8"))
 
 
+class TestHowManyHopsItTookToReachUs(unittest.TestCase):
+    """A traceroute only goes outward, so nothing here can watch the route a
+    client's packets took to arrive.
+
+    But every ping reply carries the TTL it arrived with, and each router on the
+    way decrements it. The sender starts it at a well-known value, so the
+    difference is the hops that reply crossed getting here - the direction a
+    traceroute cannot see. The tool has been pinging and keeping min/avg/max
+    since the beginning and throwing this away.
+    """
+
+    def ttl(self, line):
+        return nd.parse_ping_ttl({"ok": True, "stdout": line})
+
+    def test_a_reply_gives_up_the_hops_it_crossed(self):
+        self.assertEqual(nd.hops_from_ttl(self.ttl(
+            "64 bytes from 10.0.2.40: icmp_seq=1 ttl=57 time=12.4 ms")), (7, 64))
+
+    def test_windows_counts_the_same(self):
+        """Different case, different layout, same field."""
+        self.assertEqual(nd.hops_from_ttl(self.ttl(
+            "Reply from 10.0.2.40: bytes=32 time=12ms TTL=121")), (7, 128))
+
+    def test_the_initial_it_assumed_travels_with_the_answer(self):
+        """It is a guess: a host starting at 255 read as starting at 64 would
+        give a nonsense count. A reader who can see the assumption can tell."""
+        hops, initial = nd.hops_from_ttl(200)
+        self.assertEqual((hops, initial), (55, 255))
+
+    def test_a_reply_from_this_box_is_not_a_hop(self):
+        """Zero hops is the host answering for itself, or something rewriting
+        the TTL to a round number. Neither is a measurement."""
+        for arrived in nd.TTL_INITIALS:
+            with self.subTest(ttl=arrived):
+                self.assertIsNone(nd.hops_from_ttl(arrived))
+
+    def test_a_rewritten_ttl_above_every_initial_claims_nothing(self):
+        self.assertIsNone(nd.hops_from_ttl(300))
+        self.assertIsNone(nd.hops_from_ttl(0))
+
+    def test_a_ping_with_no_ttl_in_it_claims_nothing(self):
+        """Absent is absent. Some pings print no TTL at all, and a missing
+        reading must not become a hop count of zero."""
+        self.assertIsNone(self.ttl("4 packets transmitted, 4 received"))
+        self.assertIsNone(nd.parse_ping_ttl({"ok": False, "stdout": "ttl=57"}))
+
+    def test_it_reaches_the_report_beside_the_hops_out(self):
+        """The pair is the point. The trace counts hops out and this counts hops
+        in, and the two differing is asymmetric routing - which nothing else
+        here can see."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        mod.cmd_ping = lambda t, c=4, w=2: {
+            "ok": True, "cmd": "ping",
+            "stdout": "64 bytes from %s: icmp_seq=1 ttl=57 time=12.4 ms\n"
+                      "4 packets transmitted, 4 received, 0%% packet loss\n"
+                      "rtt min/avg/max/mdev = 1.0/20.0/30.0/2.0 ms\n" % t}
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        out = rep["out_path"]
+        self.assertEqual(out["hops_in"], 7)
+        self.assertEqual(out["ttl_seen"], 57)
+        self.assertEqual(out["ttl_assumed"], 64)
+
+    def test_a_host_that_does_not_answer_icmp_says_nothing(self):
+        """Most internet clients behind a firewall will not, so blank has to be
+        the ordinary case rather than an error."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertIsNone(rep["out_path"].get("hops_in"))
+
+    def test_the_page_prints_the_assumption_with_the_count(self):
+        src = nd.VIEWER_TEMPLATE
+        i = src.index("hops out, ")
+        block = src[i:i + 320]
+        self.assertIn("ttl_seen", block)
+        self.assertIn("ttl_assumed", block)
+        self.assertIn("asymmetric", block,
+                      "the page does not say what the two counts differing means")
+
+
 class TestTheOneWordHint(unittest.TestCase):
     """The thing to go and touch, in one word.
 

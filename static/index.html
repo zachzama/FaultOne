@@ -1058,7 +1058,11 @@ function renderDiagnosis(data, opts){
       </div>${h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       <div class="pboth">each time is a round trip to that hop, out and back
-        together \u2014 a traceroute cannot separate them</div>
+        together \u2014 a traceroute cannot separate them${
+        col.hops_in ? `<br>${col.hops.length} hops out, ${col.hops_in} back \u2014
+          off a reply that arrived with ttl ${col.ttl_seen}, assuming it left at
+          ${col.ttl_assumed}${col.hops_in !== col.hops.length
+            ? '. The two differ, so the routing is asymmetric' : ''}` : ''}</div>
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 
   const pp = data.probe_path;

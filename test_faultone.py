@@ -19,6 +19,8 @@ import inspect
 import json
 import os
 import re
+import socket
+import struct
 import sys
 import time
 import types
@@ -6670,6 +6672,216 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         traced peer spent a day being right and invisible."""
         self.assertIn("z.owns_cause", nd.VIEWER_TEMPLATE)
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
+
+
+class TestATraceThatKeepsTheFlowConstant(unittest.TestCase):
+    """Classic traceroute varies the destination port on every probe, because
+    that is how it tells which reply belongs to which probe. That port is part
+    of the five-tuple a per-flow load balancer hashes on, so under ECMP the
+    probes are sprayed across branches and the numbered list is a sample of
+    several paths written out as one.
+
+    Paris traceroute keeps the five-tuple fixed and encodes the probe number in
+    the UDP checksum, which needs the sender to build its own IP header. This
+    does the same thing the other way round: keep everything fixed, source port
+    included, and send one probe at a time so ordering is the identifier.
+    Serial where Paris is parallel, which costs seconds and no correctness.
+    """
+
+    ROUTERS = [("10.0.0.1", 11, 0), ("100.64.0.1", 11, 0),
+               ("203.0.113.9", 11, 0), ("8.8.8.8", 3, 3)]
+
+    @staticmethod
+    def ip(src, dst, proto=17, payload=b"", ip_id=1):
+        return struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), ip_id, 0,
+                           64, proto, 0, socket.inet_aton(src),
+                           socket.inet_aton(dst)) + payload
+
+    def icmp(self, router, kind, code, quoted_src="10.0.0.5", dst="8.8.8.8",
+             dst_port=33434):
+        udp = struct.pack("!HHHH", 51000, dst_port, 8, 0)
+        inner = self.ip(quoted_src, dst, payload=udp)
+        return self.ip(router, "10.0.0.5", proto=1,
+                       payload=struct.pack("!BBHI", kind, code, 0, 0) + inner)
+
+    @staticmethod
+    def unstub(mod):
+        """Put the real walk back on a scenario module.
+
+        fresh() stubs it out so no scenario opens a socket, which is exactly
+        what this class needs undone. Rebinding the code object against the
+        module's own globals gives back the real function reading the fake
+        socket beside it, rather than the one in the imported copy.
+        """
+        mod.trace_constant_flow = types.FunctionType(
+            nd.trace_constant_flow.__code__, mod.__dict__, "trace_constant_flow",
+            nd.trace_constant_flow.__defaults__)
+
+    def walk(self, mod, replies, target="8.8.8.8"):
+        """Run a whole walk against a socket that hands back `replies`."""
+        self.unstub(mod)
+        sent_ttls = []
+
+        class Listener:
+            def __init__(self):
+                self.n = 0
+
+            def settimeout(self, _t):
+                pass
+
+            def recvfrom(self, _n):
+                if self.n >= len(replies):
+                    raise socket.timeout()
+                packet, peer = replies[self.n]
+                self.n += 1
+                return packet, (peer, 0)
+
+            def close(self):
+                pass
+
+        class Sender:
+            def bind(self, _a):
+                pass
+
+            def getsockname(self):
+                return ("10.0.0.5", 51000)
+
+            def setsockopt(self, _level, _opt, value):
+                sent_ttls.append(value)
+
+            def sendto(self, *_a):
+                pass
+
+            def close(self):
+                pass
+
+        mod.socket = types.SimpleNamespace(
+            **{k: getattr(socket, k) for k in dir(socket) if not k.startswith("__")})
+        mod.socket.socket = lambda fam, kind, proto=0: (
+            Listener() if kind == socket.SOCK_RAW else Sender())
+        mod.socket.gethostbyname = lambda _h: target
+        return mod.trace_constant_flow(target), sent_ttls
+
+    def test_it_walks_the_path_and_knows_when_it_arrived(self):
+        mod = fresh()
+        replies = [(self.icmp(r, k, c), r) for r, k, c in self.ROUTERS]
+        walked, ttls = self.walk(mod, replies)
+        self.assertEqual([h["display"] for h in walked["hops"]],
+                         [r for r, _k, _c in self.ROUTERS])
+        self.assertTrue(walked["arrived"])
+        self.assertEqual(ttls, [1, 2, 3, 4], "the TTL is what walks, nothing else")
+
+    def test_the_port_it_sends_to_never_moves(self):
+        """The whole point. Incrementing this is what makes a classic trace a
+        sample of several paths, and it is the one field that must not vary."""
+        mod = fresh()
+        walked, _ttls = self.walk(mod, [(self.icmp(r, k, c), r)
+                                        for r, k, c in self.ROUTERS])
+        self.assertEqual(walked["dest_port"], nd.TRACE_FLOW_PORT)
+
+    def test_the_source_port_is_fixed_before_the_first_probe(self):
+        """An unbound socket takes a fresh ephemeral port on every send, which
+        varies the flow exactly as the tool being replaced does. Binding once
+        up front is what stops that."""
+        source = inspect.getsource(nd.trace_constant_flow)
+        self.assertIn("sender.bind(", source)
+        self.assertLess(source.index("sender.bind("), source.index("for ttl in range"),
+                        "the socket is bound inside the probe loop")
+
+    def test_a_silent_hop_is_a_star_and_the_walk_carries_on(self):
+        mod = fresh()
+        replies = [(self.icmp("10.0.0.1", 11, 0), "10.0.0.1")]
+        walked, _ttls = self.walk(mod, replies)
+        self.assertEqual(walked["hops"][0]["display"], "10.0.0.1")
+        self.assertTrue(walked["hops"][1]["timed_out"])
+        self.assertEqual(len(walked["hops"]), nd.TRACE_MAX_HOPS,
+                         "silence should not end the walk early")
+
+    def test_somebody_elses_icmp_is_read_past_rather_than_counted_as_silence(self):
+        """On a box carrying real traffic the ICMP socket sees every error the
+        kernel receives, and the first to arrive is usually not ours."""
+        mod = fresh()
+        replies = [(self.icmp("198.51.100.7", 11, 0, dst="192.0.2.99"), "198.51.100.7"),
+                   (self.icmp("10.0.0.1", 11, 0), "10.0.0.1")]
+        walked, _ttls = self.walk(mod, replies)
+        self.assertEqual(walked["hops"][0]["display"], "10.0.0.1")
+
+    def test_a_reply_from_past_a_nat_is_still_ours(self):
+        """A translating router rewrites the source on the way out, so a router
+        beyond it quotes a packet whose source is not ours and never was.
+        Matching on the source would throw away the half of the path worth
+        having."""
+        self.assertTrue(nd._ours({"dst_port": nd.TRACE_FLOW_PORT, "dst": "8.8.8.8",
+                                  "src": "203.0.113.9", "src_port": 62000}, "8.8.8.8"))
+        self.assertFalse(nd._ours({"dst_port": nd.TRACE_FLOW_PORT, "dst": "1.1.1.1"},
+                                  "8.8.8.8"))
+        self.assertFalse(nd._ours({"dst_port": 443, "dst": "8.8.8.8"}, "8.8.8.8"))
+        self.assertFalse(nd._ours(None, "8.8.8.8"))
+
+    def test_it_tells_the_three_kinds_of_reply_apart(self):
+        for kind, code, expected in ((11, 0, "expired"), (3, 3, "arrived"),
+                                     (3, 13, "blocked"), (0, 0, None)):
+            with self.subTest(icmp=(kind, code)):
+                said, _q = nd.read_icmp_reply(self.icmp("10.0.0.1", kind, code))
+                self.assertEqual(said, expected)
+
+    def test_a_truncated_packet_is_not_an_exception(self):
+        """Anything can arrive on a raw socket, including something too short
+        to be what it claims."""
+        self.assertEqual(nd.read_icmp_reply(b""), (None, None),
+                         "an empty read is the one that indexes past the end")
+        self.assertEqual(nd.read_icmp_reply(b"\x45\x00"), (None, None))
+        self.assertEqual(nd.read_icmp_reply(self.ip("192.0.2.1", "192.0.2.2", proto=1)),
+                         (None, None))
+        self.assertIsNone(nd.quoted_packet(b"\x45\x00\x00"))
+
+    def test_no_socket_means_fall_back_rather_than_fail(self):
+        """The ordinary case. Most boxes will not hand an unprivileged process
+        a raw socket, and there the tool has to behave exactly as it did."""
+        mod = fresh()
+        mod.socket = types.SimpleNamespace(
+            **{k: getattr(socket, k) for k in dir(socket) if not k.startswith("__")})
+        mod.socket.gethostbyname = lambda _h: "8.8.8.8"
+
+        def refused(_fam, kind, _proto=0):
+            raise PermissionError("not permitted")
+        mod.socket.socket = refused
+        self.unstub(mod)
+        self.assertIsNone(mod.trace_constant_flow("8.8.8.8"))
+
+    def test_the_walk_is_preferred_over_the_binary_but_not_over_mtr(self):
+        """mtr sends many cycles and gets per-hop loss out of them, which is
+        worth more than one path measured once."""
+        source = inspect.getsource(nd.collect_trace)
+        self.assertLess(source.index("cmd_mtr"), source.index("trace_constant_flow"))
+        self.assertLess(source.index("trace_constant_flow"), source.index("cmd_traceroute"))
+
+    def test_a_walk_that_reached_nobody_falls_through_to_the_binary(self):
+        """A raw socket that opens and hears nothing is not an answer. Twenty
+        silent hops would otherwise be reported as the path."""
+        mod = fresh()
+        mod.cmd_mtr = lambda *a, **k: None
+        mod.trace_constant_flow = lambda target, **kw: {
+            "hops": [{"hop": 1, "host": None, "display": "*", "times_ms": [],
+                      "timed_out": True, "flags": None, "quoted": None}],
+            "target": "8.8.8.8", "arrived": False, "sent_from": None,
+            "dest_port": 33434}
+        mod.cmd_traceroute = lambda target: {"ok": True, "cmd": "traceroute",
+                                             "stdout": " 1  10.0.0.1  1.0 ms\n"}
+        self.assertEqual(mod.collect_trace("8.8.8.8", 5)["source"], "traceroute")
+
+    def test_the_evidence_is_kept_in_a_shape_a_reader_knows(self):
+        """Every export keeps the output behind a conclusion so it can be
+        audited later. This one has no command, so it writes what one would
+        have printed."""
+        mod = fresh()
+        walked, _ttls = self.walk(mod, [(self.icmp(r, k, c), r)
+                                        for r, k, c in self.ROUTERS])
+        text = nd.render_walk(walked)
+        self.assertIn("10.0.0.1", text)
+        self.assertEqual(len(text.splitlines()), 4)
+        self.assertEqual([h["hop"] for h in nd.parse_traceroute_hops(text)],
+                         [1, 2, 3, 4], "the text it writes has to parse as a trace")
 
 
 class TestWhichRuleStoppedThem(unittest.TestCase):
@@ -14883,6 +15095,10 @@ def fresh():
     # kind of thing survives. The booby-trap that guards "the suite opens no
     # sockets" watches connect and name resolution; a sendto is neither.
     mod.dns_ptr = lambda server, ip, timeout=1.0: None
+    # A raw ICMP socket and a UDP sendto, neither of which is a connect or a
+    # name resolution, so the guard that watches those would not have seen it.
+    # Same class as dns_ptr: not a collector, so nothing stubbed it.
+    mod.trace_constant_flow = lambda target, **kw: None
     # ---- healthy baseline for every collector -------------------------
     mod.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr",
                                  "stdout": "2: eth0: <UP>\n    inet 10.0.0.5/24\n"}

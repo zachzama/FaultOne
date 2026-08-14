@@ -584,6 +584,178 @@ def cmd_traceroute(target):
     return res
 
 
+# ---------------------------------------------------------------------------
+# A trace that keeps the flow identifier constant.
+#
+# Classic traceroute varies the destination port on every probe, because that is
+# how it tells which reply belongs to which probe. That port is part of the
+# five-tuple a per-flow load balancer hashes on, so under ECMP the probes are
+# sprayed across branches and the numbered list is a sample of several paths
+# written out as one. Paris traceroute exists to fix that.
+#
+# Paris keeps the five-tuple fixed and encodes the probe number in the UDP
+# checksum, by choosing payload bytes that make the checksum come out right.
+# That needs the sender to build its own IP header. This does the same thing the
+# other way round: keep everything fixed, including the source port, and send
+# one probe at a time so ordering is the identifier. Serial where Paris is
+# parallel, which costs seconds and no correctness, and needs no crafted header.
+#
+# The send side needs no privilege at all - a UDP socket with IP_TTL set. Only
+# the socket that catches the ICMP replies does. A box that will not give us one
+# falls back to the traceroute binary, which is what every box did until now.
+# ---------------------------------------------------------------------------
+
+TRACE_MAX_HOPS = 20
+# The port classic traceroute starts at. Kept fixed rather than incremented,
+# which is the entire point: this is the field the balancer hashes on.
+TRACE_FLOW_PORT = 33434
+TRACE_PROBE_TIMEOUT = 2.0
+ICMP_TIME_EXCEEDED = 11
+ICMP_UNREACHABLE = 3
+ICMP_PORT_UNREACHABLE = 3
+
+
+def quoted_packet(inner):
+    """What an ICMP error says the packet it is complaining about looked like.
+
+    An ICMP error carries the IP header of the packet that provoked it plus the
+    first eight bytes after it, which for UDP is the whole header. That quote is
+    the router repeating our packet back to us as it saw it, which is worth more
+    than the matching it is here for.
+    """
+    if len(inner) < 20:
+        return None
+    ihl = (inner[0] & 0x0F) * 4
+    out = {"ip_id": struct.unpack("!H", inner[4:6])[0],
+           "src": socket.inet_ntoa(inner[12:16]),
+           "dst": socket.inet_ntoa(inner[16:20]),
+           "src_port": None, "dst_port": None}
+    udp = inner[ihl:ihl + 4]
+    if len(udp) == 4:
+        out["src_port"], out["dst_port"] = struct.unpack("!HH", udp)
+    return out
+
+
+def read_icmp_reply(packet):
+    """(what it means, what it quoted) from one raw IPv4 packet.
+
+    "expired" is a router saying the TTL ran out, which is a hop. "arrived" is
+    the target itself saying nothing is listening on that port, which is how a
+    UDP trace knows it has got there and is a success rather than a fault.
+    """
+    if len(packet) < 20:
+        return None, None
+    icmp = packet[(packet[0] & 0x0F) * 4:]
+    if len(icmp) < 8:
+        return None, None
+    quoted = quoted_packet(icmp[8:])
+    if icmp[0] == ICMP_TIME_EXCEEDED:
+        return "expired", quoted
+    if icmp[0] == ICMP_UNREACHABLE and icmp[1] == ICMP_PORT_UNREACHABLE:
+        return "arrived", quoted
+    if icmp[0] == ICMP_UNREACHABLE:
+        return "blocked", quoted
+    return None, quoted
+
+
+def _ours(quoted, address):
+    """Is this ICMP complaining about a packet we sent?
+
+    Matched on where the packet was going, never on where it came from. A
+    translating router rewrites the source address and port on the way out, so
+    a router past a NAT quotes a packet whose source is not ours and never was.
+    Requiring the source to match drops every reply from beyond the first NAT,
+    which is the half of the path worth having, and it throws away the
+    difference this is about to be asked to notice.
+
+    Destination address and port together are specific enough to be ours: this
+    port is not a service anybody runs, and the address is the one we picked.
+    """
+    if not quoted:
+        return False
+    return (quoted.get("dst_port") == TRACE_FLOW_PORT
+            and quoted.get("dst") == address)
+
+
+def trace_constant_flow(target, max_hops=TRACE_MAX_HOPS,
+                        timeout=TRACE_PROBE_TIMEOUT):
+    """Walk the TTL out to `target` without ever changing the flow.
+
+    Returns hops in the same shape the text parsers produce, with the router's
+    quote kept alongside. None when the receiving socket cannot be opened,
+    which is the ordinary case on a box this is not run as root on.
+    """
+    if not valid_target(target):
+        return None
+    try:
+        address = socket.gethostbyname(target)
+    except (OSError, UnicodeError):
+        return None
+    try:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    except (OSError, AttributeError):
+        return None                 # no privilege, or a platform without them
+    hops, arrived, sent_from = [], False, None
+    try:
+        listener.settimeout(timeout)
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # Bound once, before the first probe, so every probe leaves from
+            # the same port. An unbound socket gets a fresh ephemeral port per
+            # send, which would vary the flow exactly as the tool we are
+            # replacing does.
+            sender.bind((SOURCE_ADDRESS or "", 0))
+            sent_from = sender.getsockname()
+            for ttl in range(1, max_hops + 1):
+                sender.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl)
+                hop = _one_ttl(listener, sender, address, ttl, timeout)
+                hops.append(hop)
+                if hop.pop("_done", False):
+                    arrived = True
+                    break
+        finally:
+            sender.close()
+    except OSError:
+        return None
+    finally:
+        listener.close()
+    return {"hops": hops, "target": address, "arrived": arrived,
+            "sent_from": sent_from, "dest_port": TRACE_FLOW_PORT}
+
+
+def _one_ttl(listener, sender, address, ttl, timeout):
+    """One probe, and whatever answers it before the clock runs out.
+
+    Replies that are not about our packet are read past rather than counted as
+    silence: on a box carrying real traffic the ICMP socket sees every error
+    the kernel receives, and the first one to arrive is usually somebody
+    else's.
+    """
+    hop = {"hop": ttl, "host": None, "display": "*", "times_ms": [],
+           "timed_out": True, "flags": None, "quoted": None}
+    started = time.time()
+    sender.sendto(b"", (address, TRACE_FLOW_PORT))
+    while True:
+        left = timeout - (time.time() - started)
+        if left <= 0:
+            return hop
+        try:
+            listener.settimeout(left)
+            packet, peer = listener.recvfrom(1500)
+        except (socket.timeout, OSError):
+            return hop
+        kind, quoted = read_icmp_reply(packet)
+        if kind is None or not _ours(quoted, address):
+            continue
+        hop.update({"host": peer[0], "display": peer[0], "timed_out": False,
+                    "times_ms": [round((time.time() - started) * 1000, 1)],
+                    "quoted": quoted})
+        if kind == "blocked":
+            hop["flags"] = ["!X"]
+        hop["_done"] = kind in ("arrived", "blocked")
+        return hop
+
+
 def cmd_dns(target):
     if not valid_target(target):
         return bad_target()
@@ -11272,9 +11444,42 @@ def collect_trace(target, mtr_cycles):
     mtr_res = cmd_mtr(target, mtr_cycles)
     if mtr_res:
         return {"raw": mtr_res, "hops": mtr_res["hops"], "source": "mtr", "mtr": mtr_res}
+    # The constant-flow walk first, where this box will give us a socket to
+    # hear the replies on. It answers the same question as the binary below it
+    # and answers it about one path rather than about several, which is the
+    # difference every conclusion drawn from hop adjacency rests on.
+    #
+    # Below rather than instead. It is serial, so it is slower; it needs a raw
+    # socket, so most boxes will not run it; and mtr's per-hop loss over many
+    # cycles is worth more than either when mtr is installed.
+    walked = trace_constant_flow(target)
+    if walked and any(h["host"] for h in walked["hops"]):
+        return {"raw": {"ok": True, "cmd": "constant-flow walk to %s:%d"
+                                           % (walked["target"], walked["dest_port"]),
+                        "stdout": render_walk(walked), "walk": walked},
+                "hops": walked["hops"], "source": "constant-flow", "mtr": None}
     res = cmd_traceroute(target)
     hops = parse_traceroute_hops(res.get("stdout", "")) if res.get("ok") else []
     return {"raw": res, "hops": hops, "source": "traceroute", "mtr": None}
+
+
+def render_walk(walked):
+    """The walk as the text a traceroute would have printed.
+
+    Every export keeps the output of the command behind a conclusion so it can
+    be audited later. This one has no command, so it writes what one would have
+    said, in the layout a reader already knows how to read.
+    """
+    lines = []
+    for hop in walked["hops"]:
+        times = "  ".join("%.1f ms" % t for t in hop["times_ms"]) or "*"
+        lines.append("%2d  %s  %s%s" % (hop["hop"], hop["display"], times,
+                                        "  " + " ".join(hop["flags"])
+                                        if hop.get("flags") else ""))
+    if not walked["arrived"]:
+        lines.append("    (%s did not answer within %d hops)"
+                     % (walked["target"], TRACE_MAX_HOPS))
+    return "\n".join(lines)
 
 
 # The findings that name a peer worth tracing, per side. A finding on the way

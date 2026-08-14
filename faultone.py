@@ -2062,6 +2062,265 @@ def cmd_socket_states():
 
 
 # ---------------------------------------------------------------------------
+# Which process holds a socket.
+#
+# Six findings name the thing at fault as "a service on this device" or "an
+# application on this device" and then cannot say which one. On a box running a
+# single service that is a shrug you can live with. On one running several
+# instances it is the whole question, and the answer is sitting in a socket
+# table this tool already reads twice.
+#
+# Opportunistic in the same way ethtool and the kernel log are: several commands
+# that answer the same question, tried in order of how much they say, and a run
+# where none of them work leaves every message exactly as it reads today. A
+# socket with no name attached is "couldn't look", never "no process".
+#
+# Without the privilege to see other users' sockets this names only our own,
+# which is a partial answer rather than a wrong one, so it is worth asking
+# either way.
+# ---------------------------------------------------------------------------
+
+OWNER_READ_BYTES = 4_000_000
+
+# ss prints every process holding the socket, which is what a pre-forking
+# server looks like: ("nginx",pid=1234,fd=8),("nginx",pid=1235,fd=8).
+_SS_PROC = re.compile(r'\("([^"]+)",pid=(\d+)')
+# netstat's last column is PID/name, and the name can carry a space of its own
+# ("1235/nginx: worker"), so the pair is matched rather than split off the end.
+# No address in these rows contains a slash, so this cannot match one.
+_NETSTAT_PROC = re.compile(r"\s(\d+)/(\S+)")
+_LSOF_STATE = re.compile(r"\(([A-Z_]+)\)\s*$")
+_PORT_TAIL = re.compile(r":(\d+)$")
+
+
+def _port_of(address):
+    m = _PORT_TAIL.search((address or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _norm_state(state):
+    """ss says CLOSE-WAIT, netstat says CLOSE_WAIT, and the findings are keyed
+    on one of them."""
+    return (state or "").strip().upper().replace("-", "_")
+
+
+def parse_ss_owners(text):
+    """`ss -tanp` rows: state, queues, local, peer, then the process column."""
+    out = []
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) < 5 or not _SS_PROC.search(line):
+            continue
+        state = _norm_state(fields[0])
+        if not state or state == "STATE":
+            continue
+        seen = set()
+        for name, pid in _SS_PROC.findall(line):
+            # One row per process, not one per descriptor: a worker pool holding
+            # one listening socket is one holder, and counting the descriptors
+            # would report a server as leaking in proportion to its worker count.
+            if (name, pid) in seen:
+                continue
+            seen.add((name, pid))
+            out.append({"process": name, "pid": int(pid), "state": state,
+                        "local_port": _port_of(fields[3]), "peer": fields[4]})
+    return out
+
+
+def parse_netstat_owners(text):
+    """Linux `netstat -tanp`. A row whose process reads "-" was not readable by
+    this user, and is skipped rather than counted as unowned."""
+    out = []
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) < 6 or not fields[0].startswith("tcp"):
+            continue
+        m = _NETSTAT_PROC.search(line)
+        if not m:
+            continue
+        out.append({"process": m.group(2).rstrip(":"), "pid": int(m.group(1)),
+                    "state": _norm_state(fields[5]),
+                    "local_port": _port_of(fields[3]), "peer": fields[4]})
+    return out
+
+
+def parse_lsof_owners(text):
+    """`lsof -nP -iTCP`. One row per descriptor, with the endpoints as
+    local->peer and the state in brackets at the end."""
+    out = []
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) < 9 or fields[0] == "COMMAND" or "TCP" not in fields:
+            continue
+        where_at = fields.index("TCP") + 1
+        if where_at >= len(fields):
+            continue
+        try:
+            pid = int(fields[1])
+        except ValueError:
+            continue
+        local, _, peer = fields[where_at].partition("->")
+        state = _LSOF_STATE.search(line)
+        out.append({"process": fields[0], "pid": pid,
+                    "state": _norm_state(state.group(1)) if state else None,
+                    "local_port": _port_of(local), "peer": peer or None})
+    return out
+
+
+def cmd_socket_owners():
+    """The process behind each TCP socket, from whichever command can say.
+
+    Richest first. ss names every process holding a socket, netstat names one,
+    lsof is a row per descriptor and has to be folded back together. A command
+    that exists and rejects the flags is passed over rather than believed, which
+    is the same rule the rest of the collectors follow: a busybox netstat knows
+    the name and not the option.
+    """
+    if OS_NAME == "Windows":
+        # netstat -ano gives a PID and no name, and turning one into the other
+        # is a second command and a second parser for a worse answer.
+        return {"ok": False, "cmd": "ss -tanp", "applicable": False,
+                "error": "naming the process behind a socket is not supported here"}
+    attempts = []
+    if OS_NAME == "Linux":
+        attempts.append((["ss", "-tanp"], parse_ss_owners))
+        # macOS netstat reads -p as "protocol" and takes an argument, so this
+        # one is Linux-only by name rather than by accident.
+        attempts.append((["netstat", "-tanp"], parse_netstat_owners))
+    attempts.append((["lsof", "-nP", "-iTCP"], parse_lsof_owners))
+    for cmd, parser in attempts:
+        if not which(cmd[0]):
+            continue
+        res = run(cmd, timeout=15, limit=OWNER_READ_BYTES)
+        # An exit code here means the flags were refused, not that the box has
+        # no sockets, so the next command still gets its turn.
+        if not res.get("ok") or res.get("code"):
+            continue
+        owners = parser(res.get("stdout") or "")
+        if not owners:
+            continue
+        res["owners"] = owners
+        res["stdout"] = _cap(res.get("stdout"))
+        return res
+    return {"ok": False, "cmd": "ss -tanp",
+            "error": "no command here could name the process behind a socket "
+                     "(tried ss, netstat, lsof)"}
+
+
+def owners_in_state(owners, state):
+    """[(process, sockets)] worst first, for one TCP state."""
+    want, counts = _norm_state(state), {}
+    for o in owners or []:
+        if o.get("state") == want and o.get("process"):
+            counts[o["process"]] = counts.get(o["process"], 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def owner_of_port(owners, port):
+    """The process listening on a port, when exactly one is.
+
+    Two names on one port means this cannot answer, and naming either would be
+    picking at random on the report that most needs the right one. Falls back to
+    any socket on that port, for the readers that do not mark a listener.
+    """
+    def named(rows):
+        return {o["process"] for o in rows if o.get("process")}
+
+    on_port = [o for o in (owners or []) if o.get("local_port") == port]
+    listening = named([o for o in on_port if o.get("state") == "LISTEN"])
+    if listening:
+        return next(iter(listening)) if len(listening) == 1 else None
+    any_of = named(on_port)
+    return next(iter(any_of)) if len(any_of) == 1 else None
+
+
+def process_holding(pairs):
+    """Who holds them, as a phrase, or "" when nothing could be read.
+
+    The empty string is the important half. A run that could not read the
+    process table has to leave the sentence exactly as it was, because "an
+    application" is still true and "an application called None" is not.
+    """
+    if not pairs:
+        return ""
+    if len(pairs) == 1:
+        return pairs[0][0]
+    return ", ".join("%s (%d)" % (name, count) for name, count in pairs[:3])
+
+
+def socket_owners(raw):
+    """The owner rows, or nothing at all when no command could read them."""
+    res = (raw or {}).get("socket_owners") or {}
+    return (res.get("owners") or []) if res.get("ok") else []
+
+
+def _held_by(pairs):
+    """The sentence naming who holds them, or nothing.
+
+    Nothing is the whole point of the helper. Every message this is appended to
+    reads correctly without it, because "an application" was always true - so a
+    box where the process table could not be read says exactly what it said
+    before, rather than saying it with a hole in it.
+    """
+    who = process_holding(pairs)
+    return (" The sockets are held by %s." % who) if who else ""
+
+
+def _biggest_holder(owners):
+    """Who holds the most sockets on this box, when one process stands out.
+
+    A descriptor ceiling is a system-wide number and this cannot say which
+    process spent them, so it says the one thing it can see and says it as a
+    lead: nothing here counts descriptors, only sockets. It stays quiet unless
+    one process holds a clear majority, because "nginx 34%, envoy 33%" points
+    at nobody and reads as though it points at somebody.
+    """
+    counts = {}
+    for o in owners or []:
+        if o.get("process"):
+            counts[o["process"]] = counts.get(o["process"], 0) + 1
+    if not counts:
+        return ""
+    total = sum(counts.values())
+    name, held = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
+    if held * 2 <= total:
+        return ""
+    return (" Most of the open sockets here belong to %s (%d of %d), which is "
+            "where to look first." % (name, held, total))
+
+
+def _the_listeners_are(owners):
+    """Which services are listening here, for the counters that cannot say
+    which of them overflowed.
+
+    ListenOverflows is one number for the whole box. Naming a single service
+    from it would be an accusation this cannot support, so this names the
+    candidates and says that is what they are. One listener is not a shortlist,
+    so on that box the sentence is a straight answer.
+    """
+    names = sorted({o["process"] for o in owners or []
+                    if o.get("state") == "LISTEN" and o.get("process")})
+    if not names:
+        return ""
+    if len(names) == 1:
+        return " The only service listening here is %s." % names[0]
+    return (" The services listening here are %s, and the counter is for the box "
+            "rather than for any one of them." % ", ".join(names[:5]))
+
+
+def _that_service_is(owners, port):
+    """Name the process on a port, for the findings that already know which one.
+
+    These are the two that earn the most from it. "The service on port 8443
+    answered nothing" is a sentence somebody has to go and resolve into a
+    process before they can restart anything, and on a box running several
+    instances behind several ports that step is the work.
+    """
+    who = owner_of_port(owners, int(port))
+    return (" That service is %s." % who) if who else ""
+
+
+# ---------------------------------------------------------------------------
 # Call quality (MOS). Latency, jitter and loss are three numbers most people
 # can't act on; "MOS 3.1, calls will sound rough" is one they can. The E-model
 # arithmetic below is the same shape PingPlotter uses, and it costs nothing -
@@ -4849,6 +5108,13 @@ PANEL_HELP = {
                 "nothing is answering; a pile of CLOSE_WAIT means an application isn't closing "
                 "its sockets, which is not a network fault.",
     },
+    "socket_owners": {
+        "label": "who holds the sockets", "layer": 4,
+        "desc": "The process behind each TCP socket. Several findings blame a service on this "
+                "box without being able to say which one, which is a shrug on a box running "
+                "one service and the whole question on a box running several. Absent when no "
+                "command here could answer, and then those findings read as they always did.",
+    },
     "port_check": {
         "label": "TCP port check", "layer": 4,
         "desc": "Plain TCP connect to a port on the target. Refused means something answered "
@@ -6656,6 +6922,9 @@ RAW_STAGE = {
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
     "sockets": ("ports", "clients"), "ports": "ports",
+    # Read from the same table and answering the same two stages: who is
+    # listening belongs to ports, who is holding them open to clients.
+    "socket_owners": ("ports", "clients"),
     # This box's own service and the certificate it serves, both read from the
     # outside in. They belong to the ports stage for the same reason the port
     # checks do: they answer whether what is listening here actually works.
@@ -8215,7 +8484,11 @@ def _check_server_limits(stats, findings, counter_window, raw):
                            f"system-wide ({pct}%). A box at this ceiling stops accepting "
                            f"connections, and from the client's side that is "
                            f"indistinguishable from the network being down. Nothing on the "
-                           f"wire is wrong.",
+                           f"wire is wrong."
+                           # System-wide is the number; who is holding the most
+                           # sockets is the nearest thing to who is spending
+                           # them, and it is a lead rather than an accusation.
+                           + _biggest_holder(socket_owners(raw)),
             })
 
     # Out of socket memory. Unambiguous, and never normal.
@@ -8280,7 +8553,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
         })
 
 
-def _check_accept_queues(stats, findings, counter_window):
+def _check_accept_queues(stats, findings, counter_window, owners=()):
     """Connections a service here turned away with a full accept queue."""
     delta = stats.get("delta") or {}
     live_overflow = delta.get("ListenOverflows", 0)
@@ -8293,7 +8566,8 @@ def _check_accept_queues(stats, findings, counter_window):
                        f"the last {counter_window}s because its accept queue was full. Clients "
                        f"see a refusal or a hang and report the network - but nothing here "
                        f"reached the network. The application isn't accepting fast enough, or "
-                       f"its listen backlog is too small." + _load_context(),
+                       f"its listen backlog is too small."
+                       + _the_listeners_are(owners) + _load_context(),
         })
     else:
         total = (stats.get("lifetime") or {}).get("ListenOverflows")
@@ -8307,7 +8581,8 @@ def _check_accept_queues(stats, findings, counter_window):
                     "message": f"Services on this device have turned away {total:,} connection(s) "
                                f"since boot with a full accept queue - about {per_day:.0f} a day, "
                                f"none during this run. That is a load problem on this box that "
-                               f"gets reported as the network being unreliable.",
+                               f"gets reported as the network being unreliable."
+                               + _the_listeners_are(owners),
                 })
 
 
@@ -8326,7 +8601,8 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
         return
     _check_nic_backlog(stats, findings, counter_window)
     _check_conntrack_table(stats, findings, counter_window)
-    _check_accept_queues(stats, findings, counter_window)
+    _check_accept_queues(stats, findings, counter_window,
+                         socket_owners(raw))
     _check_connection_setup(stats, findings, counter_window)
     _check_server_limits(stats, findings, counter_window, raw)
     _check_thermal(stats, findings, counter_window)
@@ -9345,7 +9621,7 @@ def _check_own_service(raw, findings, quick=False):
     for addr, port in targets[:OWN_TLS_MAX_LISTENERS]:
         res = cmd_own_http(port, address=addr, tls=int(port) in TLS_PORTS)
         results.append(res)
-        _own_service_findings(res, port, findings)
+        _own_service_findings(res, port, findings, socket_owners(raw))
     if results:
         raw["own_service"] = {
             "ok": any(r.get("ok") for r in results), "cmd": "HEAD / (own listeners)",
@@ -9396,7 +9672,7 @@ def _own_service_timing(res, port, findings):
     })
 
 
-def _own_service_findings(res, port, findings):
+def _own_service_findings(res, port, findings, owners=()):
     """One listener's answer, or its refusal to give one."""
     if res.get("unreachable_locally"):
         return                      # bound elsewhere; nothing was asked
@@ -9412,7 +9688,8 @@ def _own_service_findings(res, port, findings):
                        + ". Every check above this one passes - the port is open, the "
                          "handshake completes, the certificate is valid - and no client "
                          "gets a reply. That is the most common way a service is down "
-                         "while the box it runs on looks entirely healthy.",
+                         "while the box it runs on looks entirely healthy."
+                       + _that_service_is(owners, port),
         })
         return
     if res.get("not_http"):
@@ -9446,7 +9723,8 @@ def _own_service_findings(res, port, findings):
             "message": f"The service on port {port} answered {status} to a plain request "
                        f"for its root path. It is accepting connections and failing to "
                        f"serve them, which is the service itself rather than anything on "
-                       f"the network.",
+                       f"the network."
+                       + _that_service_is(owners, port),
         })
 
 
@@ -9619,6 +9897,8 @@ def _check_arp(raw, findings):
     # it. Re-read only when something else called this directly.
     if "sockets" not in raw:
         raw["sockets"] = cmd_socket_states()
+    if "socket_owners" not in raw:
+        raw["socket_owners"] = cmd_socket_owners()
     sock_states = raw["sockets"].get("states", {}) if raw["sockets"].get("ok") else {}
     pending = raw["sockets"].get("pending", {}) if raw["sockets"].get("ok") else {}
     syn_sent = sock_states.get("SYN_SENT", 0)
@@ -9644,7 +9924,8 @@ def _check_arp(raw, findings):
             "message": f"{close_wait} sockets are in CLOSE_WAIT: the far end hung up and the "
                        f"local application never closed its side. That is an application holding "
                        f"sockets open, not a network fault - and it ends with the process running "
-                       f"out of file descriptors.",
+                       f"out of file descriptors."
+                       + _held_by(owners_in_state(socket_owners(raw), "CLOSE_WAIT")),
         })
 
     # Retransmissions on this box's real traffic - loss that probes can miss.
@@ -12305,6 +12586,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # with the rest of the device checks, because choosing a backend to aim at
     # is the first thing that depends on it. Read once and reused below.
     raw["sockets"] = cmd_socket_states()
+    # Who holds them, read beside the table itself so every finding built from
+    # that table can name a process instead of saying "an application".
+    raw["socket_owners"] = cmd_socket_owners()
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
     # Kept beside the kind so anything reading raw can name what was aimed at

@@ -6672,6 +6672,225 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestNamingTheProcessBehindASocket(unittest.TestCase):
+    """Six findings blamed "a service on this device" and could not say which.
+
+    On a box running one service that is a shrug you can live with. On one
+    running several instances behind several ports it is the whole question, and
+    the answer was in a socket table already being read twice.
+
+    The rule that matters more than the naming: a box where no command can
+    answer has to produce exactly the report it produced before. "An
+    application" was always true. "An application called None" is not.
+    """
+
+    SS = (
+        "State      Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+        "LISTEN     0      511    0.0.0.0:443        0.0.0.0:*         "
+        'users:(("nginx",pid=1234,fd=8),("nginx",pid=1235,fd=8))\n'
+        "ESTAB      0      0      10.0.0.5:443       10.0.0.9:52344    "
+        'users:(("nginx",pid=1235,fd=12))\n'
+        "CLOSE-WAIT 1      0      10.0.0.5:443       10.0.0.9:52350    "
+        'users:(("relayd",pid=99,fd=20))\n'
+        "CLOSE-WAIT 1      0      10.0.0.5:443       10.0.0.9:52351    "
+        'users:(("relayd",pid=99,fd=21))\n'
+        # One process, one socket, two descriptors on it.
+        "ESTAB      0      0      10.0.0.5:443       10.0.0.9:52999    "
+        'users:(("nginx",pid=1235,fd=30),("nginx",pid=1235,fd=31))\n'
+        "TIME-WAIT  0      0      10.0.0.5:41000     10.0.2.40:5432\n")
+    NETSTAT = (
+        "Proto Recv-Q Send-Q Local Address Foreign Address State      PID/Program name\n"
+        "tcp        0      0 0.0.0.0:443   0.0.0.0:*       LISTEN     1234/nginx\n"
+        "tcp        0      0 10.0.0.5:443  10.0.0.9:52350  CLOSE_WAIT 99/relayd: worker\n"
+        "tcp        0      0 10.0.0.5:443  10.0.0.9:52351  CLOSE_WAIT -\n")
+    LSOF = (
+        "COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
+        "nginx    1234 root    8u  IPv4  0x1      0t0    TCP *:443 (LISTEN)\n"
+        "relayd     99 root   20u  IPv4  0x2      0t0    TCP "
+        "10.0.0.5:443->10.0.0.9:52350 (CLOSE_WAIT)\n")
+
+    def test_all_three_readers_answer_the_same_question(self):
+        """Three commands with three layouts. Whichever one a box has, the
+        finding built on it has to say the same thing."""
+        for name, parser, text in (("ss", nd.parse_ss_owners, self.SS),
+                                   ("netstat", nd.parse_netstat_owners, self.NETSTAT),
+                                   ("lsof", nd.parse_lsof_owners, self.LSOF)):
+            with self.subTest(reader=name):
+                owners = parser(text)
+                self.assertEqual(nd.owner_of_port(owners, 443), "nginx")
+                self.assertEqual(nd.owners_in_state(owners, "CLOSE_WAIT")[0][0], "relayd")
+
+    def test_a_hyphen_and_an_underscore_are_the_same_state(self):
+        """ss writes CLOSE-WAIT and netstat writes CLOSE_WAIT. The findings are
+        keyed on one of them, so a box with the other reader would have counted
+        zero and said nothing."""
+        self.assertEqual(nd.owners_in_state(nd.parse_ss_owners(self.SS), "CLOSE_WAIT"),
+                         [("relayd", 2)])
+
+    def test_a_socket_held_twice_by_one_process_is_one_holder(self):
+        """ss lists the process once per descriptor it holds the socket on.
+        Counting those would report a server as holding sockets in proportion
+        to how many descriptors it dups, which is the healthy case, and would
+        put it at the top of every "who is leaking" list."""
+        on_that_socket = [o for o in nd.parse_ss_owners(self.SS)
+                          if o["peer"] == "10.0.0.9:52999"]
+        self.assertEqual(len(on_that_socket), 1)
+        self.assertEqual(on_that_socket[0]["process"], "nginx")
+
+    def test_a_worker_pool_keeps_every_distinct_worker(self):
+        """The other side of it: two workers really are two holders, and
+        collapsing them would lose which of them to look at."""
+        listening = [o for o in nd.parse_ss_owners(self.SS) if o["state"] == "LISTEN"]
+        self.assertEqual({o["pid"] for o in listening}, {1234, 1235})
+        self.assertEqual({o["process"] for o in listening}, {"nginx"})
+
+    def test_an_unreadable_row_is_skipped_and_not_counted_as_unowned(self):
+        """netstat prints "-" for a socket this user may not look at. That is
+        one more socket nobody named, not one more socket with no owner."""
+        owners = nd.parse_netstat_owners(self.NETSTAT)
+        self.assertEqual(len(owners), 2)
+        self.assertNotIn("-", {o["process"] for o in owners})
+
+    def test_a_name_with_a_space_in_it_survives(self):
+        """netstat writes "99/relayd: worker". Splitting the last field off the
+        end would have taken "worker" as the process."""
+        self.assertEqual(nd.parse_netstat_owners(self.NETSTAT)[1]["process"], "relayd")
+
+    def test_two_names_on_one_port_names_neither(self):
+        """Guessing between them would be picking at random on exactly the
+        report that needs the right answer."""
+        owners = [{"process": "nginx", "state": "LISTEN", "local_port": 443},
+                  {"process": "envoy", "state": "LISTEN", "local_port": 443}]
+        self.assertIsNone(nd.owner_of_port(owners, 443))
+
+    # ---- the readers are tried in order of how much they say --------------
+
+    def stub_commands(self, mod, available, outputs):
+        seen = []
+        mod.which = lambda c: c in available
+        mod.OS_NAME = "Linux"
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd[0])
+            return outputs.get(cmd[0], {"ok": False, "error": "no"})
+        mod.run = fake_run
+        return seen
+
+    def test_ss_is_preferred_and_nothing_else_is_run(self):
+        mod = fresh()
+        seen = self.stub_commands(mod, {"ss", "netstat", "lsof"},
+                                  {"ss": {"ok": True, "stdout": self.SS}})
+        res = mod.cmd_socket_owners()
+        self.assertEqual(seen, ["ss"])
+        self.assertEqual(mod.owner_of_port(res["owners"], 443), "nginx")
+
+    def test_a_command_that_exists_and_refuses_the_flags_is_passed_over(self):
+        """The busybox case, and the reason this is a chain rather than a
+        which() lookup: the name is there and the option is not. An exit code
+        here means the flags were refused, never that the box has no sockets.
+
+        The refused command prints rows that parse. Stubbing it with nothing to
+        say would pass whether or not the exit code is read, because empty
+        output moves on by itself, and that is how this guard was green against
+        code that had lost it.
+        """
+        mod = fresh()
+        seen = self.stub_commands(
+            mod, {"ss", "netstat", "lsof"},
+            {"ss": {"ok": True, "code": 2, "stdout": self.SS},
+             "netstat": {"ok": True, "stdout": self.NETSTAT}})
+        res = mod.cmd_socket_owners()
+        self.assertEqual(seen, ["ss", "netstat"])
+        self.assertEqual(mod.owner_of_port(res["owners"], 443), "nginx")
+
+    def test_it_falls_all_the_way_to_lsof(self):
+        mod = fresh()
+        seen = self.stub_commands(mod, {"ss", "netstat", "lsof"},
+                                  {"lsof": {"ok": True, "stdout": self.LSOF}})
+        res = mod.cmd_socket_owners()
+        self.assertEqual(seen, ["ss", "netstat", "lsof"])
+        self.assertEqual(mod.owner_of_port(res["owners"], 443), "nginx")
+
+    def test_a_box_with_none_of_them_says_so(self):
+        mod = fresh()
+        self.stub_commands(mod, set(), {})
+        res = mod.cmd_socket_owners()
+        self.assertFalse(res["ok"])
+        self.assertIn("ss, netstat, lsof", res["error"])
+
+    # ---- couldn't look is never no process --------------------------------
+
+    def test_every_phrase_is_empty_when_nothing_could_be_read(self):
+        """The rule the whole change rests on. Each of these is appended to a
+        message that reads correctly without it."""
+        self.assertEqual(nd._held_by([]), "")
+        self.assertEqual(nd._biggest_holder([]), "")
+        self.assertEqual(nd._the_listeners_are([]), "")
+        self.assertEqual(nd._that_service_is([], 443), "")
+        self.assertEqual(nd.process_holding([]), "")
+        self.assertEqual(nd.socket_owners({}), [])
+        self.assertEqual(nd.socket_owners({"socket_owners": {"ok": False}}), [])
+
+    def test_no_single_process_stands_out_so_none_is_named(self):
+        """"nginx 34%, envoy 33%" points at nobody and reads as though it
+        points at somebody."""
+        even = ([{"process": "nginx", "state": "ESTAB"}] * 5
+                + [{"process": "envoy", "state": "ESTAB"}] * 5)
+        self.assertEqual(nd._biggest_holder(even), "")
+        self.assertIn("nginx", nd._biggest_holder(
+            even + [{"process": "nginx", "state": "ESTAB"}] * 4))
+
+    def test_one_listener_is_an_answer_and_several_are_a_shortlist(self):
+        """ListenOverflows is one number for the whole box, so naming a single
+        service from it would be an accusation this cannot support."""
+        one = [{"process": "nginx", "state": "LISTEN", "local_port": 443}]
+        self.assertIn("only service listening here is nginx", nd._the_listeners_are(one))
+        two = one + [{"process": "envoy", "state": "LISTEN", "local_port": 8443}]
+        self.assertIn("rather than for any one of them", nd._the_listeners_are(two))
+
+    # ---- and it reaches the report ----------------------------------------
+
+    def owners_for(self, code, owners):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        if owners is not None:
+            mod.cmd_socket_owners = lambda: {"ok": True, "cmd": "ss -tanp",
+                                             "owners": owners}
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        return next(f["message"] for f in rep["findings"] if f["code"] == code)
+
+    def test_the_leaking_application_is_named_on_the_report(self):
+        said = self.owners_for("close_wait_backlog",
+                               [{"process": "relayd", "pid": 99, "state": "CLOSE_WAIT",
+                                 "local_port": 443}] * 3)
+        self.assertIn("held by relayd", said)
+
+    def test_and_the_same_report_is_unchanged_where_nothing_can_be_read(self):
+        """The half that is easy to break and hard to notice: the tool has to
+        run on boxes that cannot answer this, and there it must say exactly
+        what it said before."""
+        said = self.owners_for("close_wait_backlog", None)
+        self.assertNotIn("held by", said)
+        self.assertIn("CLOSE_WAIT", said)
+
+    def test_the_service_findings_are_named_by_their_port(self):
+        """These two earn the most from it. "The service on port 8443 answered
+        nothing" is a sentence somebody has to resolve into a process before
+        they can restart anything, and on a box running several instances
+        behind several ports that step is the work.
+
+        Listening on every port this box might serve, so the test does not
+        depend on which one the scenario picked.
+        """
+        listening = [{"process": "gunicorn", "pid": 7, "state": "LISTEN",
+                      "local_port": int(port)} for port in nd.SERVING_PORTS]
+        for code in ("own_service_silent", "own_service_erroring"):
+            with self.subTest(code=code):
+                self.assertIn("That service is gunicorn.",
+                              self.owners_for(code, listening))
+
+
 class TestTheWordsAndThePictureAgree(unittest.TestCase):
     """Every scenario, checked for saying one thing and drawing another.
 
@@ -10345,8 +10564,9 @@ class TestDocsMatchReality(unittest.TestCase):
             # The one count here that is not derived: "a thing inspected" is a
             # human grouping, not a function - some collectors run several
             # times, and some are helpers rather than collections. Raised to
-            # 33 when proxy configuration was added.
-            "collections": (33, [r"\*\*(\d+)\s+things are inspected",
+            # 33 when proxy configuration was added, 34 when the socket
+            # table gained the process holding each socket.
+            "collections": (34, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -10422,6 +10642,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_path_mtu": "Path MTU",
         "cmd_ping": "reachability and loss",
         "cmd_routes": "Routing table and default gateway",
+        "cmd_socket_owners": "Which process holds each socket",
         "cmd_socket_states": "TCP socket states",
         "cmd_tcp_flows": "Per-connection TCP statistics",
         "cmd_tcp_health": "TCP retransmission counters",

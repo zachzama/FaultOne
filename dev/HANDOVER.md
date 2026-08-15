@@ -177,6 +177,55 @@ path that balances five times, and still never names the concept.
 The whole data change was one key on the viewer's row: `also` was in the report
 and the row builder had never carried it.
 
+## Open: every per-connection reading is TCP, and nothing says so
+
+The socket table clients are counted from is `ss -tan` and the per-connection
+statistics are `ss -tin`. Both are TCP. On a box whose control plane is TCP and
+whose user traffic is datagrams, that means direction, stalled returns, relay
+volume, queuing delay, TIME_WAIT pressure and ephemeral ports all describe the
+control plane - and the panel headings say "clients in", "this box" and
+"depends on", which reads as how users are being served.
+
+None of it is wrong. A control plane failing is a real outage and worth every
+one of those findings. The gap is that a reader cannot tell which plane they
+are looking at, and on this shape of box the two have different owners and
+different symptoms.
+
+The shape it wants is labelling rather than new measurement: say TCP where the
+reading is TCP, on the zone panel and in the findings that carry a side. The
+open question is how loud that should be - a word in each heading is cheap and
+repeats on every report; a single line under the panel is quieter and easier to
+miss. Decide it as a drawing question, the way the fan-out was.
+
+Related: `clients_may_be_on_the_datagram_plane` already refuses to answer "how
+many clients" on such a box. That refusal is the honest floor, and everything
+above is about not implying an answer elsewhere.
+
+## Open: the datagram plane has one signal and it is not loss
+
+`cmd_udp_sockets` reads the listeners and what is queued behind them. Nothing
+reads that queue yet.
+
+A datagram socket has no retransmits, no smoothed round trip and no duplicate
+acknowledgements, so none of the TCP techniques port and the questions have to
+be asked differently. What is in hand: `Recv-Q` on the listener is bytes the
+kernel is holding that the process has not taken, which is the counterpart to
+an accept queue for a plane that has no accept - the closest thing there is to
+"this box cannot keep up with what is arriving". Beside it sit the `Udp:` block
+in `/proc/net/snmp`, already collected and already driving two findings, and
+the interface counters.
+
+The trap to design around is the same one `flow_direction` was built around: a
+queue with bytes in it is normal, because a socket is read in bursts. A depth
+is only worth a finding if it persists or if it is large against the socket's
+own buffer, and neither is established by one reading. Whatever gets built
+needs the sampling window the counter checks already use, not a snapshot.
+
+What cannot be answered from here at all: how many peers are being served, and
+whether datagrams were lost in flight. The kernel records neither for an
+unconnected socket, so both need the listener's own counters rather than
+anything the operating system will hand over.
+
 ## Open: the resume card quotes numbers that moved again
 
 `zachzama/zachzama.github.io` carries a FaultOne project card with the finding

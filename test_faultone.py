@@ -8460,6 +8460,75 @@ class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
         self.assertNotIn("app_limited", {c for c, *_ in nd.VERDICT_RULES})
 
 
+class TestTheOtherPlane(unittest.TestCase):
+    """A box can carry its user traffic over datagrams while its control plane
+    is TCP, and every other socket reading here is TCP. Read from the TCP table
+    alone, such a box looks like one nobody is reaching."""
+
+    SS = ("State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
+          "UNCONN 4096   0      0.0.0.0:443         0.0.0.0:*\n"
+          "UNCONN 0      0      127.0.0.53:53       0.0.0.0:*\n"
+          "ESTAB  0      0      10.20.4.11:41000    203.0.113.9:4500\n")
+
+    def test_a_listener_and_its_backlog_are_read(self):
+        got = nd.parse_udp_sockets(self.SS)
+        self.assertEqual(got["listen_ports"], ["443"])
+        self.assertEqual(got["queued_bytes"], 4096)
+
+    def test_a_socket_bound_for_this_box_itself_is_not_serving(self):
+        """A stub resolver on loopback is not a plane anyone reaches."""
+        self.assertNotIn("53", nd.parse_udp_sockets(self.SS)["listen_ports"])
+
+    def test_a_connected_datagram_socket_is_counted_apart(self):
+        self.assertEqual(nd.parse_udp_sockets(self.SS)["connected"], 1)
+
+    def test_sockets_are_never_presented_as_clients(self):
+        """One socket serves any number of peers without the kernel recording
+        one of them, so nothing here may be read as a count of who is being
+        served - which is the mistake this whole change exists to stop."""
+        got = nd.parse_udp_sockets(self.SS)
+        self.assertNotIn("clients", got)
+        self.assertNotIn("inbound", got)
+
+    def test_an_empty_table_says_nothing_rather_than_zero_clients(self):
+        self.assertEqual(nd.parse_udp_sockets("")["listeners"], [])
+
+    def _diagnose(self, with_udp):
+        mod = fresh()
+        setup, kw = S["clients_may_be_on_the_datagram_plane"]
+        setup(mod)
+        if not with_udp:
+            mod.cmd_udp_sockets = lambda: {"ok": True, "cmd": "ss -uan",
+                                           "listeners": [], "connected": 0,
+                                           "queued_bytes": 0, "listen_ports": []}
+        return mod.diagnose(quick=True, **scenario_kwargs(kw))
+
+    def test_an_empty_tcp_table_no_longer_means_an_empty_box(self):
+        report = self._diagnose(with_udp=True)
+        codes = [f["code"] for f in report["findings"]]
+        self.assertIn("clients_may_be_on_the_datagram_plane", codes)
+        self.assertNotIn("no_clients_connected", codes,
+                         "a box carrying every tunnel it was built to carry is "
+                         "still being told nothing is reaching it")
+
+    def test_without_a_datagram_listener_the_old_reading_still_holds(self):
+        """The guard on the above. On a box that really is only TCP, an empty
+        inbound table means what it always meant."""
+        codes = [f["code"] for f in self._diagnose(with_udp=False)["findings"]]
+        self.assertIn("no_clients_connected", codes)
+        self.assertNotIn("clients_may_be_on_the_datagram_plane", codes)
+
+    def test_it_refuses_the_question_rather_than_guessing_an_answer(self):
+        report = self._diagnose(with_udp=True)
+        msg = next(f["message"] for f in report["findings"]
+                   if f["code"] == "clients_may_be_on_the_datagram_plane")
+        self.assertIn("cannot be read from a socket table", msg)
+        self.assertEqual(
+            next(f["severity"] for f in report["findings"]
+                 if f["code"] == "clients_may_be_on_the_datagram_plane"), "ok",
+            "saying a question cannot be answered is not a fault")
+
+
 class TestTheFanOutIsDrawnWhereItExplainsSomething(unittest.TestCase):
     """`balanced_hops` has been collected since the parser learned continuation
     lines, three findings soften themselves on it, and the page never drew it -
@@ -11509,7 +11578,7 @@ class TestDocsMatchReality(unittest.TestCase):
             # 33 when proxy configuration was added, 34 when the socket
             # table gained the process holding each socket, 35 with the
             # interface queues, 36 with the firewall rule counters.
-            "collections": (36, [r"\*\*(\d+)\s+things are inspected",
+            "collections": (37, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -11591,6 +11660,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
                      "holding and dropping",
         "cmd_socket_states": "TCP socket states",
+        "cmd_udp_sockets": "UDP datagram listeners",
         "cmd_tcp_flows": "Per-connection TCP statistics",
         "cmd_tcp_health": "TCP retransmission counters",
         "cmd_tls_check": "TLS handshake and certificate on ports",
@@ -15779,6 +15849,21 @@ def _(nd):
                            timers=(10, 9000, 9000)),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
                            timers=(10, 10, 10)))
+
+@scenario("clients_may_be_on_the_datagram_plane")
+def _(nd):
+    # A box whose control plane is TCP and whose user traffic is datagrams:
+    # two outbound control connections, nothing inbound on TCP, and a UDP
+    # listener carrying everything the box was built to carry. Read from the
+    # TCP table alone this is a box nobody is reaching.
+    serving(nd, "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
+                "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.20.4.11:52001 203.0.113.50:443\n"
+                "ESTAB 0 0 10.20.4.11:52002 203.0.113.51:443\n")
+    udp = ("State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
+           "UNCONN 4096   0      0.0.0.0:443         0.0.0.0:*\n")
+    nd.cmd_udp_sockets = lambda: dict({"ok": True, "cmd": "ss -uan", "stdout": udp},
+                                      **nd.parse_udp_sockets(udp))
 
 @scenario("service_endpoint_idle")
 def _(nd):

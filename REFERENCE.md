@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 165
+difference is which one it puts at the top, and that is the whole product: 166
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1357,12 +1357,12 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **36** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **165** | Distinct conclusions it can reach and state in plain language. 138 are faults; 27 are context, like which switch port you're on. |
+| **Data collections** | **37** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Findings** | **166** | Distinct conclusions it can reach and state in plain language. 138 are faults; 28 are context, like which switch port you're on. |
 | **Ranked causes** | **138** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1344 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1352 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 165 findings are the useful figure** if you want to know what the tool can
+**The 166 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1526,7 +1526,7 @@ It needs the walk, because only the walk keeps the quote. A text traceroute
 prints the router's address and throws the quote away, and on those traces
 this is silent and the inference carries on alone.
 
-### The 36 things it inspects
+### The 37 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1541,14 +1541,15 @@ this is silent and the inference carries on alone.
 10. LLDP/CDP neighbour: which switch and port
 11. ARP / neighbour table
 12. TCP socket states
-13. Interface queues: what this box's own egress queues are holding and dropping (Linux `tc`)
-14. Firewall rule counters, read either side of the probes, so a drop rule that counted while they were in flight can be named (Linux, needs root)
-15. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
-16. TCP retransmission counters
-17. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
-18. Clock synchronisation and offset, where a time daemon can be asked
-19. Listening ports
-20. Neighbour inventory (with `--inventory`)
+13. UDP datagram listeners and what is queued behind them, because a box can carry its user traffic over datagrams while its control plane is TCP, and every other socket reading here is TCP (`ss -uan`)
+14. Interface queues: what this box's own egress queues are holding and dropping (Linux `tc`)
+15. Firewall rule counters, read either side of the probes, so a drop rule that counted while they were in flight can be named (Linux, needs root)
+16. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
+17. TCP retransmission counters
+18. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
+19. Clock synchronisation and offset, where a time daemon can be asked
+20. Listening ports
+21. Neighbour inventory (with `--inventory`)
 
 **Off the device**
 21. Gateway reachability and loss
@@ -2152,7 +2153,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1344 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1352 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3640,7 +3641,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1344 tests, no dependencies, no network, a few seconds, so they run
+1352 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3719,7 +3720,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 165 findings with readable rules instead of
+> way out - and who owns it. Ranks 166 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

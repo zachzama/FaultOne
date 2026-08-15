@@ -2209,6 +2209,63 @@ def parse_socket_states(text, own_access=(None, None)):
             "inbound": inbound, "outbound": len(established) - inbound}
 
 
+def parse_udp_sockets(text):
+    """`ss -uan` into the two things a datagram socket can honestly tell us.
+
+    A datagram listener is not a connection table. One socket bound to a port
+    can serve any number of peers without the kernel recording one of them, so
+    counting sockets is not counting clients and must never be presented as
+    though it were. What the table does say is that something is bound and
+    willing to receive, and how much has piled up behind it unread.
+
+    Recv-Q on a UDP socket is bytes the kernel is holding that the process has
+    not taken. On a box whose user traffic is datagrams that is the closest
+    thing there is to "this box cannot keep up with what is arriving" - the
+    counterpart to an accept queue, for a plane that has no accept.
+    """
+    listeners, connected, queued = [], 0, 0
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() not in ("UNCONN", "ESTAB", "UDP"):
+            continue
+        try:
+            recv_q, send_q = int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        local, peer = parts[3], parts[4]
+        port = peer_port(local)
+        if not port:
+            continue
+        if peer not in ("*:*", "0.0.0.0:*", "[::]:*", ":::*"):
+            connected += 1
+            continue
+        if _is_loopback_socket(local):
+            continue                    # bound for this box's own use, not serving
+        listeners.append({"address": peer_host(local) or "", "port": port,
+                          "recv_q": recv_q, "send_q": send_q})
+        queued += recv_q
+    return {"listeners": listeners, "connected": connected, "queued_bytes": queued,
+            "listen_ports": sorted({l["port"] for l in listeners})}
+
+
+def cmd_udp_sockets():
+    """This box's datagram listeners, and what is waiting behind them.
+
+    Read because a box can carry its user traffic over datagrams while its
+    control plane is TCP, and every other socket reading here is TCP. Without
+    this the whole data plane is absent from the report, and "nothing is
+    connected" gets said about a box that is busy.
+    """
+    if OS_NAME == "Windows":
+        res = run(["netstat", "-an", "-p", "UDP"], timeout=15)
+    else:
+        res = run_first_usable([["ss", "-uan"], ["netstat", "-an", "-u"]], timeout=15)
+    if not res.get("ok"):
+        return res
+    res.update(parse_udp_sockets(res.get("stdout", "")))
+    return res
+
+
 def cmd_socket_states():
     """This device's own TCP sockets, by state."""
     if OS_NAME == "Windows":
@@ -5655,6 +5712,13 @@ PANEL_HELP = {
                 "nothing is answering; a pile of CLOSE_WAIT means an application isn't closing "
                 "its sockets, which is not a network fault.",
     },
+    "udp_sockets": {
+        "label": "datagram listeners", "layer": 4,
+        "desc": "This box's UDP sockets. A datagram listener serves any number of peers "
+                "without the kernel recording them, so this counts what is bound and what "
+                "is queued behind it rather than who is connected - which is the one thing "
+                "a socket table cannot say about this plane.",
+    },
     "firewall": {
         "label": "firewall rule counters, either side of the probes", "layer": 3,
         "desc": "Every rule's packet count, read once before anything was sent and once "
@@ -7094,6 +7158,9 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # boxes look identical here, so it names both and judges
                   # neither.
                   "no_upstream_sessions",
+                  # Says a question cannot be answered from a socket table,
+                  # which is the opposite of a fault to rank.
+                  "clients_may_be_on_the_datagram_plane",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
                   # forwarding look the same here, so it names both.
@@ -7341,6 +7408,7 @@ FINDING_SIDE.update({
     "service_address_unserved": "downstream",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
+    "clients_may_be_on_the_datagram_plane": "downstream",
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
     "queuing_delay_clients": "downstream",
@@ -7596,6 +7664,9 @@ RAW_STAGE = {
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
     "sockets": ("ports", "clients"), "ports": "ports",
+    # The other plane. Kept for the clients stage, because what it answers
+    # is whether an empty TCP table means an empty box.
+    "udp_sockets": "clients",
     # Read from the same table and answering the same two stages: who is
     # listening belongs to ports, who is holding them open to clients.
     "socket_owners": ("ports", "clients"),
@@ -10583,6 +10654,8 @@ def _check_arp(raw, findings):
     # it. Re-read only when something else called this directly.
     if "sockets" not in raw:
         raw["sockets"] = cmd_socket_states()
+    if "udp_sockets" not in raw:
+        raw["udp_sockets"] = cmd_udp_sockets()
     if "socket_owners" not in raw:
         raw["socket_owners"] = cmd_socket_owners()
     if "qdisc" not in raw:
@@ -12788,6 +12861,28 @@ def _check_rotation(raw, findings):
     inbound = sock.get("inbound") or 0
     if inbound >= SERVING_INBOUND_MIN:
         return                      # clients are connected; whatever else is wrong
+    # A datagram listener serves peers the kernel never records, so an empty TCP
+    # table is not an empty box. On one that forwards user traffic over UDP this
+    # fired while every tunnel it was built to carry was up, and said the service
+    # was reaching nobody - at high confidence, with every other check passing,
+    # which is the most expensive way to be wrong.
+    datagram = (raw.get("udp_sockets") or {}).get("listeners") or []
+    if datagram:
+        where = ", ".join(str(p) for p in sorted({l["port"] for l in datagram})[:4])
+        findings.append({
+            "severity": "ok",
+            "layer": 4,
+            "code": "clients_may_be_on_the_datagram_plane",
+            "message": (
+                f"No TCP connection is open inbound, and this box is also listening "
+                f"for datagrams on {where}. A datagram socket serves any number of "
+                f"peers without the kernel recording one of them, so how many are "
+                f"being served cannot be read from a socket table at all. Whether "
+                f"nothing is reaching this box or everything is reaching it over "
+                f"UDP is not a question this can answer, which is why it is not "
+                f"answering it - check the listener's own counters."),
+        })
+        return
     # Named directly rather than through dominant_peer: that asks whether one
     # address carries *most* of the traffic, and here there is barely any
     # traffic to carry. With one or two connections the peer is the whole
@@ -13383,6 +13478,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # with the rest of the device checks, because choosing a backend to aim at
     # is the first thing that depends on it. Read once and reused below.
     raw["sockets"] = cmd_socket_states()
+    # The other plane. A box can carry its user traffic over datagrams while its
+    # control plane is TCP, and every other socket reading here is TCP - without
+    # this the busiest half of such a box is simply absent from the report.
+    raw["udp_sockets"] = cmd_udp_sockets()
     # Who holds them, read beside the table itself so every finding built from
     # that table can name a process instead of saying "an application".
     raw["socket_owners"] = cmd_socket_owners()

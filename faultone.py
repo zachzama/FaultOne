@@ -9451,6 +9451,36 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_orphans(stats, findings, counter_window)
 
 
+def other_plane(raw):
+    """The datagram listeners, when this box has any, so the rest can say so.
+
+    Every per-connection reading here is TCP: the client table is `ss -tan` and
+    the statistics are `ss -tin`. On a box whose control plane is TCP and whose
+    user traffic is datagrams, that means direction, stalled returns, relay
+    volume, queuing delay, TIME_WAIT pressure and ephemeral ports all describe
+    the control plane, under headings that read as how users are being served.
+
+    None of it is wrong, and a control plane failing is a real outage worth
+    every one of those findings. What a reader cannot do is tell which plane
+    they are looking at, and on this shape of box the two have different owners
+    and different symptoms.
+
+    Returned rather than stamped on everything, because the label is only worth
+    printing where there is another plane to confuse it with. On a box with no
+    datagram listeners "TCP" on every heading is a word repeated on every
+    report to rule out a possibility nobody had - the same reason the fan-out
+    is drawn only where a conclusion rested on it, and the privilege line
+    appears only on the run that saw less.
+    """
+    listeners = ((raw or {}).get("udp_sockets") or {}).get("listeners") or []
+    if not listeners:
+        return None
+    # Coerced to text: the parser reads ports out of an address and gets
+    # strings, and a fixture that hands back integers would otherwise
+    # render differently from a real run.
+    return {"ports": sorted({str(l["port"]) for l in listeners})}
+
+
 def _check_udp_queues(raw, findings):
     """Datagrams the kernel is holding that the process has not taken.
 
@@ -13917,6 +13947,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # The path as four legs, decided here so the page and the terminal
         # cannot end up with two versions of which direction stopped.
         "path_legs": build_path_legs(raw, _sides),
+        # Present only on a box that has one, because that is the only box
+        # where saying "TCP" tells a reader anything.
+        "other_plane": other_plane(raw),
         # Names for the addresses this report shows, and only those. Carried as
         # a lookup rather than folded into the fields, so every address stays
         # exactly what it was and the page decides how to show both.
@@ -14236,6 +14269,14 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     font-family:var(--mono); font-size:12px;}
   .pcol-hd .pwho{color:var(--text);}
   .pcol-hd .pfacts{color:var(--text-dim); font-size:11px; text-align:right;}
+  /* Which plane the numbers beside it describe. Only rendered on a box that
+     has another one, so on most reports this styles nothing. */
+  .planetag{font-family:var(--mono); font-size:9px; letter-spacing:.08em;
+    color:var(--text-dim); border:1px solid var(--border); border-radius:3px;
+    padding:0 4px; vertical-align:1px; cursor:help;}
+  .planenote{color:var(--text-dim); font-size:12px; line-height:1.5;
+    margin:-4px 0 12px; max-width:74ch;}
+  .planenote b{color:var(--text); font-weight:600;}
   /* Where this site's network stops and somebody else's begins, drawn as a
      place in the path because that is what it is. The single most useful
      annotation on a path: it is the one that says who to escalate to. */
@@ -14891,6 +14932,25 @@ function boundaryArrow(sides, i, flows){
     + '<span>⇄</span></div>';
 }
 
+function planeTag(otherPlane){
+  // The label on the column's own numbers. Empty on a box with one plane,
+  // which is why it is a function rather than a string in the template.
+  if(!otherPlane) return '';
+  return ' <span class="planetag" title="Every per-connection reading here is TCP: '
+    + 'the connection count, the round trip, the loss, and which direction stalled. '
+    + 'This box also carries datagrams, and none of these numbers describe that '
+    + 'traffic.">TCP</span>';
+}
+
+function planeNote(otherPlane){
+  // Said once, under the section, rather than repeated in every heading.
+  if(!otherPlane || !(otherPlane.ports || []).length) return '';
+  return '<div class="planenote">These are this box\'s <b>TCP</b> connections. It is '
+    + 'also listening for datagrams on ' + otherPlane.ports.map(escapeHtml).join(', ')
+    + ', and nothing measured here describes that traffic: a datagram socket serves '
+    + 'any number of peers without the kernel recording one of them.</div>';
+}
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -14999,6 +15059,9 @@ function renderDiagnosis(data, opts){
   const named = a => NAMES[a] ? `${escapeHtml(NAMES[a])} (${escapeHtml(a)})`
                               : escapeHtml(String(a == null ? '' : a));
   const legSides = data.path_legs || [];
+  // Only on a box that has one. See other_plane() for why this is
+  // conditional rather than always printed.
+  const otherPlane = data.other_plane || null;
 
   // The traced path, as the third column. Present whenever a trace ran, so the
   // hops stay visible on every report rather than only on the ones that mark
@@ -15104,7 +15167,7 @@ function renderDiagnosis(data, opts){
     const op = side.traced;
     const traced = op ? hopList(op) : '';
     return `<div class="pcol ${side.state}">
-        <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}</span>
+        <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}${planeTag(otherPlane)}</span>
           <span class="pfacts"${side.hops_in
             ? ` title="The distance is counted from a reply that arrived here, assuming it left at ttl ${side.ttl_assumed}. Each router on the way decrements it, so the difference is the hops it crossed."`
             : ''}>${named(side.peer)}<br>${escapeHtml(facts)}</span></div>
@@ -15112,7 +15175,9 @@ function renderDiagnosis(data, opts){
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathHtml
-    ? '<div class="section-title over">The path, out and back on each side</div>' + pathHtml
+    ? '<div class="section-title over">The path, out and back on each side</div>'
+      + planeNote(otherPlane)
+      + pathHtml
     : '';
 
   document.getElementById('whereWrap').innerHTML = sides.length

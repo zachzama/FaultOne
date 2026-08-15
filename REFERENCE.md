@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **37** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **167** | Distinct conclusions it can reach and state in plain language. 139 are faults; 28 are context, like which switch port you're on. |
 | **Ranked causes** | **139** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1365 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1372 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 167 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2153,7 +2153,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1365 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1372 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3643,7 +3643,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1365 tests, no dependencies, no network, a few seconds, so they run
+1372 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

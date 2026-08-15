@@ -177,54 +177,63 @@ path that balances five times, and still never names the concept.
 The whole data change was one key on the viewer's row: `also` was in the report
 and the row builder had never carried it.
 
-## Open: every per-connection reading is TCP, and nothing says so
+## Settled: which plane the numbers describe, said only where there are two
 
-The socket table clients are counted from is `ss -tan` and the per-connection
-statistics are `ss -tin`. Both are TCP. On a box whose control plane is TCP and
-whose user traffic is datagrams, that means direction, stalled returns, relay
-volume, queuing delay, TIME_WAIT pressure and ephemeral ports all describe the
-control plane - and the panel headings say "clients in", "this box" and
-"depends on", which reads as how users are being served.
+Every per-connection reading here is TCP: the client table is `ss -tan` and the
+statistics are `ss -tin`. On a box whose control plane is TCP and whose user
+traffic is datagrams, direction, stalled returns, relay volume, queuing delay,
+TIME_WAIT pressure and ephemeral ports all describe the control plane, under
+headings that read as how users are being served.
 
-None of it is wrong. A control plane failing is a real outage and worth every
-one of those findings. The gap is that a reader cannot tell which plane they
-are looking at, and on this shape of box the two have different owners and
-different symptoms.
+The choice was framed as a word in every heading against a line under the
+panel. Both are worse than the third option: **say it only where there is
+another plane to confuse it with.** On a box with no datagram listeners "TCP"
+on every heading is a word repeated on every report to rule out a possibility
+nobody had. `other_plane()` returns nothing on such a box and the page draws
+nothing at all.
 
-The shape it wants is labelling rather than new measurement: say TCP where the
-reading is TCP, on the zone panel and in the findings that carry a side. The
-open question is how loud that should be - a word in each heading is cheap and
-repeats on every report; a single line under the panel is quieter and easier to
-miss. Decide it as a drawing question, the way the fan-out was.
+That is now three features following the same rule, and it is worth naming
+because it keeps coming up: the fan-out is marked only on the hops a hedge was
+computed on, the privilege line appears only on the run that saw less, and the
+plane label appears only on the box with two. Say it where it changes the
+reading.
 
-Related: `clients_may_be_on_the_datagram_plane` already refuses to answer "how
-many clients" on such a box. That refusal is the honest floor, and everything
-above is about not implying an answer elsewhere.
+`planeTag` and `planeNote` are named functions rather than expressions inside
+the render, so a test can execute them in node instead of asserting that the
+template contains the words. That distinction is not academic here: a badge
+wired to a constant passed a contains-the-field test earlier in this file's
+history.
 
-## Open: the datagram plane has one signal and it is not loss
+## Settled: the datagram queue is a level, and levels need a different instrument
 
-`cmd_udp_sockets` reads the listeners and what is queued behind them. Nothing
-reads that queue yet.
+`Recv-Q` on a datagram listener is bytes the kernel took delivery of that the
+process has not read - the counterpart to an accept queue, for a plane that has
+no accept. Two things about it shaped the design and are worth keeping:
 
-A datagram socket has no retransmits, no smoothed round trip and no duplicate
-acknowledgements, so none of the TCP techniques port and the questions have to
-be asked differently. What is in hand: `Recv-Q` on the listener is bytes the
-kernel is holding that the process has not taken, which is the counterpart to
-an accept queue for a plane that has no accept - the closest thing there is to
-"this box cannot keep up with what is arriving". Beside it sit the `Udp:` block
-in `/proc/net/snmp`, already collected and already driving two findings, and
-the interface counters.
+**It is a level, not a counter.** The delta every other sampled reading here
+uses is the wrong instrument: a queue that went 8000 to 0 to 8000 has a delta
+of nothing and never emptied. What two readings support is narrower - over the
+bar at both ends and no lower at the end - and the message says outright that
+two samples cannot separate one standing backlog from two bursts.
 
-The trap to design around is the same one `flow_direction` was built around: a
-queue with bytes in it is normal, because a socket is read in bursts. A depth
-is only worth a finding if it persists or if it is large against the socket's
-own buffer, and neither is established by one reading. Whatever gets built
-needs the sampling window the counter checks already use, not a snapshot.
+**A byte count cannot say whether a queue is large.** The first version used a
+fixed floor of 4096 and the scenario corpus rejected it inside one run: a
+listener sitting flat at exactly that turned the context finding about not
+being able to count clients into a warning about a backlog. Four kilobytes is a
+serious backlog on a small socket and one datagram on a large one. The bar is a
+share of the socket's own receive buffer now, read from `skmem` via `ss -m`,
+with a byte floor underneath so a tiny buffer cannot reach a quarter of itself
+on one datagram.
 
-What cannot be answered from here at all: how many peers are being served, and
-whether datagrams were lost in flight. The kernel records neither for an
-unconnected socket, so both need the listener's own counters rather than
-anything the operating system will hand over.
+Where the buffer cannot be read - `netstat`, or an `ss` that rejects `-m` -
+this says nothing rather than falling back to a byte count. There is no honest
+fallback: the fallback is the thing that was wrong.
+
+**Still unanswerable, and deliberately unanswered:** how many peers a listener
+serves, and whether datagrams were lost in flight. The kernel records neither
+for an unconnected socket. Both would need the listener's own counters, and
+`clients_may_be_on_the_datagram_plane` already refuses the first - a
+neighbouring finding implying an answer would undercut it.
 
 ## Open: the resume card quotes numbers that moved again
 

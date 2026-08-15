@@ -6674,6 +6674,116 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestSayingWhichPlaneTheNumbersDescribe(unittest.TestCase):
+    """Every per-connection reading here is TCP: the client table is `ss -tan`
+    and the statistics are `ss -tin`. On a box whose control plane is TCP and
+    whose user traffic is datagrams, direction, stalled returns, relay volume,
+    queuing delay, TIME_WAIT pressure and ephemeral ports all describe the
+    control plane, under headings that read as how users are being served.
+
+    None of it is wrong. A reader just cannot tell which plane they are looking
+    at, and on that shape of box the two have different owners.
+
+    **The label is conditional, and that is the decision.** The options were a
+    word in every heading or a line under the panel. Both are worse than saying
+    it only where there is another plane to confuse it with: on a box with no
+    datagram listeners, "TCP" everywhere is a word repeated on every report to
+    rule out a possibility nobody had. Same rule as the fan-out mark and the
+    privilege line - say it where it changes the reading.
+    """
+
+    def test_a_box_with_one_plane_says_nothing(self):
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertIsNone(rep["other_plane"])
+
+    def test_a_box_with_both_names_the_ports(self):
+        mod = fresh()
+        setup, kwargs = S["udp_queue_standing"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(rep["other_plane"], {"ports": ["443"]})
+
+    def test_the_ports_are_text_whatever_the_reader_produced(self):
+        """The parser reads a port out of an address and gets a string; a
+        fixture handing back integers would render differently from a real
+        run, and the difference would only show on the page."""
+        for port in (443, "443"):
+            with self.subTest(port=port):
+                raw = {"udp_sockets": {"listeners": [{"port": port}]}}
+                self.assertEqual(nd.other_plane(raw), {"ports": ["443"]})
+
+    # ---- and what the page actually draws --------------------------------
+
+    def viewer_says(self, other_plane):
+        """Run the two render functions the way the browser will.
+
+        Asserting the template contains the words would pass against a tag
+        wired to a constant, which is how the privilege badge got through
+        earlier in this file's history. These execute.
+        """
+        import json as _json
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+        out = []
+        for name in ("escapeHtml", "planeTag", "planeNote"):
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        body = ("\nconst p = JSON.parse(process.argv[2]);\n"
+                "process.stdout.write(JSON.stringify("
+                "{tag: planeTag(p), note: planeNote(p)}));")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write("\n".join(out) + body)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path, _json.dumps(other_plane)],
+                                 capture_output=True, text=True, timeout=30)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            os.unlink(path)
+
+    def test_the_page_draws_nothing_at_all_on_a_one_plane_box(self):
+        """Most reports. An empty string here is the whole reason the label is
+        conditional, so it is worth executing rather than assuming."""
+        drawn = self.viewer_says(None)
+        self.assertEqual((drawn["tag"], drawn["note"]), ("", ""))
+
+    def test_the_page_labels_the_numbers_and_explains_it_once(self):
+        drawn = self.viewer_says({"ports": ["443", "4500"]})
+        self.assertIn(">TCP<", drawn["tag"])
+        self.assertIn("443, 4500", drawn["note"])
+        self.assertIn("without the kernel recording one of them", drawn["note"])
+
+    def test_a_plane_with_no_ports_draws_no_note(self):
+        """An empty list would otherwise render "listening for datagrams on ."
+        """
+        self.assertEqual(self.viewer_says({"ports": []})["note"], "")
+
+    def test_a_port_from_the_wire_cannot_carry_markup_onto_the_page(self):
+        """The ports come from parsing command output, which is the one input
+        here that is not this tool's own text."""
+        drawn = self.viewer_says({"ports": ["<img src=x onerror=alert(1)>"]})
+        self.assertNotIn("<img", drawn["note"])
+        self.assertIn("&lt;img", drawn["note"])
+
+
 class TestTheQueueOnTheOtherPlane(unittest.TestCase):
     """`Recv-Q` on a datagram listener is bytes the kernel has taken delivery
     of that the process has not read. On a box whose user traffic is datagrams

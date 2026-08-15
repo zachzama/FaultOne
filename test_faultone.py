@@ -8115,17 +8115,34 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
                 self.assertEqual(len(said), len(set(said)),
                                  "two boxes are printing the same summary")
 
-    def test_the_box_that_owns_a_fault_says_why_rather_than_what(self):
+    def test_the_box_that_owns_a_fault_names_it_rather_than_measuring_it(self):
         """And the split is the right way round: the measurement belongs to the
-        direction it was taken in, the reason to the box responsible."""
+        direction it was taken in, and the box answering for it names which
+        finding that is.
+
+        It names the finding rather than saying "the cause", because two zones
+        can own two different findings while only one of them is the verdict's
+        cause - and demo 8 does exactly that. A zone claiming to be the cause
+        while the cause tag sits on another zone is two answers again.
+        """
         mod = fresh()
         setup, kwargs = S["ephemeral_ports_low"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
         by = {z["side"]: z.get("worst") or "" for z in rep["sides"]}
-        self.assertIn("The cause is this box's local port range", by["local"])
+        self.assertEqual(by["local"], nd.HEADLINE["ephemeral_ports_low"])
         self.assertIn("ports in ", by["upstream"], "the measurement moved off the "
                                                    "side it was measured on")
+
+    def test_a_zone_never_calls_itself_the_cause(self):
+        """That word belongs to the tag, which is placed once per report. A
+        second claim to it in the summary can disagree with the tag, and on a
+        report with two owned findings it does."""
+        for code, _rep, _v, zones in self.every_report():
+            for zone in zones.values():
+                if zone["state"] in self.LIT and not zone["owns_cause"]:
+                    with self.subTest(code=code, side=zone["side"]):
+                        self.assertNotIn("The cause is", zone.get("worst") or "")
 
     def test_a_report_with_a_fault_lights_something(self):
         for code, _rep, v, zones in self.every_report():

@@ -8250,9 +8250,9 @@ def build_path_legs(raw=None, sides=None):
     return out or None
 
 
-# The curated owner phrase per finding, for the places that need the reason on
-# its own rather than the whole message.
-OWNER_PHRASE = {code: owner for code, owner, _h, _n in VERDICT_RULES}
+# The headline per finding, for the zone that has to say which finding it owns
+# rather than repeat the measurement taken on the other side of the box.
+HEADLINE = {code: head for code, _o, head, _n in VERDICT_RULES}
 
 
 # Which box the verdict blames, where that is not the box its direction lights.
@@ -8395,8 +8395,13 @@ def build_sides(findings, raw=None):
             # facing one keeps the measurement and the owning one gets the
             # reason, which is a sentence the finding already carries.
             if top in owning:
-                entry["worst"] = "The cause is %s." % OWNER_PHRASE.get(
-                    top.get("code"), "this box")
+                # The headline, not the owner phrase, and not the word "cause".
+                # Two zones can own two different findings while only one of
+                # them is the verdict's cause, and "The cause is ..." under a
+                # zone the cause tag is not on says two things at once. The
+                # headline names which finding this zone is answering for,
+                # which is the disambiguation that is actually needed.
+                entry["worst"] = HEADLINE.get(top.get("code")) or top["message"]
             else:
                 entry["worst"] = top["message"]
         if side == "downstream" and serving:

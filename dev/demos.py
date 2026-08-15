@@ -243,20 +243,36 @@ def carrying_its_users_over_datagrams(mod):
 
     Read from the TCP table alone this is a box nobody is reaching, and that is
     exactly what the tool used to say about it: "the service is up and nothing
-    is reaching it", at high confidence, with every other check passing. So the
-    page has to show three things at once. That the sophisticated half of the
-    report describes the control plane. That the other plane exists. And the
-    one thing that plane says plainly, which is what has piled up unread.
+    is reaching it", at high confidence, with every other check passing.
+
+    The page shows the fault that shape hides. Fifty-eight of its clients are
+    on port 443 over TCP and four are on datagrams, which is a transport built
+    to avoid TCP running almost entirely on TCP. Nothing about that fails:
+    every client connects, every check passes, and the only people who can see
+    it are the users, as latency they have no way to report. It is the one
+    finding on any of these pages that no other check here could reach.
+
+    Underneath it, the plane that did get through is backing up - 61 KB
+    standing on a 208 KB socket - so the page also carries what this box is
+    doing to the tunnels it does have.
     """
-    # Control plane only, on TCP: two sessions out, nothing inbound.
+    # Two sessions out to the service this box enrols with, and the clients
+    # that could not get datagrams through arriving on the TCP port instead.
     T.sided_flows(mod,
                   *[T.sided_sock("203.0.113.%d" % (50 + i), "52%03d" % i,
                                  sent=8_000_000, retrans=0) for i in range(2)])
-    T.serving(mod, "\n".join([
-        "State Recv-Q Send-Q Local Address:Port Peer Address:Port",
-        "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*",
-        "ESTAB 0 0 10.0.0.5:52000 203.0.113.50:443",
-        "ESTAB 0 0 10.0.0.5:52001 203.0.113.51:443"]) + "\n")
+    T.serving(mod, "\n".join(
+        ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+         "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*",
+         "ESTAB 0 0 10.0.0.5:52000 203.0.113.50:443",
+         "ESTAB 0 0 10.0.0.5:52001 203.0.113.51:443"]
+        + ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i + 1, i)
+           for i in range(58)]) + "\n")
+    # Four tunnels got through. The rest of the clients are on the line above.
+    mod.cmd_udp_tunnels = lambda raw=None: {
+        "ok": True, "cmd": "/proc/net/nf_conntrack (counted, not read)",
+        "ports": ["443", "4500"], "tunnels": 4, "unanswered": 0, "total": 4,
+        "stdout": "4 tracked udp flow(s) to 443, 4500"}
     # The user plane. One listener keeping up, one not: 61 KB standing on a
     # 208 KB socket across the window, which is the shape the finding is for.
     reads = [
@@ -357,7 +373,7 @@ DEMOS = [
     # The box the last two releases were built for, and the only page that
     # shows any of that work. Everything before this one is a single-plane box,
     # where the tool has nothing extra to say and correctly says nothing.
-    ("8-two-planes", "udp_queue_standing",
+    ("8-two-planes", "transport_fell_back",
      lambda mod: (carrying_its_users_over_datagrams(mod), and_it_forwards_datagrams(mod))),
 ]
 

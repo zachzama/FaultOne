@@ -8460,6 +8460,145 @@ class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
         self.assertNotIn("app_limited", {c for c, *_ in nd.VERDICT_RULES})
 
 
+class TestTheFanOutIsDrawnWhereItExplainsSomething(unittest.TestCase):
+    """`balanced_hops` has been collected since the parser learned continuation
+    lines, three findings soften themselves on it, and the page never drew it -
+    so a reader met the hedge with nothing on the hop list to explain it.
+
+    Marked only where a conclusion actually rested on it. A backbone that
+    load-balances at half its hops would otherwise carry a mark on half the
+    list, which is a mark nobody reads.
+    """
+
+    def hops(self, *fanned_at):
+        return [{"hop": n, "also": (["a.example.net", "b.example.net"]
+                                    if n in fanned_at else [])}
+                for n in range(1, 7)]
+
+    def test_a_hop_inside_the_span_is_marked(self):
+        hops = self.hops(4)
+        nd.mark_fanout(hops, [4])
+        self.assertEqual([h["hop"] for h in hops if h.get("fanout_hedged")], [4])
+
+    def test_a_fan_out_nothing_hedged_on_stays_unmarked(self):
+        """The whole scoping decision. A path can fan out somewhere no claim
+        depends on, and that is a true fact about the trace rather than an
+        explanation of anything."""
+        hops = self.hops(2)
+        nd.mark_fanout(hops, [])          # the finding's span held no fan-out
+        self.assertEqual([h for h in hops if h.get("fanout_hedged")], [])
+
+    def test_a_hop_with_no_other_responder_is_never_marked(self):
+        """Being inside the span is not enough - the hop has to have fanned."""
+        hops = self.hops(4)
+        nd.mark_fanout(hops, [3, 4, 5])
+        self.assertEqual([h["hop"] for h in hops if h.get("fanout_hedged")], [4])
+
+    def test_the_row_carries_it_only_where_it_was_marked(self):
+        hops = [{"hop": 1, "host": "a", "times_ms": [1.0], "timed_out": False,
+                 "also": ["x.example.net"], "fanout_hedged": True},
+                {"hop": 2, "host": "b", "times_ms": [2.0], "timed_out": False,
+                 "also": ["y.example.net"]}]
+        rows = nd.build_probe_column(hops, "8.8.8.8")["hops"]
+        self.assertEqual(rows[0]["fanout"], 2, "one router plus the one it also was")
+        self.assertEqual(rows[0]["fanout_also"], ["x.example.net"])
+        self.assertEqual(rows[1]["fanout"], 0, "an unmarked fan-out reached the page")
+        self.assertEqual(rows[1]["fanout_also"], [])
+
+    def test_a_loop_that_hedged_marks_the_hop_it_hedged_on(self):
+        """End to end, through the real pipeline: the same router answers at
+        hops 3 and 5, the path fans out at 4 between them, and the loop
+        downgrades itself because of it."""
+        mod = fresh()
+        mod.OS_NAME = "Linux"
+        ping_map(mod, gw_loss=0, inet_loss=0, avg=40.0, sent=20)
+        trace(mod, "traceroute to 8.8.8.8 (8.8.8.8), 30 hops max, 60 byte packets\n"
+                   " 1  10.0.0.1 (10.0.0.1)  1.2 ms  1.3 ms  1.1 ms\n"
+                   " 2  ring1.example-isp.net (203.0.113.7)  12.0 ms  12.4 ms  12.2 ms\n"
+                   " 3  core-a.example-isp.net (198.51.100.9)  20.0 ms\n"
+                   "    core-b.example-isp.net (198.51.100.10)  20.4 ms\n"
+                   " 4  ring1.example-isp.net (203.0.113.7)  31.0 ms  31.2 ms  31.1 ms\n"
+                   " 5  dns.google (8.8.8.8)  40.0 ms  40.2 ms  40.1 ms\n")
+        report = mod.diagnose("8.8.8.8", None, quick=False)
+        loop = next((f for f in report["findings"] if f["code"] == "loop"), None)
+        self.assertIsNotNone(loop, "the fixture no longer produces a loop")
+        self.assertEqual(loop["severity"], "warning", "the loop did not hedge")
+        marked = [r["hop"] for r in report["probe_path"]["hops"] if r.get("fanout")]
+        self.assertEqual(marked, [3], "the page cannot show why the loop hedged")
+
+
+class TestTheFanOutLineAsDrawn(unittest.TestCase):
+    """The sub-line itself, run rather than read."""
+
+    def _js(self):
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src = nd.VIEWER_TEMPLATE
+        out = []
+        for name in ("escapeHtml", "fanoutLine"):
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        return node, "\n".join(out)
+
+    def draw(self, hop):
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        node, src = self._js()
+        body = (f"process.stdout.write(JSON.stringify("
+                f"fanoutLine({_json.dumps(hop)})));")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write(src + "\n" + body)
+            path = fh.name
+        try:
+            res = subprocess.run([node, path], capture_output=True, text=True,
+                                 timeout=30, encoding="utf-8")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return _json.loads(res.stdout)
+        finally:
+            _os.unlink(path)
+
+    def test_a_marked_hop_says_how_many_answered(self):
+        html = self.draw({"fanout": 3, "fanout_also": ["b.example.net", "c.example.net"]})
+        self.assertIn("3 routers answered here", html)
+        self.assertIn("fans out", html)
+
+    def test_an_unmarked_hop_draws_nothing(self):
+        self.assertEqual(self.draw({"fanout": 0, "fanout_also": []}), "")
+        self.assertEqual(self.draw({}), "")
+
+    def test_the_other_names_are_a_footnote_not_the_line(self):
+        """They are detail. The line is the meaning, and the names live where
+        the list's own footnote already does."""
+        html = self.draw({"fanout": 3, "fanout_also": ["b.example.net", "c.example.net"]})
+        self.assertIn('title="also answered: b.example.net, c.example.net"', html)
+        self.assertNotIn("b.example.net</div>", html)
+
+    def test_it_is_not_dressed_as_a_severity(self):
+        """The other sub-lines say what is wrong with a hop. This one says what
+        the trace could not tell about it, so it must not borrow their colour."""
+        html = self.draw({"fanout": 2, "fanout_also": ["b.example.net"]})
+        self.assertIn('class="hwhy fan"', html)
+        for severity in ("crit", "warn"):
+            self.assertNotIn(severity, html)
+
+    def test_a_hostile_router_name_cannot_become_markup(self):
+        html = self.draw({"fanout": 2, "fanout_also": ['<img src=x onerror=alert(1)>']})
+        self.assertNotIn("<img", html)
+
+
 class TestOneListenerAmongSiblings(unittest.TestCase):
     """`service_endpoint_idle`. The address-level check asks whether traffic
     arrives on an address at all, so an address holding three listeners answers

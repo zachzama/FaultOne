@@ -144,17 +144,38 @@ because two scenarios on one box often produce only one finding. Expect roughly
 one bug per fifty pairs at several minutes of thought each, and do not treat the
 remaining 576 as a backlog to burn down.
 
-## Open: the fan-out is used but not drawn
+## Settled: the fan-out is drawn where it explains a hedge, and nowhere else
 
-`balanced_hops` finds the hops where more than one router answered, and three
-findings now say so in their own words. The HTML report does not draw it. The
-terminal has always printed the extra names; the page never has.
+`balanced_hops` finds the hops where more than one router answered, three
+findings soften themselves on it, and the page drew none of it - so a reader
+met the hedge with nothing on the hop list to account for it.
 
-Not obviously wrong. The findings carry the qualification in prose, which is
-where a reader meets it, and the hop list is the panel that was thinned
-deliberately. But a reader looking at the hop list cannot see why the loop
-below it hedges, and that is the gap. Decide it as a drawing question, not a
-data one: the data is in the report already.
+It was a drawing question, as the note that opened this said, and the answer
+turned on scope rather than on treatment. **Marking every fanned hop is
+truthful and useless**: a backbone that load-balances at half its hops carries
+a mark on half the list, and a mark that common stops being read. So the mark
+is made where a conclusion actually rested on it - `mark_fanout` is called by
+`loop`, `double_nat` and `latency_wall` with the span each already computed
+through `balanced_between`, and a fan-out nobody hedged on stays undrawn. That
+is a true fact about the trace rather than an explanation of anything.
+
+The treatment is a `.hwhy` sub-line, which is the mechanism already printing
+*no reply*, *32% loss* and *enters example-isp.net*. It reads `3 routers
+answered here - the path fans out`, and it takes the dim colour rather than
+warn or crit: the other sub-lines say what is wrong with a hop, and this one
+says what the trace could not tell about it. The other routers' names go in the
+row's `title`, where the list's own footnote already lives - they are detail,
+and the line is the meaning.
+
+Three alternatives were drawn and rejected. A count appended to the host cell
+(`+2`) says nothing a reader can act on. A glyph with a tooltip fails the rule
+this file already keeps - *every marked hop says why, in words* - and vanishes
+into a ticket paste or a screen reader. Listing the other routers as sub-rows
+spends the vertical space the hop list was thinned to protect, ten rows on a
+path that balances five times, and still never names the concept.
+
+The whole data change was one key on the viewer's row: `also` was in the report
+and the row builder had never carried it.
 
 ## Open: the resume card quotes numbers that moved again
 

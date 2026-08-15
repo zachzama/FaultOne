@@ -228,6 +228,10 @@
     padding:0 0 3px 46px;}
   .hwhy.warn{color:var(--warn);}
   .hwhy.edge{color:var(--text-dim); opacity:.7;}
+  /* Not a severity. The other .hwhy lines say what is wrong with a hop; this
+     one says what the trace could not tell about it, which is why it takes the
+     dim colour rather than warn or crit. */
+  .hwhy.fan{color:var(--text-dim); opacity:.85;}
   .base{padding:8px 14px; border-top:1px dashed var(--border);
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim); opacity:.8;}
   /* However many columns there are, they share the width equally.
@@ -829,6 +833,22 @@ const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
 // ratio is a single number for a connection and cannot say which direction
 // lost the packet, so colouring a return head from it would be an invented
 // measurement drawn with more authority than anything else on the page.
+// Why a conclusion under this hop hedged. Only set where a finding actually
+// softened itself on the fan-out - the row carries 0 everywhere else - so this
+// draws an explanation rather than an inventory of every place the path
+// balanced.
+//
+// Named and returning a string for the same reason boundaryArrow is: a line
+// built inline in a template literal can only be checked by searching the page
+// source, which pins how it is written instead of what it draws.
+function fanoutLine(h){
+  if(!h.fanout) return '';
+  const also = h.fanout_also || [];
+  const title = also.length ? 'also answered: ' + also.join(', ') : '';
+  return `<div class="hwhy fan"${title ? ` title="${escapeHtml(title)}"` : ''}>`
+    + `${h.fanout} routers answered here \u2014 the path fans out</div>`;
+}
+
 function boundaryArrow(sides, i, flows){
   const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
   const near = (flows || {})[leg.side === 'downstream' ? 'client' : 'backend'] || {};
@@ -1037,7 +1057,7 @@ function renderDiagnosis(data, opts){
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-      </div>${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
+      </div>${fanoutLine(h)}${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
           h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       ${col.hops_in ? `<div class="pboth">${

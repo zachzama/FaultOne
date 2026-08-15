@@ -5959,6 +5959,22 @@ def balanced_between(balanced, first, last):
     return [h for h in balanced or [] if lo <= h <= hi]
 
 
+def mark_fanout(hops, fanned):
+    """Note on each hop in a fanned span that a conclusion rests on it.
+
+    Marked here rather than wherever it is drawn, because the question the mark
+    answers is "why did the reading below hedge" - and the only place that is
+    known is where the hedge was made. A hop that fanned out under a claim
+    nobody softened is a true fact about the trace and not an explanation of
+    anything, so it stays unmarked: on a backbone that load-balances at half
+    its hops, marking them all is a mark nobody reads.
+    """
+    wanted = set(fanned or [])
+    for hop in hops or []:
+        if hop.get("hop") in wanted and hop.get("also"):
+            hop["fanout_hedged"] = True
+
+
 def is_private_ip(ip):
     """RFC1918 / link-local / loopback / CGNAT. Used to work out where traffic
     stops being the site's network and starts being their ISP's."""
@@ -7892,6 +7908,13 @@ def build_probe_column(hops, target, baseline_path=None):
             "blame": (blame.get("code") or "").replace("_", " ") or None,
             "_severity": blame.get("severity"),
             "edge": hop.get("enters_network") or None,
+            # How many routers answered here, and only where a conclusion below
+            # was softened because of it. Zero everywhere else, so the page can
+            # draw the explanation without drawing every fan-out on the path.
+            "fanout": (len(hop.get("also") or []) + 1
+                       if hop.get("fanout_hedged") else 0),
+            "fanout_also": (list(hop.get("also") or [])
+                            if hop.get("fanout_hedged") else []),
         })
 
     most = max((r["probes"] for r in rows), default=0)
@@ -11874,6 +11897,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # with several the alternative is at least as likely as the loop.
         fanned = balanced_between(path_insight.get("balanced_hops"),
                                   lp["hops"][0], lp["hops"][1])
+        mark_fanout(hops, fanned)
         severity = "warning" if fanned else "critical"
         for hop in hops:
             if hop.get("hop") in lp["hops"]:
@@ -11931,6 +11955,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # answers are written down as a numbered list.
         fanned = balanced_between(path_insight.get("balanced_hops"), 1,
                                   path_insight.get("demarc_hop") or len(hops) or 1)
+        mark_fanout(hops, fanned)
         findings.append({
             "severity": "warning",
             "code": "double_nat",
@@ -12011,6 +12036,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # two routes rather than a wall on one.
         fanned = balanced_between(path_insight.get("balanced_hops"),
                                   max(1, wj["hop"] - 1), wj["hop"])
+        mark_fanout(hops, fanned)
         findings.append({
             "severity": "warning",
             "code": "latency_wall",
@@ -13954,6 +13980,10 @@ VIEWER_TEMPLATE = r"""<!doctype html>
     padding:0 0 3px 46px;}
   .hwhy.warn{color:var(--warn);}
   .hwhy.edge{color:var(--text-dim); opacity:.7;}
+  /* Not a severity. The other .hwhy lines say what is wrong with a hop; this
+     one says what the trace could not tell about it, which is why it takes the
+     dim colour rather than warn or crit. */
+  .hwhy.fan{color:var(--text-dim); opacity:.85;}
   .base{padding:8px 14px; border-top:1px dashed var(--border);
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim); opacity:.8;}
   /* However many columns there are, they share the width equally.
@@ -14555,6 +14585,22 @@ const ZONE_NAME = {downstream: 'clients reaching this box', local: 'this box',
 // ratio is a single number for a connection and cannot say which direction
 // lost the packet, so colouring a return head from it would be an invented
 // measurement drawn with more authority than anything else on the page.
+// Why a conclusion under this hop hedged. Only set where a finding actually
+// softened itself on the fan-out - the row carries 0 everywhere else - so this
+// draws an explanation rather than an inventory of every place the path
+// balanced.
+//
+// Named and returning a string for the same reason boundaryArrow is: a line
+// built inline in a template literal can only be checked by searching the page
+// source, which pins how it is written instead of what it draws.
+function fanoutLine(h){
+  if(!h.fanout) return '';
+  const also = h.fanout_also || [];
+  const title = also.length ? 'also answered: ' + also.join(', ') : '';
+  return `<div class="hwhy fan"${title ? ` title="${escapeHtml(title)}"` : ''}>`
+    + `${h.fanout} routers answered here \u2014 the path fans out</div>`;
+}
+
 function boundaryArrow(sides, i, flows){
   const leg = sides[i].side === 'local' ? sides[i - 1] : sides[i];
   const near = (flows || {})[leg.side === 'downstream' ? 'client' : 'backend'] || {};
@@ -14763,7 +14809,7 @@ function renderDiagnosis(data, opts){
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-      </div>${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
+      </div>${fanoutLine(h)}${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
           h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       ${col.hops_in ? `<div class="pboth">${

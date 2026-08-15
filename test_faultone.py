@@ -6674,6 +6674,150 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhatABrokerIsActuallyDoing(unittest.TestCase):
+    """Three readings about a box whose job is carrying other people's traffic
+    through datagram tunnels, rather than about the box itself.
+
+    They share a shape. Each one is a question the tool could not answer from
+    the socket table, each has an answer somewhere else the kernel keeps, and
+    each is worth exactly as much as the second number it is compared against.
+    """
+
+    CT = ("ipv4 2 udp 17 29 src=198.51.100.9 dst=10.0.0.5 sport=51000 dport=443 "
+          "[UNREPLIED] src=10.0.0.5 dst=198.51.100.9 sport=443 dport=51000 use=2\n"
+          "ipv4 2 udp 17 170 src=198.51.100.10 dst=10.0.0.5 sport=51001 dport=443 "
+          "src=10.0.0.5 dst=198.51.100.10 sport=443 dport=51001 use=2\n"
+          "ipv4 2 udp 17 170 src=198.51.100.11 dst=10.0.0.5 sport=51002 dport=443 "
+          "src=10.0.0.5 dst=198.51.100.11 sport=443 dport=51002 use=2\n"
+          "ipv4 2 tcp 6 431999 ESTABLISHED src=198.51.100.20 dst=10.0.0.5 sport=52000 "
+          "dport=443 src=10.0.0.5 dst=198.51.100.20 sport=443 dport=52000 use=1\n"
+          "ipv4 2 udp 17 29 src=10.0.0.5 dst=10.0.0.53 sport=41000 dport=53 "
+          "src=10.0.0.53 dst=10.0.0.5 sport=53 dport=41000 use=2\n")
+
+    def counted(self, ports=("443",), rows=None):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".ct", delete=False) as fh:
+            fh.write(self.CT if rows is None else rows)
+            path = fh.name
+        try:
+            return nd.count_udp_flows(ports, paths=(path,))
+        finally:
+            os.unlink(path)
+
+    # ---- counting the tunnels --------------------------------------------
+
+    def test_only_datagram_flows_to_the_listener_are_counted(self):
+        """Three things share that table and only one of them is a tunnel: a
+        TCP session on the same port, and this box's own DNS lookups on 53.
+        Counting either would report a busier plane than exists."""
+        got = self.counted()
+        self.assertEqual(got["total"], 3, "something other than the udp/443 flows counted")
+        self.assertEqual((got["tunnels"], got["unanswered"]), (2, 1))
+
+    def test_a_tcp_session_on_the_same_port_is_not_a_tunnel(self):
+        only_tcp = [l for l in self.CT.splitlines() if " tcp " in l]
+        self.assertEqual(self.counted(rows="\n".join(only_tcp) + "\n")["total"], 0)
+
+    def test_a_datagram_flow_to_another_port_is_not_a_tunnel(self):
+        """This box's own resolver traffic is udp and is not somebody's
+        tunnel, which is the case a protocol check alone would miss."""
+        only_dns = [l for l in self.CT.splitlines() if "dport=53" in l]
+        self.assertEqual(self.counted(rows="\n".join(only_dns) + "\n")["total"], 0)
+
+    def test_asking_about_a_port_nothing_arrives_on_counts_nothing(self):
+        self.assertEqual(self.counted(ports=("4500",))["total"], 0)
+
+    def test_unreplied_flows_are_kept_apart_from_carrying_ones(self):
+        """For a tunnel the difference is arriving against carrying, which is
+        the difference between a client that reached this box and one that is
+        still trying."""
+        self.assertEqual(self.counted()["unanswered"], 1)
+
+    # ---- which transport the clients ended up on -------------------------
+
+    def split(self, on_udp, on_tcp, port="443"):
+        return nd.transport_split({
+            "udp_sockets": {"listeners": [{"port": port}]},
+            "udp_tunnels": {"ok": True, "total": on_udp, "tunnels": on_udp,
+                            "unanswered": 0},
+            "sockets": {"served_endpoints": {"10.0.0.5:%s" % port: on_tcp}}})
+
+    def test_the_share_is_of_both_transports_together(self):
+        got = self.split(on_udp=4, on_tcp=60)
+        self.assertEqual((got["on_datagrams"], got["on_tcp"]), (4, 60))
+        self.assertEqual(got["datagram_pct"], 6.2)
+
+    def test_it_fires_below_the_documented_share_and_not_at_it(self):
+        """The bar is where the fallback is carrying the service rather than
+        catching the few clients whose networks really do block UDP."""
+        for udp, tcp, expected in ((50, 50, False), (49, 51, True), (99, 1, False)):
+            with self.subTest(datagrams=udp):
+                raw = {"udp_sockets": {"listeners": [{"port": "443"}]},
+                       "udp_tunnels": {"ok": True, "total": udp, "tunnels": udp,
+                                       "unanswered": 0},
+                       "sockets": {"served_endpoints": {"10.0.0.5:443": tcp}}}
+                out = []
+                nd._check_transport_fallback(raw, out)
+                self.assertEqual(bool(out), expected)
+
+    def test_a_port_that_only_answers_one_transport_is_not_a_split(self):
+        """The finding is about a client choosing between two ways in. A box
+        that offers one of them has nothing to compare."""
+        self.assertIsNone(nd.transport_split({
+            "udp_sockets": {"listeners": [{"port": "4500"}]},
+            "udp_tunnels": {"ok": True, "total": 5, "tunnels": 5, "unanswered": 0},
+            "sockets": {"served_endpoints": {"10.0.0.5:443": 60}}}))
+
+    def test_without_a_tunnel_count_there_is_no_share_to_take(self):
+        self.assertIsNone(nd.transport_split({
+            "udp_sockets": {"listeners": [{"port": "443"}]},
+            "udp_tunnels": {"ok": False},
+            "sockets": {"served_endpoints": {"10.0.0.5:443": 60}}}))
+
+    # ---- what the encapsulation leaves ------------------------------------
+
+    def room(self, path_mtu, ifaces=()):
+        return nd.encapsulation_headroom({
+            "udp_sockets": {"listeners": [{"port": "443"}]},
+            "path_mtu": {"ok": True, "path_mtu": path_mtu},
+            "link_modes": {"interfaces": list(ifaces)}})
+
+    def test_the_overhead_is_the_headers_it_lists(self):
+        """The arithmetic is shown on the page so it can be argued with, which
+        only works if the total is the sum of the parts named."""
+        got = self.room(1500)
+        self.assertEqual(got["overhead"], sum(nd.TUNNEL_OVERHEAD.values()))
+        self.assertEqual(got["payload"], 1500 - got["overhead"])
+        self.assertGreater(got["overhead"], 0, "a tunnel that costs nothing is not one")
+
+    def test_a_tunnel_that_fits_is_not_a_fault(self):
+        """The case that must stay quiet. A path of 1500 and an interface set
+        to 1400 is a correctly built tunnel, and warning about it would put a
+        warning on every box that has one."""
+        self.assertEqual(self.room(1500, [{"name": "tun0", "mtu": 1400}])["over_by"], 0)
+
+    def test_the_fault_is_the_mismatch_and_needs_both_numbers(self):
+        self.assertEqual(self.room(1280, [{"name": "tun0", "mtu": 1400}])["over_by"], 185)
+
+    def test_with_no_tunnel_interface_it_reports_and_does_not_grade(self):
+        """The broker's own shape: encapsulation done in the service, so what
+        it hands out cannot be read and the mismatch cannot be established."""
+        got = self.room(1400, [{"name": "eth0", "mtu": 1500}])
+        self.assertIsNone(got["inner_mtu"])
+        self.assertEqual(got["over_by"], 0)
+        out = []
+        nd._check_encapsulation_headroom(
+            {"udp_sockets": {"listeners": [{"port": "443"}]},
+             "path_mtu": {"ok": True, "path_mtu": 1400},
+             "link_modes": {"interfaces": [{"name": "eth0", "mtu": 1500}]}}, out)
+        self.assertEqual(out[0]["severity"], "ok")
+        self.assertIn("cannot be read from here", out[0]["message"])
+
+    def test_a_wire_is_not_mistaken_for_a_tunnel(self):
+        self.assertIsNone(self.room(1400, [{"name": "eth0", "mtu": 1400}])["inner_mtu"])
+        self.assertEqual(self.room(1400, [{"name": "tun0", "mtu": 1400}])["inner_mtu"], 1400)
+
+
 class TestSayingWhichPlaneTheNumbersDescribe(unittest.TestCase):
     """Every per-connection reading here is TCP: the client table is `ss -tan`
     and the statistics are `ss -tin`. On a box whose control plane is TCP and
@@ -8711,14 +8855,23 @@ class TestTheOtherPlane(unittest.TestCase):
         self.assertNotIn("clients_may_be_on_the_datagram_plane", codes)
 
     def test_it_refuses_the_question_rather_than_guessing_an_answer(self):
+        """The socket table half of the refusal, which has not changed: a
+        datagram socket serves any number of peers and records none of them.
+
+        What the connection tracking table can add is a separate sentence and
+        has its own tests. This one is about the part that is still true no
+        matter what else is readable, so it asserts the refusal rather than the
+        wording that carried it - the phrase moved once already when the count
+        arrived, and the guard should survive the next rewording too.
+        """
         report = self._diagnose(with_udp=True)
-        msg = next(f["message"] for f in report["findings"]
-                   if f["code"] == "clients_may_be_on_the_datagram_plane")
-        self.assertIn("cannot be read from a socket table", msg)
-        self.assertEqual(
-            next(f["severity"] for f in report["findings"]
-                 if f["code"] == "clients_may_be_on_the_datagram_plane"), "ok",
-            "saying a question cannot be answered is not a fault")
+        found = next(f for f in report["findings"]
+                     if f["code"] == "clients_may_be_on_the_datagram_plane")
+        self.assertIn("the socket table cannot say how many", found["message"])
+        self.assertNotIn("clients are connected", found["message"],
+                         "it must not answer the question it is refusing")
+        self.assertEqual(found["severity"], "ok",
+                         "saying a question cannot be answered is not a fault")
 
 
 class TestTheFanOutIsDrawnWhereItExplainsSomething(unittest.TestCase):
@@ -11769,8 +11922,9 @@ class TestDocsMatchReality(unittest.TestCase):
             # times, and some are helpers rather than collections. Raised to
             # 33 when proxy configuration was added, 34 when the socket
             # table gained the process holding each socket, 35 with the
-            # interface queues, 36 with the firewall rule counters.
-            "collections": (37, [r"\*\*(\d+)\s+things are inspected",
+            # interface queues, 36 with the firewall rule counters, 37 with
+            # the datagram tunnel count.
+            "collections": (38, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -11847,6 +12001,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_ping": "reachability and loss",
         "cmd_routes": "Routing table and default gateway",
         "cmd_socket_owners": "Which process holds each socket",
+        "cmd_udp_tunnels": "Datagram tunnels, counted and never listed",
         "cmd_firewall_counters": "Firewall rule counters, read either side of "
                                  "the probes",
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
@@ -16762,6 +16917,42 @@ def _(nd):
     nd.OS_NAME = "Linux"
     nd._read_link_stats = lambda: ({"eth0": dict(base), "tun0": dict(base)}, "sysfs")
 
+def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
+    """A box offering both transports on one port, with the tunnels counted."""
+    nd.cmd_udp_sockets = lambda: {
+        "ok": True, "cmd": "ss -uanm", "stdout": "", "connected": 0,
+        "listen_ports": ["443"], "queued_bytes": 0,
+        "listeners": [{"address": "0.0.0.0", "port": "443", "recv_q": 0,
+                       "send_q": 0, "recv_buffer": 212_992}]}
+    nd.cmd_udp_tunnels = lambda raw: {
+        "ok": True, "cmd": "conntrack", "stdout": "", "ports": ["443"],
+        "tunnels": tunnels, "unanswered": 0, "total": tunnels}
+    serving(nd, "\n".join(
+        ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+         "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
+        + ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i % 200 + 1, i)
+           for i in range(tcp_sessions)]) + "\n")
+    if pmtu:
+        nd.cmd_path_mtu = lambda t, iface_mtu=1500: {
+            "ok": True, "cmd": "ping -M do", "stdout": "", "target": t,
+            "iface_mtu": 1500, "path_mtu": pmtu}
+    if ifaces is not None:
+        nd.cmd_link_stats = lambda *a, **k: {"ok": True, "cmd": "ip -s link",
+                                             "stdout": "", "interfaces": []}
+        base = nd.cmd_link_modes
+        nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+@scenario("transport_fell_back")
+def _(nd): two_planes(nd, tunnels=4, tcp_sessions=60)
+
+@scenario("tunnel_payload_room")
+def _(nd): two_planes(nd, tunnels=200, tcp_sessions=2, pmtu=1500,
+                      ifaces=[{"name": "tun0", "mtu": 1400}])
+
+@scenario("tunnel_payload_short")
+def _(nd): two_planes(nd, tunnels=200, tcp_sessions=2, pmtu=1280,
+                      ifaces=[{"name": "tun0", "mtu": 1400}])
+
 @scenario("udp_queue_standing")
 def _(nd):
     """Two readings of one listener, both over the floor and not going down."""
@@ -17565,15 +17756,85 @@ class TestEveryFindingFires(unittest.TestCase):
         self.assertNotIn("cpu_throttled_live", codes)
         self.assertIn("cpu_throttled_historical", codes)
 
-    def test_the_conntrack_flow_table_is_never_read(self):
-        """/proc/net/stat/nf_conntrack is counters. /proc/net/nf_conntrack is
-        the flow list - every connection this box has open, and who with. The
-        second is large and nobody's business, and this check has no reason to
-        open it."""
-        source = open(nd.__file__, encoding="utf-8").read()
+    # The flow table used to be unopenable, asserted as the literal path being
+    # absent from the source. That rule was written for the pressure check,
+    # which reads counters and had no reason to go near it, and the reason
+    # given was that the table is "large and nobody's business".
+    #
+    # It is still nobody's business. What changed is that one question can only
+    # be answered there: a datagram socket serves any number of peers and
+    # records none of them, so how many tunnels a box is carrying exists in the
+    # flow table and nowhere else. Refusing to open the file answered that by
+    # not asking.
+    #
+    # So the rule moved from the mechanism to the outcome, which is the
+    # stronger place for it. The table may be counted. Nothing read out of it
+    # may survive the read. These three tests are that rule, and they are worth
+    # more than the old one: "never open this path" was satisfied by any code
+    # that opened it under a name built at runtime, and this is not.
+
+    def test_the_pressure_check_still_reads_counters_not_flows(self):
+        """The original point, kept. Table pressure is a counter file and has
+        no business in the flow list."""
+        source = inspect.getsource(nd._read_conntrack)
         self.assertIn("/proc/net/stat/nf_conntrack", source)
-        self.assertNotIn('"/proc/net/nf_conntrack"', source)
-        self.assertNotIn("open('/proc/net/nf_conntrack')", source)
+        self.assertNotIn("/proc/net/nf_conntrack\"", source)
+
+    def test_counting_flows_keeps_no_trace_of_who(self):
+        """Every value that comes back has to be a number. A peer, a port pair
+        or a raw line surviving the count is the thing the old rule existed to
+        prevent, and it would reach a report that gets attached to tickets."""
+        import tempfile
+        rows = ("ipv4 2 udp 17 29 src=198.51.100.9 dst=10.0.0.5 sport=51000 dport=443 "
+                "[UNREPLIED] src=10.0.0.5 dst=198.51.100.9 sport=443 dport=51000 use=2\n"
+                "ipv4 2 udp 17 170 src=203.0.113.77 dst=10.0.0.5 sport=51001 dport=443 "
+                "src=10.0.0.5 dst=203.0.113.77 sport=443 dport=51001 use=2\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".ct", delete=False) as fh:
+            fh.write(rows)
+            path = fh.name
+        try:
+            got = nd.count_udp_flows(["443"], paths=(path,))
+        finally:
+            os.unlink(path)
+        self.assertEqual((got["tunnels"], got["unanswered"], got["total"]), (1, 1, 2))
+        leaked = [k for k, v in got.items()
+                  if k != "source" and not isinstance(v, int)]
+        self.assertEqual(leaked, [], "something other than a count came back")
+
+    def test_no_address_from_the_flow_table_reaches_the_report(self):
+        """The end-to-end version, because the guard that matters is about what
+        gets exported rather than what a function returns.
+
+        The peer used here appears in the flow table and nowhere else. The
+        first version of this test looked for an address that was also a TCP
+        client in the socket table, so it failed on a report that had leaked
+        nothing - the socket table carries peers on purpose, and a report is
+        documented as a map of the network it was taken on. Only the flow table
+        is out of bounds.
+        """
+        import json as _json
+        import tempfile
+        secret = "192.0.2.222"
+        rows = ("ipv4 2 udp 17 170 src=%s dst=10.0.0.5 sport=51001 dport=443 "
+                "src=10.0.0.5 dst=%s sport=443 dport=51001 use=2\n" % (secret, secret))
+        with tempfile.NamedTemporaryFile("w", suffix=".ct", delete=False) as fh:
+            fh.write(rows)
+            path = fh.name
+        mod = fresh()
+        setup, kwargs = S["transport_fell_back"]
+        setup(mod)
+        real = mod.count_udp_flows
+        mod.count_udp_flows = lambda ports, paths=None, _r=real: _r(ports, paths=(path,))
+        mod.cmd_udp_tunnels = types.FunctionType(
+            nd.cmd_udp_tunnels.__code__, mod.__dict__, "cmd_udp_tunnels")
+        try:
+            rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        finally:
+            os.unlink(path)
+        self.assertEqual(rep["raw"]["udp_tunnels"]["total"], 1,
+                         "the fixture was not actually read")
+        self.assertNotIn(secret, _json.dumps(rep),
+                         "a peer from the flow table reached the report")
 
     def test_conntrack_stats_are_read_by_column_name_and_as_hex(self):
         """The columns vary by kernel, so they're located by the header rather

@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 167
+difference is which one it puts at the top, and that is the whole product: 170
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1357,12 +1357,12 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **37** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **167** | Distinct conclusions it can reach and state in plain language. 139 are faults; 28 are context, like which switch port you're on. |
-| **Ranked causes** | **139** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1367 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Data collections** | **38** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Findings** | **170** | Distinct conclusions it can reach and state in plain language. 141 are faults; 29 are context, like which switch port you're on. |
+| **Ranked causes** | **141** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1383 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 167 findings are the useful figure** if you want to know what the tool can
+**The 170 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1526,7 +1526,7 @@ It needs the walk, because only the walk keeps the quote. A text traceroute
 prints the router's address and throws the quote away, and on those traces
 this is silent and the inference carries on alone.
 
-### The 37 things it inspects
+### The 38 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1544,30 +1544,31 @@ this is silent and the inference carries on alone.
 13. UDP datagram listeners and what is queued behind them, because a box can carry its user traffic over datagrams while its control plane is TCP, and every other socket reading here is TCP (`ss -uan`)
 14. Interface queues: what this box's own egress queues are holding and dropping (Linux `tc`)
 15. Firewall rule counters, read either side of the probes, so a drop rule that counted while they were in flight can be named (Linux, needs root)
-16. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
-17. TCP retransmission counters
-18. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
-19. Clock synchronisation and offset, where a time daemon can be asked
-20. Listening ports
-21. Neighbour inventory (with `--inventory`)
+16. Datagram tunnels, counted and never listed: how many tracked UDP flows are arriving at this box's own listeners, which a socket table cannot say (Linux, needs connection tracking)
+17. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
+18. TCP retransmission counters
+19. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
+20. Clock synchronisation and offset, where a time daemon can be asked
+21. Listening ports
+22. Neighbour inventory (with `--inventory`)
 
 **Off the device**
-21. Gateway reachability and loss
-22. Target reachability and loss
-23. Hop-by-hop path (traceroute, or mtr where installed)
-24. TCP-probe path, when the standard one is filtered
-25. Path MTU
-26. DNS resolution
-27. Each configured DNS resolver, individually
-28. TCP reachability of specific ports
-29. TLS handshake and certificate on ports that should have one
-30. Bonded interface members, and which of them are down (Linux)
-31. Neighbour table size against its own ceiling (Linux)
-32. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
-33. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
-34. The TLS certificate this box *serves*, read from the outside in
-35. This box's own service, asked over HTTP for an answer rather than a connection
-36. Proxy configuration, how this box is told to reach the internet: the
+22. Gateway reachability and loss
+23. Target reachability and loss
+24. Hop-by-hop path (traceroute, or mtr where installed)
+25. TCP-probe path, when the standard one is filtered
+26. Path MTU
+27. DNS resolution
+28. Each configured DNS resolver, individually
+29. TCP reachability of specific ports
+30. TLS handshake and certificate on ports that should have one
+31. Bonded interface members, and which of them are down (Linux)
+32. Neighbour table size against its own ceiling (Linux)
+33. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
+34. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
+35. The TLS certificate this box *serves*, read from the outside in
+36. This box's own service, asked over HTTP for an answer rather than a connection
+37. Proxy configuration, how this box is told to reach the internet: the
     `http_proxy` family, and on macOS the system settings including a PAC file
     or WPAD. Read, never probed
 
@@ -2153,7 +2154,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1367 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1383 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2208,6 +2209,7 @@ can say what the bar was rather than "the tool said so".
 | `RESETS_PER_CONN_PCT` | **100** | resets this box sent, as a share of the connections it opened or accepted. A reset is not by itself a fault - an application closing with data unread sends one - so the line sits where the count stops looking like a by-product: at least one reset per connection handled. A dead listener, an unbound port or a scan all produce exactly that |
 | `UDP_DROP_PCT` | **1.0** | share of arriving datagrams this box failed to take delivery of. UDP has no retransmission and no window, so a datagram dropped at the socket is gone and the sender is never told. A share rather than a count per minute, because ten a minute means nothing without knowing whether ten thousand or ten million arrived |
 | `UDP_DROP_FLOOR` | **10** | and enough of them for the share to be a share. Netdata alerts on more than ten of these a minute with no share at all - a receive-buffer overflow is never routine, unlike a discard, so a small absolute count already means something and the share is what stops a busy box reporting its own noise |
+| `FALLBACK_WARN_PCT` | **50** | share of client sessions that have to be on the datagram transport before it counts as working. A transport that offers datagrams and falls back to TCP on the same port expects to be on datagrams, so most of its clients sitting on the fallback means the fallback is carrying the service. Half rather than something stricter because a mixed population is ordinary - some networks genuinely block UDP - and this is about the balance tipping, not about any one client |
 | `UDP_QUEUE_SHARE_PCT` | **25** | how much of a datagram socket's own receive buffer can stand unread before it is worth saying so. A share and not a byte count, because bytes cannot answer it: 4 KB is a serious backlog on a small socket and one datagram on a large one. The buffer comes from `ss -m`, and where it cannot be read this stays silent rather than guessing |
 | `UDP_QUEUE_FLOOR_BYTES` | **8192** | a floor under that share, so a socket with a tiny buffer cannot reach a quarter of it on one datagram. Below this the queue is one or two datagrams in flight, which is what a working socket looks like at any instant - a socket is read in bursts, so a non-empty queue is the normal state and only its size and its refusal to go down mean anything |
 | `REASM_FAIL_PCT` | **10.0** | share of reassembly attempts that failed. Fragments are already unusual on a healthy path, so the bar is on how many of the ones tried never came back together rather than on the raw count |
@@ -3643,7 +3645,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1367 tests, no dependencies, no network, a few seconds, so they run
+1383 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3722,7 +3724,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 167 findings with readable rules instead of
+> way out - and who owns it. Ranks 170 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

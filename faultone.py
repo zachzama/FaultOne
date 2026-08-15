@@ -5765,6 +5765,14 @@ PANEL_HELP = {
                 "for where; this is the one of them that is on this box, and the kernel "
                 "counts it, so it can be named or ruled out rather than left to the reader.",
     },
+    "udp_tunnels": {
+        "label": "datagram tunnels, counted", "layer": 4,
+        "desc": "How many tracked UDP flows are arriving at this box's own listeners. A "
+                "datagram socket serves any number of peers and records none of them, so "
+                "this is the only place the count exists. Counted and never listed: the "
+                "flow table is who every client reached, and a number is the whole of what "
+                "this needs.",
+    },
     "socket_owners": {
         "label": "who holds the sockets", "layer": 4,
         "desc": "The process behind each TCP socket. Several findings blame a service on this "
@@ -6893,6 +6901,17 @@ VERDICT_RULES = [
      "The port accepts connections but TLS doesn't complete",
      "Something is listening and it isn't serving TLS. A port check alone would "
      "have called this healthy."),
+    ("tunnel_payload_short", "the path's packet size, not this box",
+     "A datagram tunnel here has less room than what it carries expects",
+     "Small packets fit and large ones do not, so ping, DNS and handshakes all pass "
+     "while transfers stall inside the tunnel. Raise the path MTU, or lower the MTU of "
+     "whatever is handed to the tunnel so it stops sending packets that will not fit."),
+    ("transport_fell_back", "the path between the clients and here, not this box",
+     "Clients are reaching this box over TCP because datagrams are not getting through",
+     "The fallback works, which is why nothing is failing and nobody will report it. "
+     "What it costs is the reason the datagram transport exists: one lost packet stalls "
+     "the whole tunnel instead of one packet inside it. Look for what is stopping UDP on "
+     "that port between the clients and here."),
     ("udp_queue_standing", "an application on this device",
      "Datagrams are arriving faster than the service is reading them",
      "The kernel has taken delivery and the process has not. Nothing on the wire is "
@@ -7199,6 +7218,7 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # Says a question cannot be answered from a socket table,
                   # which is the opposite of a fault to rank.
                   "clients_may_be_on_the_datagram_plane",
+                  "tunnel_payload_room",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
                   # forwarding look the same here, so it names both.
@@ -7462,6 +7482,10 @@ FINDING_SIDE.update({
     "fd_pressure": "downstream",
     "close_wait_backlog": "downstream",
     "udp_queue_standing": "downstream",
+    "transport_fell_back": "downstream",
+    "tunnel_payload_short": "upstream",
+    # Context about the path out, same as the fault it is the other half of.
+    "tunnel_payload_room": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
     "own_service_silent": "downstream",
@@ -7589,7 +7613,7 @@ STAGE_RULES = [
       # are how it runs out of room to accept into - both were headlining over
       # a strip with nothing on it.
       "accept_overflow_live", "accept_overflow_historical",
-      "close_wait_backlog", "udp_queue_standing"}),
+      "close_wait_backlog", "udp_queue_standing", "transport_fell_back"}),
     # Optics belong to the link stage for the same reason the error counters
     # do: a fibre outside its rated range is the physical link failing, and
     # leaving the strip all-green during an optical alarm is exactly the
@@ -7648,7 +7672,8 @@ STAGE_RULES = [
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
-    ("mtu", {"pmtu_blackhole"}, {"pmtu_unmeasurable", "mtu_nonstandard"}),
+    ("mtu", {"pmtu_blackhole"}, {"pmtu_unmeasurable", "mtu_nonstandard",
+                                 "tunnel_payload_short"}),
     ("ports", {"no_route_to_target", "port_host_unreachable",
                "tls_handshake_failed", "tls_expired", "tls_not_yet_valid",
                "own_tls_expired", "own_tls_handshake_failed",
@@ -7706,6 +7731,7 @@ RAW_STAGE = {
     # The other plane. Kept for the clients stage, because what it answers
     # is whether an empty TCP table means an empty box.
     "udp_sockets": "clients",
+    "udp_tunnels": "clients",
     # Read from the same table and answering the same two stages: who is
     # listening belongs to ports, who is holding them open to clients.
     "socket_owners": ("ports", "clients"),
@@ -9430,6 +9456,210 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_orphans(stats, findings, counter_window)
 
 
+# ---------------------------------------------------------------------------
+# How many datagram tunnels are up.
+#
+# A UDP socket serves any number of peers and the socket table records none of
+# them, which is why the finding about this plane refuses to count clients. The
+# socket table is not the only place the kernel keeps that, though: a box that
+# tracks connections has a row per UDP flow, and counting the rows answers the
+# question the socket table cannot.
+#
+# `_read_conntrack` reads the table's counters and says why it does not read the
+# table: it "lists who this box has been talking to and is both large and
+# nobody's business". That is right, and on a box that brokers traffic it is
+# more right, because those rows are every client and every destination they
+# reached, in a report that gets attached to tickets.
+#
+# So this counts and never enumerates. No address, port pair or peer is kept,
+# returned or exported - the rows are consumed while reading and what comes out
+# is integers. That distinction is the whole design and there is a test that
+# fails if an address ever reaches the report.
+# ---------------------------------------------------------------------------
+
+CONNTRACK_PATHS = ("/proc/net/nf_conntrack", "/proc/net/ip_conntrack")
+_CT_DPORT = re.compile(r"\bdport=(\d+)")
+_CT_UNREPLIED = "[UNREPLIED]"
+
+
+def count_udp_flows(ports, paths=CONNTRACK_PATHS):
+    """How many tracked UDP flows are arriving at these ports.
+
+    Returns counts only. The line is examined and dropped; nothing that could
+    identify a peer survives the loop, which is what makes this safe to run on
+    a box whose flow table is a list of who its users are talking to.
+
+    "Replied" is the kernel having seen traffic in both directions, which for a
+    tunnel is the difference between one that is carrying and one where
+    something arrived and nothing came back.
+    """
+    want = {str(p) for p in ports or ()}
+    if not want:
+        return None
+    for path in paths:
+        try:
+            handle = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        replied = unreplied = 0
+        with handle:
+            for line in handle:
+                if " udp " not in line:
+                    continue
+                found = _CT_DPORT.search(line)
+                if not found or found.group(1) not in want:
+                    continue
+                if _CT_UNREPLIED in line:
+                    unreplied += 1
+                else:
+                    replied += 1
+        return {"tunnels": replied, "unanswered": unreplied,
+                "total": replied + unreplied, "source": path}
+    return None
+
+
+def cmd_udp_tunnels(raw=None):
+    """The count of datagram tunnels arriving at this box's own listeners.
+
+    Opportunistic like the rest. A box with no connection tracking, or one that
+    will not let this user read it, gets nothing and every message reads as it
+    did before.
+    """
+    # Defaulted so this answers like every other collector when called with
+    # nothing, which is how the bare-box check exercises all of them at once.
+    ports = ((raw or {}).get("udp_sockets") or {}).get("listen_ports") or []
+    if not ports:
+        return {"ok": False, "cmd": "/proc/net/nf_conntrack", "applicable": False,
+                "error": "no datagram listener here to count tunnels for"}
+    counted = count_udp_flows(ports)
+    if counted is None:
+        return {"ok": False, "cmd": "/proc/net/nf_conntrack",
+                "error": "the connection tracking table is not readable here, "
+                         "so datagram peers cannot be counted"}
+    return dict(counted, ok=True, cmd="/proc/net/nf_conntrack (counted, not read)",
+                ports=[str(p) for p in ports],
+                # Deliberately no stdout. Every other collector keeps its output
+                # so a conclusion can be audited later; this one cannot, because
+                # the output is the thing being kept out of the report.
+                stdout="%d tracked udp flow(s) to %s"
+                       % (counted["total"], ", ".join(str(p) for p in ports)))
+
+
+# A transport that offers datagrams and falls back to TCP on the same port
+# expects to be on datagrams. Below this share of its clients actually being
+# there, something is stopping them and they have quietly taken the slower way.
+FALLBACK_WARN_PCT = 50
+
+
+# What a datagram tunnel spends before any payload gets in.
+#
+# Outer IPv4 header 20, outer UDP header 8, DTLS record header 13, and the
+# cipher's own overhead: an explicit nonce and an authentication tag, which for
+# the AEAD suites in use is 8 + 16. That is 65, and it is an estimate rather
+# than a measurement - a different cipher or a sequence-number optimisation
+# moves it by a few bytes, and any inner headers the payload carries are on top.
+#
+# Written out rather than folded into one number so the arithmetic on the page
+# can be argued with. Someone who knows their own tunnel's overhead should be
+# able to see which part this got wrong.
+TUNNEL_OVERHEAD = {"outer IP": 20, "outer UDP": 8, "DTLS record": 13,
+                   "cipher nonce and tag": 24}
+
+
+def encapsulation_headroom(raw):
+    """What the tunnel hands out, against what the path can carry it in.
+
+    The arithmetic on its own is not a fault. A path that carries 1500 and a
+    tunnel that spends 65 on headers leaves 1435, and a tunnel configured for
+    1435 works perfectly - that is a tunnel doing its job, and warning about it
+    would put a warning on every correctly built box.
+
+    The fault is the mismatch. When the interface hands the tunnel packets
+    bigger than what is left after encapsulation, those packets cannot cross
+    the path whole. Small ones still fit, so ping, DNS and handshakes all pass
+    while large transfers stall inside the tunnel where nobody can see them.
+
+    Where there is no tunnel interface to read - encapsulation done in the
+    service rather than by the kernel, which is the ordinary shape for a broker
+    - the mismatch cannot be established, and this reports the arithmetic
+    without grading it.
+    """
+    listeners = ((raw or {}).get("udp_sockets") or {}).get("listeners") or []
+    mtu = (raw or {}).get("path_mtu") or {}
+    if not listeners or not mtu.get("ok") or not mtu.get("path_mtu"):
+        return None
+    spent = sum(TUNNEL_OVERHEAD.values())
+    room = mtu["path_mtu"] - spent
+    # The tunnel interfaces this box holds, if the kernel is doing the
+    # encapsulation. The widest one is the one that decides.
+    handing_out = [i for i in ((raw.get("link_modes") or {}).get("interfaces") or [])
+                   if is_tunnel(i.get("name")) and i.get("mtu")]
+    inner = max((i["mtu"] for i in handing_out), default=None)
+    return {"path_mtu": mtu["path_mtu"], "overhead": spent, "payload": room,
+            "parts": dict(TUNNEL_OVERHEAD), "inner_mtu": inner,
+            "iface": next((i["name"] for i in handing_out
+                           if i["mtu"] == inner), None),
+            "over_by": (inner - room) if inner and inner > room else 0,
+            "ports": sorted({str(l["port"]) for l in listeners})}
+
+
+def transport_split(raw):
+    """Clients on the datagram transport against clients on the TCP fallback.
+
+    Only meaningful where the same port answers both, which is what a transport
+    designed to fall back looks like: try datagrams, and if they do not get
+    through, do the same work over TCP on the port that was already open.
+
+    That fallback is the problem. It works, so nothing fails and no check here
+    notices, and the box goes on serving every client over the transport it was
+    built to avoid. The clients are the only ones who see it, as latency they
+    have no way to report.
+    """
+    listeners = ((raw or {}).get("udp_sockets") or {}).get("listeners") or []
+    counted = (raw or {}).get("udp_tunnels") or {}
+    served = ((raw or {}).get("sockets") or {}).get("served_endpoints") or {}
+    if not listeners or not counted.get("ok"):
+        return None
+    both = sorted({str(l["port"]) for l in listeners}
+                  & {key.rsplit(":", 1)[-1] for key in served})
+    if not both:
+        return None                 # nothing answers on both transports here
+    on_tcp = sum(n for key, n in served.items() if key.rsplit(":", 1)[-1] in both)
+    on_udp = counted.get("total") or 0
+    total = on_tcp + on_udp
+    if not total:
+        return None
+    return {"ports": both, "on_datagrams": on_udp, "on_tcp": on_tcp,
+            "datagram_pct": round(100.0 * on_udp / total, 1)}
+
+
+def _tunnels_counted(raw):
+    """What the tracking table can add about a plane the socket table cannot.
+
+    Two sentences, and which one depends on whether the count was readable. It
+    matters that the refusal survives: on a box with no connection tracking the
+    question genuinely cannot be answered here, and the finding has to keep
+    saying so rather than falling silent and reading as an answer of zero.
+    """
+    counted = (raw or {}).get("udp_tunnels") or {}
+    if not counted.get("ok"):
+        return (" Nothing here can count them either: this box is not tracking "
+                "connections, or the table is not readable. Whether nothing is "
+                "reaching it or everything is reaching it over UDP is not a "
+                "question this run can answer.")
+    total, live, quiet = counted["total"], counted["tunnels"], counted["unanswered"]
+    if not total:
+        return (" The connection tracking table has no datagram flows arriving at "
+                "those ports either, so nothing is reaching this box on the plane "
+                "it is listening on.")
+    return (" The connection tracking table does: %d datagram flow(s) are arriving "
+            "at those ports, %d of them carrying in both directions%s. That is the "
+            "count the socket table cannot give, and it is a count only - which "
+            "peers they are is not read."
+            % (total, live,
+               " and %d with nothing coming back" % quiet if quiet else ""))
+
+
 def other_plane(raw):
     """The datagram listeners, when this box has any, so the rest can say so.
 
@@ -9458,6 +9688,91 @@ def other_plane(raw):
     # strings, and a fixture that hands back integers would otherwise
     # render differently from a real run.
     return {"ports": sorted({str(l["port"]) for l in listeners})}
+
+
+def _check_encapsulation_headroom(raw, findings):
+    """The tunnel's own arithmetic, graded only where it can be.
+
+    A warning needs two numbers that disagree. With only one of them this
+    states what it knows and stops, which is the difference between a report
+    that is useful on a broker and one that cries wolf on every box with a
+    tunnel on it.
+    """
+    room = encapsulation_headroom(raw)
+    if not room:
+        return
+    where = ", ".join(room["ports"])
+    parts = ", ".join("%s %d" % (name, size)
+                      for name, size in sorted(room["parts"].items(),
+                                               key=lambda kv: -kv[1]))
+    arithmetic = (
+        f"The path to the target carries {room['path_mtu']}-byte packets, and a "
+        f"datagram tunnel on port {where} spends {room['overhead']} of that on its own "
+        f"headers ({parts}), leaving about {room['payload']} bytes for what it carries. "
+        f"That overhead is estimated from the header sizes rather than measured, so "
+        f"treat the last few bytes of it as approximate.")
+    if room["over_by"]:
+        findings.append({
+            "severity": "warning",
+            "layer": 3,
+            "code": "tunnel_payload_short",
+            "message": (
+                f"{arithmetic} {room['iface']} is handing it packets of "
+                f"{room['inner_mtu']}, which is {room['over_by']} more than fits. Those "
+                f"do not bounce: they are carried by fragmenting the outer packet, or "
+                f"dropped by something that will not fragment, and either way it shows "
+                f"up as large transfers stalling inside the tunnel while ping, DNS and "
+                f"handshakes all pass. Lower {room['iface']} to {room['payload']}, or "
+                f"find why the path carries less than it used to."),
+        })
+        return
+    findings.append({
+        "severity": "ok",
+        "layer": 3,
+        "code": "tunnel_payload_room",
+        "message": (
+            arithmetic
+            + (f" {room['iface']} is set to {room['inner_mtu']}, which fits."
+               if room["inner_mtu"] else
+               " Nothing on this box holds a tunnel interface, so the encapsulation is "
+               "being done by the service rather than the kernel and what it hands out "
+               "cannot be read from here. The number above is the ceiling it has to "
+               "stay under.")),
+    })
+
+
+def _check_transport_fallback(raw, findings):
+    """Clients that could not use the datagram transport and took the slow way.
+
+    The fault this exists for is invisible by construction. A fallback that
+    works produces no error, no retransmit and no failed check: the box serves
+    everybody, every probe passes, and the only symptom is that a transport
+    built to avoid TCP is running on TCP. Nothing else in this tool would ever
+    mention it.
+    """
+    split = transport_split(raw)
+    if not split or split["datagram_pct"] >= FALLBACK_WARN_PCT:
+        return
+    where = ", ".join(split["ports"])
+    findings.append({
+        "severity": "warning",
+        "layer": 4,
+        "code": "transport_fell_back",
+        "message": (
+            f"{split['on_tcp']} of the {split['on_tcp'] + split['on_datagrams']} "
+            f"client session(s) on port {where} are on TCP, and only "
+            f"{split['on_datagrams']} are on datagrams "
+            f"({split['datagram_pct']}%). This box offers both on the same port, so "
+            f"a client that cannot get datagrams through falls back to TCP and "
+            f"connects anyway. That is why nothing here is failing: the fallback "
+            f"works. What it costs is the reason the datagram transport exists - "
+            f"head-of-line blocking returns, and every loss stalls the whole tunnel "
+            f"instead of one packet inside it. Something between those clients and "
+            f"this box is stopping UDP {where}: a firewall, a policy on their "
+            f"network, or a middlebox that only forwards TCP. Nothing on this box "
+            f"is broken and nobody will report it, because from a client's side it "
+            f"works and is merely slower."),
+    })
 
 
 def _check_udp_queues(raw, findings):
@@ -10785,6 +11100,8 @@ def _check_arp(raw, findings):
         raw["sockets"] = cmd_socket_states()
     if "udp_sockets" not in raw:
         raw["udp_sockets"] = cmd_udp_sockets()
+    if "udp_tunnels" not in raw:
+        raw["udp_tunnels"] = cmd_udp_tunnels(raw)
     if "socket_owners" not in raw:
         raw["socket_owners"] = cmd_socket_owners()
     if "qdisc" not in raw:
@@ -11329,6 +11646,8 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
     _check_udp_queues(raw, late)
+    _check_transport_fallback(raw, late)
+    _check_encapsulation_headroom(raw, late)
     # After the flows, because it reads them. Wired in beside the sessions
     # check first, which runs before the socket table is even collected, so
     # it read an empty side and quietly concluded nothing every time.
@@ -13012,11 +13331,9 @@ def _check_rotation(raw, findings):
             "message": (
                 f"No TCP connection is open inbound, and this box is also listening "
                 f"for datagrams on {where}. A datagram socket serves any number of "
-                f"peers without the kernel recording one of them, so how many are "
-                f"being served cannot be read from a socket table at all. Whether "
-                f"nothing is reaching this box or everything is reaching it over "
-                f"UDP is not a question this can answer, which is why it is not "
-                f"answering it - check the listener's own counters."),
+                f"peers without the kernel recording one of them, so the socket table "
+                f"cannot say how many are being served."
+                + _tunnels_counted(raw)),
         })
         return
     # Named directly rather than through dominant_peer: that asks whether one
@@ -13509,6 +13826,8 @@ FINDING_HINT = {
     "accept_overflow_historical": "the app",
     "close_wait_backlog": "the app",
     "udp_queue_standing": "the app",
+    "transport_fell_back": "firewall",
+    "tunnel_payload_short": "MTU",
     "syn_recv_backlog": "the app",
     "syncookies_live": "the app",
     "syncookies_historical": "the app",
@@ -13619,6 +13938,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # control plane is TCP, and every other socket reading here is TCP - without
     # this the busiest half of such a box is simply absent from the report.
     raw["udp_sockets"] = cmd_udp_sockets()
+    # And how many tunnels are arriving at them, which the socket table cannot
+    # say and the connection tracking table can. Counted, never listed.
+    raw["udp_tunnels"] = cmd_udp_tunnels(raw)
     # Who holds them, read beside the table itself so every finding built from
     # that table can name a process instead of saying "an application".
     raw["socket_owners"] = cmd_socket_owners()

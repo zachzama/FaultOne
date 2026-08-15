@@ -2209,6 +2209,9 @@ def parse_socket_states(text, own_access=(None, None)):
             "inbound": inbound, "outbound": len(established) - inbound}
 
 
+_SKMEM_RB = re.compile(r"skmem:\([^)]*?\brb(\d+)")
+
+
 def parse_udp_sockets(text):
     """`ss -uan` into the two things a datagram socket can honestly tell us.
 
@@ -2225,6 +2228,11 @@ def parse_udp_sockets(text):
     """
     listeners, connected, queued = [], 0, 0
     for line in (text or "").splitlines():
+        # skmem:(r0,rb212992,...) - rb is the socket's own receive buffer, and
+        # the only thing here that can say whether a queue is large. Present
+        # with `ss -m` and absent from netstat, so it is read where it is and
+        # its absence is handled rather than assumed.
+        buffered = _SKMEM_RB.search(line)
         parts = line.split()
         if len(parts) < 5 or parts[0].upper() not in ("UNCONN", "ESTAB", "UDP"):
             continue
@@ -2242,7 +2250,8 @@ def parse_udp_sockets(text):
         if _is_loopback_socket(local):
             continue                    # bound for this box's own use, not serving
         listeners.append({"address": peer_host(local) or "", "port": port,
-                          "recv_q": recv_q, "send_q": send_q})
+                          "recv_q": recv_q, "send_q": send_q,
+                          "recv_buffer": int(buffered.group(1)) if buffered else None})
         queued += recv_q
     return {"listeners": listeners, "connected": connected, "queued_bytes": queued,
             "listen_ports": sorted({l["port"] for l in listeners})}
@@ -2259,11 +2268,77 @@ def cmd_udp_sockets():
     if OS_NAME == "Windows":
         res = run(["netstat", "-an", "-p", "UDP"], timeout=15)
     else:
-        res = run_first_usable([["ss", "-uan"], ["netstat", "-an", "-u"]], timeout=15)
+        # -m for skmem, which carries the receive buffer size. Behind the
+        # plain read rather than instead of it: a trimmed ss that rejects the
+        # flag should cost the buffer, not the listener table.
+        res = run_first_usable([["ss", "-uanm"], ["ss", "-uan"],
+                                ["netstat", "-an", "-u"]], timeout=15)
     if not res.get("ok"):
         return res
     res.update(parse_udp_sockets(res.get("stdout", "")))
     return res
+
+
+# What share of a datagram socket's own receive buffer can stand unread before
+# it is worth saying so. A share rather than a byte count, because bytes cannot
+# answer the question: 4 KB is a serious backlog on a small socket and one
+# datagram on a large one, and a fixed floor firing on a flat 4 KB queue was
+# what showed this up.
+UDP_QUEUE_SHARE_PCT = 25
+# And a floor underneath it, so a socket with a tiny buffer cannot reach that
+# share on one datagram. Below this the queue is one or two datagrams in
+# flight, which is what a working socket looks like at any instant.
+UDP_QUEUE_FLOOR_BYTES = 8192
+
+
+def udp_window(before, after, seconds):
+    """Two readings of the listener queues, and which of them did not drain.
+
+    Recv-Q is a level, not a counter, so the delta that works for every other
+    sampled reading here is the wrong instrument: a queue that went from 8000
+    to 0 and back to 8000 has a delta of nothing and never emptied. What two
+    readings can say is narrower and is the whole finding - the queue was above
+    the floor at both ends of the window and had not gone down.
+
+    That is deliberately not proof of a persistent queue. Two samples cannot
+    tell one standing backlog from two bursts, and the message says so rather
+    than the code pretending otherwise. It is the strongest claim two readings
+    support, and the reason there are two readings instead of one.
+
+    The later read wins for everything else, so the listeners a report shows
+    are the ones that were there at the end.
+    """
+    out = dict(after)
+    if not (before.get("ok") and after.get("ok") and seconds):
+        return out
+    was = {(l["address"], l["port"]): l["recv_q"] for l in before.get("listeners") or []}
+    standing = []
+    for listener in after.get("listeners") or []:
+        first = was.get((listener["address"], listener["port"]))
+        if first is None:
+            continue                # bound after the window opened; nothing to compare
+        buffer = listener.get("recv_buffer")
+        if not buffer:
+            # Without the socket's own buffer there is nothing to be a share
+            # of, and a byte count cannot tell a backlog from a datagram. Say
+            # nothing rather than guess, the same way an unreadable kernel log
+            # is never "nothing happened".
+            continue
+        share = round(100.0 * listener["recv_q"] / buffer, 1)
+        # Written as the condition for saying something rather than as reasons
+        # to stay quiet, so the bar reads the way it is documented: a real
+        # share of its own buffer, over the floor, at both ends of the window,
+        # and no lower at the end than at the start. A queue that went down is
+        # a queue doing its job at whatever depth.
+        if (share >= UDP_QUEUE_SHARE_PCT
+                and first >= UDP_QUEUE_FLOOR_BYTES
+                and listener["recv_q"] >= UDP_QUEUE_FLOOR_BYTES
+                and listener["recv_q"] >= first):
+            standing.append(dict(listener, first_recv_q=first, share_pct=share,
+                                 window_seconds=seconds))
+    out["standing_queues"] = sorted(standing, key=lambda l: -l["recv_q"])
+    out["window_seconds"] = seconds
+    return out
 
 
 def cmd_socket_states():
@@ -6861,6 +6936,12 @@ VERDICT_RULES = [
      "The port accepts connections but TLS doesn't complete",
      "Something is listening and it isn't serving TLS. A port check alone would "
      "have called this healthy."),
+    ("udp_queue_standing", "an application on this device",
+     "Datagrams are arriving faster than the service is reading them",
+     "The kernel has taken delivery and the process has not. Nothing on the wire is "
+     "wrong and the sender is never told - a datagram plane has no window to push back "
+     "with, so the queue fills and then the kernel drops. Look at what the listener is "
+     "doing rather than at the network."),
     ("close_wait_backlog", "an application on this device",
      "An application is leaking sockets - it isn't closing connections",
      "Not a network fault. Find the process holding them; it runs out of file "
@@ -7423,6 +7504,7 @@ FINDING_SIDE.update({
     # stops it *opening* - the same shortage, breaking opposite directions.
     "fd_pressure": "downstream",
     "close_wait_backlog": "downstream",
+    "udp_queue_standing": "downstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
     "own_service_silent": "downstream",
@@ -7550,7 +7632,7 @@ STAGE_RULES = [
       # are how it runs out of room to accept into - both were headlining over
       # a strip with nothing on it.
       "accept_overflow_live", "accept_overflow_historical",
-      "close_wait_backlog"}),
+      "close_wait_backlog", "udp_queue_standing"}),
     # Optics belong to the link stage for the same reason the error counters
     # do: a fibre outside its rated range is the physical link failing, and
     # leaving the strip all-green during an optical alarm is exactly the
@@ -8221,6 +8303,7 @@ CAUSE_OWNED_BY_BOX = frozenset({
     "own_tls_untrusted",
     "reqq_full_drops",
     "syn_recv_backlog",
+    "udp_queue_standing",
     "syncookies_historical",
     "syncookies_live",
     # The way out: something on this box stops it reaching what it needs.
@@ -9366,6 +9449,43 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_udp(stats, findings, counter_window)
     _check_fragments(stats, findings, counter_window)
     _check_orphans(stats, findings, counter_window)
+
+
+def _check_udp_queues(raw, findings):
+    """Datagrams the kernel is holding that the process has not taken.
+
+    The counterpart to an accept queue, for a plane that has no accept. On a
+    box whose user traffic is datagrams this is the one thing that plane says
+    plainly: not how many peers it serves, not whether anything was lost in
+    flight, but whether what arrived is being picked up.
+
+    Everything careful about it is in `udp_window`, which decides what two
+    readings support. This says it.
+    """
+    standing = (raw.get("udp_sockets") or {}).get("standing_queues") or []
+    if not standing:
+        return
+    worst = standing[0]
+    where = "%s:%s" % (worst["address"] or "*", worst["port"])
+    process = owner_of_port(socket_owners(raw), worst["port"])
+    findings.append({
+        "severity": "warning",
+        "layer": 4,
+        "code": "udp_queue_standing",
+        "message": (
+            f"{worst['recv_q']:,} bytes are waiting unread on the datagram listener at "
+            f"{where} - {worst['share_pct']}% of that socket's own receive buffer - and "
+            f"were still waiting {worst['window_seconds']}s later "
+            f"({worst['first_recv_q']:,} bytes at the start of that window). The kernel "
+            f"has taken delivery and the process has not, which is this box failing to "
+            f"keep up with what is arriving rather than anything on the wire."
+            + (f" That listener is {process}." if process else "")
+            + (f" {len(standing)} listeners are in that state." if len(standing) > 1 else "")
+            + " Two readings cannot separate one standing backlog from two bursts, so "
+              "confirm with a longer --soak before acting on it. A datagram plane cannot "
+              "say how many peers it serves or whether anything was lost in flight - "
+              "those need the listener's own counters."),
+    })
 
 
 def _check_udp(stats, findings, counter_window):
@@ -11193,6 +11313,13 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     _check_utilization(raw, late, counter_window, uplink_mbps)
     _check_tcp(raw, late, counter_window, tcp_baseline)
     _check_flows(raw, late)
+    # The other plane's queues, read again now the window has run. Recv-Q is a
+    # level rather than a counter, so the second reading is the measurement and
+    # not a refinement of the first.
+    if raw.get("udp_sockets", {}).get("ok") and counter_window:
+        raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
+                                        counter_window)
+    _check_udp_queues(raw, late)
     # After the flows, because it reads them. Wired in beside the sessions
     # check first, which runs before the socket table is even collected, so
     # it read an empty side and quietly concluded nothing every time.
@@ -13372,6 +13499,7 @@ FINDING_HINT = {
     "accept_overflow_live": "the app",
     "accept_overflow_historical": "the app",
     "close_wait_backlog": "the app",
+    "udp_queue_standing": "the app",
     "syn_recv_backlog": "the app",
     "syncookies_live": "the app",
     "syncookies_historical": "the app",

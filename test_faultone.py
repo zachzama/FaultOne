@@ -6674,6 +6674,144 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestTheQueueOnTheOtherPlane(unittest.TestCase):
+    """`Recv-Q` on a datagram listener is bytes the kernel has taken delivery
+    of that the process has not read. On a box whose user traffic is datagrams
+    that is the counterpart to an accept queue, for a plane that has no accept,
+    and it is the one thing that plane says plainly.
+
+    Two things make it hard to say anything true with. It is a **level, not a
+    counter**, so the delta that works for every other sampled reading here is
+    the wrong instrument: a queue that went 8000 to 0 to 8000 has a delta of
+    nothing and never emptied. And a non-empty queue is the **normal** state of
+    a socket read in bursts, so a depth means nothing on its own - the same
+    trap `flow_direction` was built around, where a large `lastrcv` meant
+    nothing without the box still sending.
+
+    So the bar is a share of the socket's own buffer, taken at both ends of the
+    window, and not going down.
+    """
+
+    BUFFER = 212_992
+
+    def listener(self, recv_q, port=443, buffer=BUFFER):
+        return {"ok": True, "cmd": "ss -uanm", "stdout": "", "connected": 0,
+                "listen_ports": [port], "queued_bytes": recv_q,
+                "listeners": [{"address": "0.0.0.0", "port": port, "recv_q": recv_q,
+                               "send_q": 0, "recv_buffer": buffer}]}
+
+    def window(self, first, second, seconds=2, buffer=BUFFER):
+        return nd.udp_window(self.listener(first, buffer=buffer),
+                             self.listener(second, buffer=buffer),
+                             seconds).get("standing_queues")
+
+    def test_a_queue_that_stands_across_the_window_is_reported(self):
+        got = self.window(52_000, 61_000)
+        self.assertEqual(len(got), 1)
+        self.assertEqual((got[0]["first_recv_q"], got[0]["recv_q"]), (52_000, 61_000))
+
+    def test_a_queue_that_went_down_is_a_queue_doing_its_job(self):
+        """At whatever depth. Draining is the whole of what a queue is for, and
+        a deep one that is emptying is not the finding."""
+        self.assertEqual(self.window(90_000, 61_000), [])
+
+    def test_a_flat_queue_still_counts(self):
+        """Not going down is the signal. A queue that sat at the same depth
+        across the window did not empty, which is the thing two readings can
+        actually say."""
+        self.assertEqual(len(self.window(61_000, 61_000)), 1)
+
+    def test_a_share_of_a_big_buffer_is_not_a_share_of_a_small_one(self):
+        """The reason the bar is a share. The same 30,000 bytes is a seventh of
+        a default socket and most of a small one, and a byte count cannot tell
+        those apart - which is what a fixed floor firing on a flat 4 KB queue
+        showed up."""
+        self.assertEqual(self.window(30_000, 30_000, buffer=1_000_000), [])
+        self.assertEqual(len(self.window(30_000, 30_000, buffer=100_000)), 1)
+
+    def test_a_tiny_buffer_cannot_reach_the_share_on_one_datagram(self):
+        """A quarter of a 16 KB socket is 4 KB, which is a datagram. The floor
+        underneath the share is what stops that being a finding."""
+        self.assertEqual(self.window(6_000, 6_000, buffer=16_384), [])
+
+    def test_no_buffer_means_no_answer_rather_than_a_guess(self):
+        """`ss -m` carries the buffer and netstat does not. Without it there is
+        nothing for the queue to be a share of, so this says nothing - the same
+        rule an unreadable kernel log follows."""
+        self.assertEqual(self.window(61_000, 61_000, buffer=None), [])
+
+    def test_a_snapshot_is_not_a_window(self):
+        """Every guard here rests on there being two readings. A quick run
+        takes no window, and there the queue cannot be judged at all."""
+        self.assertIsNone(nd.udp_window(self.listener(61_000), self.listener(61_000),
+                                        0).get("standing_queues"))
+
+    def test_a_listener_that_appeared_mid_window_is_not_compared(self):
+        """It has no earlier reading, and counting its whole depth as standing
+        would report every socket that opened during the run.
+
+        What the guard actually prevents is the comparison, not the finding:
+        substituting zero for the missing reading is caught by the floor check
+        below it either way, so that mutation is equivalent. Removing the guard
+        outright is not - `None >= 8192` raises, and this is what catches it.
+        """
+        before = {"ok": True, "listeners": [], "listen_ports": []}
+        after = self.listener(61_000)
+        self.assertEqual(nd.udp_window(before, after, 2)["standing_queues"], [])
+
+    def test_the_later_reading_is_the_one_the_report_shows(self):
+        """The pair is folded into one raw key, and the listeners a reader sees
+        should be the ones that were there at the end."""
+        folded = nd.udp_window(self.listener(1), self.listener(61_000), 2)
+        self.assertEqual(folded["listeners"][0]["recv_q"], 61_000)
+
+    # ---- what it is willing to claim -------------------------------------
+
+    def test_it_says_two_readings_cannot_prove_a_standing_queue(self):
+        """The honest limit. Two samples cannot separate one backlog from two
+        bursts, and the message says so instead of the code pretending."""
+        mod = fresh()
+        setup, kwargs = S["udp_queue_standing"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "udp_queue_standing")
+        self.assertIn("cannot separate one standing backlog from two bursts", said)
+        self.assertIn("--soak", said)
+
+    def test_it_refuses_the_two_questions_this_plane_cannot_answer(self):
+        """How many peers are served and whether anything was lost in flight.
+        The kernel records neither for an unconnected socket, and the finding
+        that already refuses to count clients must not be undercut by a
+        neighbouring one implying an answer."""
+        mod = fresh()
+        setup, kwargs = S["udp_queue_standing"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "udp_queue_standing")
+        self.assertIn("how many peers it serves", said)
+        self.assertIn("lost in flight", said)
+
+    def test_it_blames_this_box_and_lights_it(self):
+        """The kernel took delivery and the process did not, so the fault is
+        here even though it faces the way in."""
+        self.assertIn("udp_queue_standing", nd.CAUSE_OWNED_BY_BOX)
+        self.assertEqual(nd.finding_side("udp_queue_standing"), "downstream")
+
+    def test_the_datagram_plane_finding_is_not_hijacked_by_it(self):
+        """The scenario corpus caught the first version of this: a listener
+        sitting flat at exactly the floor turned a context finding about not
+        being able to count clients into a warning about a backlog."""
+        mod = fresh()
+        setup, kwargs = S["clients_may_be_on_the_datagram_plane"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        codes = [f["code"] for f in rep["findings"]]
+        self.assertIn("clients_may_be_on_the_datagram_plane", codes)
+        self.assertNotIn("udp_queue_standing", codes)
+
+
 class TestSeeingANATRatherThanSuspectingOne(unittest.TestCase):
     """An ICMP error carries the header of the packet that provoked it. That is
     the router repeating our packet back as it saw it, and a NAT is exactly a
@@ -16569,6 +16707,17 @@ def _(nd):
                 operstate="up", carrier_changes=0)
     nd.OS_NAME = "Linux"
     nd._read_link_stats = lambda: ({"eth0": dict(base), "tun0": dict(base)}, "sysfs")
+
+@scenario("udp_queue_standing")
+def _(nd):
+    """Two readings of one listener, both over the floor and not going down."""
+    reads = [
+        {"ok": True, "cmd": "ss -uanm", "stdout": "",
+         "listeners": [{"address": "0.0.0.0", "port": 443, "recv_q": q, "send_q": 0,
+                        "recv_buffer": 212_992}],
+         "connected": 0, "queued_bytes": q, "listen_ports": [443]}
+        for q in (52_000, 61_000)]
+    nd.cmd_udp_sockets = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
 
 @scenario("udp_recv_buffer_full")
 def _(nd): kernel_drops(nd, {"udp_InDatagrams": 0, "udp_RcvbufErrors": 0, "udp_InErrors": 0},

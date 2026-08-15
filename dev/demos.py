@@ -60,6 +60,54 @@ VIP_INTERFACES = {"ok": True, "cmd": "ip addr", "stdout":
 PINNED = ("cmd_kernel_log", "cmd_clock_sync")
 
 
+def like_the_real_box(mod):
+    """Readings a synthetic corpus cannot produce, that the box these describe
+    would always have.
+
+    Same reason the TTL and the reverse names are injected below. A demo is a
+    map of a network, and a page missing something every real report carries
+    reads as the tool not having it rather than the fixture not providing it.
+    Every one of these was absent from all seven pages until it was noticed
+    that nothing in the corpus reaches the code that draws them.
+
+    """
+    # Egress queues that are empty and have dropped nothing. The useful half of
+    # that reading: it rules this box out of a queuing finding rather than into
+    # one, and a page without it offers three candidates and eliminates none.
+    mod.cmd_qdisc = lambda: {
+        "ok": True, "cmd": "tc -s qdisc",
+        "queues": mod.parse_qdisc(
+            "qdisc noqueue 0: dev lo root refcnt 2\n"
+            " Sent 4021 bytes 44 pkt (dropped 0, overlimits 0 requeues 0)\n"
+            " backlog 0b 0p requeues 0\n"
+            "qdisc fq_codel 8003: dev eth0 root refcnt 2 limit 10240p flows 1024\n"
+            " Sent 91882361042 bytes 71204418 pkt (dropped 0, overlimits 0 requeues 118)\n"
+            " backlog 0b 0p requeues 118\n")}
+    # Who holds the sockets, so a finding that blames a service can name it.
+    mod.cmd_socket_owners = lambda: {
+        "ok": True, "cmd": "ss -tanp",
+        "owners": ([{"process": "edge-proxy", "pid": 1412, "state": "LISTEN",
+                     "local_port": 443, "peer": "0.0.0.0:*"}]
+                   + [{"process": "edge-proxy", "pid": 1412, "state": "ESTAB",
+                       "local_port": 443, "peer": "198.51.100.%d:51%02d" % (i, i)}
+                      for i in range(1, 6)]
+                   + [{"process": "edge-proxy", "pid": 1412, "state": "ESTAB",
+                       "local_port": 51100 + i, "peer": "10.0.0.90:5432"}
+                      for i in range(4)])}
+
+
+def and_it_forwards_datagrams(mod):
+    """The datagram box's own listener process, so the queue finding can name
+    it. Overrides the owners like_the_real_box installs, which describe a proxy
+    with TCP clients in front of it and not this shape at all."""
+    mod.cmd_socket_owners = lambda: {
+        "ok": True, "cmd": "ss -tanp",
+        "owners": [{"process": "tunnel-svc", "pid": 903, "state": "LISTEN",
+                    "local_port": 443, "peer": "0.0.0.0:*"},
+                   {"process": "tunnel-svc", "pid": 903, "state": "LISTEN",
+                    "local_port": 4500, "peer": "0.0.0.0:*"}]}
+
+
 def sockets(*groups):
     return "\n".join(["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
                       "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
@@ -185,6 +233,44 @@ def serving_but_not_on_the_vip(mod):
     T.serving(mod, sockets(clients(6)))
 
 
+def carrying_its_users_over_datagrams(mod):
+    """The two-plane box: TCP control traffic, user traffic over datagrams.
+
+    The shape none of the other pages have, and the one that most needs
+    drawing. Its control plane is two outbound TLS sessions to the service it
+    enrols with. Its user traffic - every tunnel it exists to carry - is
+    datagrams, which the kernel records nothing about per peer.
+
+    Read from the TCP table alone this is a box nobody is reaching, and that is
+    exactly what the tool used to say about it: "the service is up and nothing
+    is reaching it", at high confidence, with every other check passing. So the
+    page has to show three things at once. That the sophisticated half of the
+    report describes the control plane. That the other plane exists. And the
+    one thing that plane says plainly, which is what has piled up unread.
+    """
+    # Control plane only, on TCP: two sessions out, nothing inbound.
+    T.sided_flows(mod,
+                  *[T.sided_sock("203.0.113.%d" % (50 + i), "52%03d" % i,
+                                 sent=8_000_000, retrans=0) for i in range(2)])
+    T.serving(mod, "\n".join([
+        "State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*",
+        "ESTAB 0 0 10.0.0.5:52000 203.0.113.50:443",
+        "ESTAB 0 0 10.0.0.5:52001 203.0.113.51:443"]) + "\n")
+    # The user plane. One listener keeping up, one not: 61 KB standing on a
+    # 208 KB socket across the window, which is the shape the finding is for.
+    reads = [
+        {"ok": True, "cmd": "ss -uanm", "stdout": "",
+         "connected": 0, "queued_bytes": q, "listen_ports": ["443", "4500"],
+         "listeners": [
+             {"address": "0.0.0.0", "port": "443", "recv_q": q, "send_q": 0,
+              "recv_buffer": 212_992},
+             {"address": "0.0.0.0", "port": "4500", "recv_q": 0, "send_q": 0,
+              "recv_buffer": 212_992}]}
+        for q in (54_800, 61_400)]
+    mod.cmd_udp_sockets = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
+
+
 # ---- addressing -----------------------------------------------------------
 # The corpus puts everything on one flat 10.0.0.0/24 because a fixture only has
 # to be consistent. A demo has to be *read*, and a reader who cannot tell which
@@ -268,6 +354,11 @@ DEMOS = [
     ("5-service-address", "service_address_unserved", serving_but_not_on_the_vip),
     ("6-return-stalled",  "tcp_return_stalled_backends", answering_into_silence),
     ("7-losing-and-quiet", "tcp_flow_loss_backends", losing_traffic_and_hearing_nothing),
+    # The box the last two releases were built for, and the only page that
+    # shows any of that work. Everything before this one is a single-plane box,
+    # where the tool has nothing extra to say and correctly says nothing.
+    ("8-two-planes", "udp_queue_standing",
+     lambda mod: (carrying_its_users_over_datagrams(mod), and_it_forwards_datagrams(mod))),
 ]
 
 
@@ -284,6 +375,11 @@ def main():
             setattr(mod, name, (lambda n: lambda *a, **k: {
                 "ok": False, "cmd": n, "error": "not read for this example"})(name))
         setup(mod)
+        # Before the demo's own arrangement, not after: these are defaults
+        # every page should have, and a page that needs different ones has to
+        # be able to say so. Called last, it silently overwrote them - demo 8
+        # named the wrong process on its own listener.
+        like_the_real_box(mod)
         if arrange:
             arrange(mod)
         # Two readings a synthetic corpus cannot produce on its own, and which a

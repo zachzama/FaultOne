@@ -192,11 +192,9 @@ on every heading is a word repeated on every report to rule out a possibility
 nobody had. `other_plane()` returns nothing on such a box and the page draws
 nothing at all.
 
-That is now three features following the same rule, and it is worth naming
-because it keeps coming up: the fan-out is marked only on the hops a hedge was
-computed on, the privilege line appears only on the run that saw less, and the
-plane label appears only on the box with two. Say it where it changes the
-reading.
+That is the same rule the fan-out mark follows - drawn only on the hops a
+hedge was computed on - and it is worth naming because it keeps coming up. Say
+it where it changes the reading.
 
 `planeTag` and `planeNote` are named functions rather than expressions inside
 the render, so a test can execute them in node instead of asserting that the

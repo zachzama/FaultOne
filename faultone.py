@@ -2728,55 +2728,6 @@ def _dropped_by(raw):
 
 
 # ---------------------------------------------------------------------------
-# What this run was allowed to see.
-#
-# Several checks read something only a privileged user can read: the kernel
-# ring, the process behind another user's socket, an interface's driver
-# counters. Each of those already says "couldn't look" rather than "nothing
-# happened", which is the half that matters and was already right.
-#
-# What was missing is one statement of which run this was. Two reports of the
-# same box, one privileged and one not, are different reports, and nothing on
-# either of them said which one you were holding. The header has said "typically
-# root" since the first version, so the expectation was written down everywhere
-# except on the report it applies to.
-# ---------------------------------------------------------------------------
-
-# Checks whose answer changes with the privilege the run has. Named rather than
-# counted, because "9 checks were degraded" is a number and these are the
-# questions behind it.
-PRIVILEGED_READS = (
-    "the kernel log, where link flaps and NIC resets are timestamped",
-    "the process holding a socket that belongs to another user",
-    "the connection tracking table",
-)
-
-
-def privilege_of_this_run():
-    """Root, not root, or a platform that does not answer the question.
-
-    geteuid is absent on Windows, where the question is a different one
-    entirely and is not worth a second answer here: unknown is honest, and
-    every check that depends on privilege already reports its own refusal.
-    """
-    getter = getattr(os, "geteuid", None)
-    if getter is None:
-        return {"elevated": None, "user": None,
-                "note": "this platform does not report an effective user id"}
-    euid = getter()
-    return {
-        "elevated": euid == 0,
-        "user": euid,
-        "note": ("every check ran with the privilege it needs"
-                 if euid == 0 else
-                 "not root, so some checks could not look: "
-                 + "; ".join(PRIVILEGED_READS)
-                 + ". Each of them says so where it appears, and none of them "
-                   "is reported as nothing found"),
-    }
-
-
-# ---------------------------------------------------------------------------
 # The queues on this box's own interfaces.
 #
 # Three findings say connections are waiting in a queue rather than travelling,
@@ -2904,7 +2855,13 @@ def owner_of_port(owners, port):
     def named(rows):
         return {o["process"] for o in rows if o.get("process")}
 
-    on_port = [o for o in (owners or []) if o.get("local_port") == port]
+    # Compared as text on both sides. A port arrives here as an int from one
+    # caller and as a string from another, because one reads it off a socket
+    # address and the other off a listener table, and a silent type mismatch
+    # here reads as "the process could not be named" - which is a sentence this
+    # prints on purpose, so nothing looks wrong when it happens.
+    port = str(port)
+    on_port = [o for o in (owners or []) if str(o.get("local_port")) == port]
     listening = named([o for o in on_port if o.get("state") == "LISTEN"])
     if listening:
         return next(iter(listening)) if len(listening) == 1 else None
@@ -2994,7 +2951,7 @@ def _that_service_is(owners, port):
     process before they can restart anything, and on a box running several
     instances behind several ports that step is the work.
     """
-    who = owner_of_port(owners, int(port))
+    who = owner_of_port(owners, port)
     return (" That service is %s." % who) if who else ""
 
 
@@ -13983,7 +13940,6 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         ),
         "version": __version__,
         "python": platform.python_version(),
-        "privilege": privilege_of_this_run(),
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     # How far away each side is, on the way in. Done here rather than in
@@ -14956,14 +14912,9 @@ function renderDiagnosis(data, opts){
   output.innerHTML = '';
   panelSeq = 0;
 
-  // Same rule as the terminal: the badge says so only when the run was the
-  // lesser one, and the reason travels in the tooltip rather than on the page.
-  const lesser = data.privilege && data.privilege.elevated === false;
   osBadge.textContent = [(data.os_label || data.os) && `${data.os_label || data.os} report`,
-                         data.version && `v${data.version}`,
-                         lesser && 'not root'].filter(Boolean).join(' · ')
+                         data.version && `v${data.version}`].filter(Boolean).join(' · ')
                         || 'report viewer';
-  osBadge.title = lesser ? (data.privilege.note || '') : '';
 
 
   const findings = data.findings || [];
@@ -16056,12 +16007,6 @@ def render_text_report(report, color=False, width=None):
     out.append(f"FaultOne{' ' + version if version else ''} - {shown_os}"
                f"{' - python ' + py if py else ''}"
                f" - {report.get('generated_at', '')}")
-    # Which run this was. Only when it is the lesser one: a privileged run is
-    # what the header has told people to do since the first version, and saying
-    # so every time would be a line of noise on the ordinary report.
-    priv = report.get("privilege") or {}
-    if priv.get("elevated") is False:
-        out.append("    [not root - %s]" % priv.get("note", "some checks could not look"))
     mode = ""
     if report.get("quick"):
         mode = "    [quick mode]"

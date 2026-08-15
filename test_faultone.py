@@ -6774,6 +6774,70 @@ class TestWhatABrokerIsActuallyDoing(unittest.TestCase):
             "udp_tunnels": {"ok": False},
             "sockets": {"served_endpoints": {"10.0.0.5:443": 60}}}))
 
+    # ---- which shape of box this is --------------------------------------
+
+    def shape(self, tunnels, outbound):
+        return nd.forwards_out_of_band({
+            "udp_tunnels": {"ok": True, "total": tunnels, "tunnels": tunnels,
+                            "unanswered": 0, "ports": ["443"]},
+            "sockets": {"outbound": outbound}})
+
+    def test_a_box_with_tunnels_and_a_control_plane_is_brokering(self):
+        got = self.shape(tunnels=180, outbound=2)
+        self.assertEqual((got["tunnels"], got["outbound"]), (180, 2))
+
+    def test_a_proxy_is_not_brokering_however_many_tunnels_it_has(self):
+        """The distinction the whole rename rests on. A box that opens a
+        connection per piece of work has a population out, and for that box the
+        existing split is right: clients one side, backends the other. Calling
+        its outbound column a control plane would be the same mistake in
+        reverse."""
+        self.assertIsNone(self.shape(tunnels=180, outbound=200))
+        self.assertIsNone(self.shape(tunnels=180,
+                                     outbound=nd.CONTROL_PLANE_MAX_SESSIONS + 1))
+        self.assertIsNotNone(self.shape(tunnels=180,
+                                        outbound=nd.CONTROL_PLANE_MAX_SESSIONS),
+                             "the bar has to include its own value")
+
+    def test_a_box_with_no_tunnels_is_not_brokering(self):
+        """A quiet box with two outbound connections is not a broker with no
+        clients; it is a box with nothing arriving. Without tunnels there is
+        nothing being forwarded and nothing to say."""
+        self.assertIsNone(self.shape(tunnels=0, outbound=2))
+        self.assertIsNone(nd.forwards_out_of_band(
+            {"udp_tunnels": {"ok": False}, "sockets": {"outbound": 2}}))
+
+    def test_only_a_broker_has_its_outbound_side_renamed(self):
+        """The zone label is the thing that was pointed the wrong way, so it is
+        the thing worth asserting. Every other box keeps the label it had, and
+        a rename that leaked onto a proxy would be a new wrong answer."""
+        def label_for(code):
+            mod = fresh()
+            setup, kwargs = S[code]
+            setup(mod)
+            rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+            return next(z["label"] for z in rep["sides"] if z["side"] == "upstream")
+
+        self.assertEqual(label_for("forwards_inside_tunnels"),
+                         "what this box connects out to for itself")
+        for ordinary in ("tcp_flow_loss_backends", "ephemeral_ports_low"):
+            with self.subTest(code=ordinary):
+                self.assertEqual(label_for(ordinary), "what this box connects out to")
+
+    def test_the_finding_says_the_far_side_is_not_on_the_report(self):
+        """The point of it. Every finding on the way out is about the control
+        plane, and a reader who takes them for the user path chases the wrong
+        thing."""
+        mod = fresh()
+        setup, kwargs = S["forwards_inside_tunnels"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "forwards_inside_tunnels")
+        self.assertEqual(found["severity"], "ok", "forwarding is the job, not a fault")
+        self.assertIn("nothing on this report describes where it went",
+                      found["message"])
+
     # ---- what the encapsulation leaves ------------------------------------
 
     def room(self, path_mtu, ifaces=()):
@@ -16958,6 +17022,9 @@ def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
                                              "stdout": "", "interfaces": []}
         base = nd.cmd_link_modes
         nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+@scenario("forwards_inside_tunnels")
+def _(nd): two_planes(nd, tunnels=180, tcp_sessions=2)
 
 @scenario("transport_fell_back")
 def _(nd): two_planes(nd, tunnels=4, tcp_sessions=60)

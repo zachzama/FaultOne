@@ -287,6 +287,28 @@ def carrying_its_users_over_datagrams(mod):
     mod.cmd_udp_sockets = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
 
 
+def held_up_somewhere_that_is_not_here(mod):
+    """Traffic waiting in a queue, and this box eliminated as the place.
+
+    The finding offers three candidates for where a connection is being held
+    up: a full link, an overrun interface queue, or a device buffering to hide
+    one. The middle one is on this box and the kernel counts it, so it is the
+    one that can be answered rather than guessed at - and answering it in the
+    negative is the more useful half. A reader who knows it is not here has
+    somewhere to go; a reader given three candidates has to eliminate them by
+    hand, starting with the box they are already logged into.
+
+    So this page is a queue on the path out, with the box's own queues read and
+    empty. It is the only one of these where a check rules something *out*.
+    """
+    T.sided_flows(
+        mod,
+        *[T.queued_sock("198.51.100.%d" % i, "443", 44.0, 41.0) for i in range(1, 6)],
+        *[T.queued_sock("10.0.2.40", "51%03d" % (100 + i), 96.0, 8.0, port="5432")
+          for i in range(4)])
+    T.serving(mod, sockets(clients(5), backends(4)))
+
+
 # ---- addressing -----------------------------------------------------------
 # The corpus puts everything on one flat 10.0.0.0/24 because a fixture only has
 # to be consistent. A demo has to be *read*, and a reader who cannot tell which
@@ -373,6 +395,7 @@ DEMOS = [
     # The box the last two releases were built for, and the only page that
     # shows any of that work. Everything before this one is a single-plane box,
     # where the tool has nothing extra to say and correctly says nothing.
+    ("9-queue-not-here", "queuing_delay_backends", held_up_somewhere_that_is_not_here),
     ("8-two-planes", "transport_fell_back",
      lambda mod: (carrying_its_users_over_datagrams(mod), and_it_forwards_datagrams(mod))),
 ]

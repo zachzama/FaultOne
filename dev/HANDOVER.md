@@ -177,6 +177,34 @@ path that balances five times, and still never names the concept.
 The whole data change was one key on the viewer's row: `also` was in the report
 and the row builder had never carried it.
 
+## Settled: the outbound column on a broker is not where the traffic goes
+
+`analyze_tcp_flows` splits connections into ones that arrived and ones this box
+opened. That is a true statement about TCP and the right split for a proxy:
+clients one side, backends the other, two networks with two owners.
+
+A box that brokers through tunnels breaks it in a way the split cannot see. The
+traffic it exists to carry goes *inside* the tunnels, so it never appears as a
+connection at all, and what is left in the outbound column is whatever the box
+opens for itself - its control plane. The report labelled that "what this box
+connects out to", which reads as where the users' traffic goes. It was the one
+place the picture was not merely incomplete but pointed the wrong way.
+
+**The split was not changed, and should not be.** It is right about direction,
+and every loss figure and stalled return on that side is a real reading about a
+real thing. What changed is the label, on a box recognised as brokering:
+datagram tunnels arriving and a handful of outbound sessions rather than a
+population. There the column reads "what this box connects out to for itself",
+and a context finding says the far side of the forwarded traffic is not on the
+report at all.
+
+**What was considered and not built:** splitting the inbound population into
+client connectors and app connectors. Both dial in, both land on the same port,
+and the socket table records nothing that separates them. Peer address scope is
+the obvious proxy and it is a guess dressed as a measurement - it happens to
+work on one deployment shape and quietly mislabels another. The honest position
+is that the box sees one inbound population and the report says so.
+
 ## Settled: which plane the numbers describe, said only where there are two
 
 Every per-connection reading here is TCP: the client table is `ss -tan` and the

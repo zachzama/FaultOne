@@ -7219,6 +7219,7 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # which is the opposite of a fault to rank.
                   "clients_may_be_on_the_datagram_plane",
                   "tunnel_payload_room",
+                  "forwards_inside_tunnels",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
                   # forwarding look the same here, so it names both.
@@ -7486,6 +7487,8 @@ FINDING_SIDE.update({
     "tunnel_payload_short": "upstream",
     # Context about the path out, same as the fault it is the other half of.
     "tunnel_payload_room": "upstream",
+    # About the way out, and specifically about what it does not cover.
+    "forwards_inside_tunnels": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
     "own_service_silent": "downstream",
@@ -8335,6 +8338,21 @@ def build_sides(findings, raw=None):
         ("upstream", "what this box connects out to",
          "backends, DNS, and the path out"),
     ]
+    # On a box that brokers through tunnels the outbound column is what it
+    # opens for itself, and calling that "what this box connects out to" reads
+    # as where the users' traffic goes. It is not: that goes inside the
+    # tunnels and is not a connection this box holds. Renamed rather than
+    # removed, because the column is still true and still worth having - the
+    # control plane failing is a real outage - it just is not what a reader
+    # assumes it is.
+    brokering = forwards_out_of_band(raw)
+    if brokering:
+        order = [(side,
+                  "what this box connects out to for itself" if side == "upstream"
+                  else label,
+                  "its control plane, DNS, and the path out - not where the "
+                  "traffic it carries goes" if side == "upstream" else detail)
+                 for side, label, detail in order]
     rank = {"pass": 0, "warn": 1, "fail": 2}
     out = []
     for side, label, detail in order:
@@ -9665,6 +9683,47 @@ def _tunnels_counted(raw):
                " and %d with nothing coming back" % quiet if quiet else ""))
 
 
+def forwards_out_of_band(raw):
+    """Does this box carry traffic it never opens a connection for.
+
+    The socket table splits connections into ones that arrived and ones this
+    box opened, which is a true statement about TCP and the right split for a
+    proxy: clients on one side, backends on the other, two networks with two
+    owners. A box that brokers through tunnels breaks that in a way the split
+    cannot see.
+
+    On one, the traffic it exists to carry goes *inside* the tunnels, so it
+    never appears as a connection at all. What is left in the outbound column
+    is whatever the box opens for itself, which is its control plane - and the
+    report labels that column "what this box connects out to", which reads as
+    where the users' traffic goes. It is the one place the picture is not
+    merely incomplete but pointed the wrong way.
+
+    Recognised rather than inferred: datagram tunnels are arriving, and the
+    outbound connections are a handful of long-lived ones rather than a
+    population. That is what a broker looks like and what a proxy does not.
+    """
+    counted = (raw or {}).get("udp_tunnels") or {}
+    sock = (raw or {}).get("sockets") or {}
+    if not counted.get("ok") or not counted.get("total"):
+        return None
+    outbound = sock.get("outbound") or 0
+    # Written as the condition for being a broker rather than for not being
+    # one, so the bar reads the way it is documented: a box at the number is
+    # still holding a control plane, and one past it has a population out and
+    # is a proxy, which the existing split already describes correctly.
+    if outbound <= CONTROL_PLANE_MAX_SESSIONS:
+        return {"tunnels": counted["total"], "outbound": outbound,
+                "ports": counted.get("ports") or []}
+    return None
+
+
+# A control plane is a few sessions to the service this box enrols with. More
+# outbound connections than this and the box is opening them for the work,
+# which is a proxy and is exactly what the existing split describes correctly.
+CONTROL_PLANE_MAX_SESSIONS = 8
+
+
 def other_plane(raw):
     """The datagram listeners, when this box has any, so the rest can say so.
 
@@ -9743,6 +9802,36 @@ def _check_encapsulation_headroom(raw, findings):
                "being done by the service rather than the kernel and what it hands out "
                "cannot be read from here. The number above is the ceiling it has to "
                "stay under.")),
+    })
+
+
+def _check_forwarding_shape(raw, findings):
+    """Say that the far side of the traffic this box carries is not on here.
+
+    Context, never a fault. Nothing is wrong with a box that forwards inside
+    tunnels - that is the job - and the report has to stop implying it can see
+    where that traffic went. Every other finding on the way out is about the
+    control plane, and a reader who takes them for the user path will chase
+    the wrong thing.
+    """
+    shape = forwards_out_of_band(raw)
+    if not shape:
+        return
+    where = ", ".join(shape["ports"]) if shape["ports"] else "its listeners"
+    findings.append({
+        "severity": "ok",
+        "layer": 4,
+        "code": "forwards_inside_tunnels",
+        "message": (
+            f"{shape['tunnels']} datagram tunnel(s) are arriving on {where}, and this "
+            f"box holds {shape['outbound']} outbound connection(s) of its own. The "
+            f"traffic those tunnels carry is forwarded inside them, so it never appears "
+            f"as a connection here and nothing on this report describes where it went. "
+            f"What the outbound side does describe is what this box opens for itself - "
+            f"its control plane, its resolvers, its own path out. That is worth having "
+            f"and is a real outage when it breaks, but it is not the user path: a loss "
+            f"figure or a stalled return on that side is about this box reaching the "
+            f"service it enrols with, not about anyone's traffic getting through."),
     })
 
 
@@ -11651,6 +11740,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
     _check_udp_queues(raw, late)
+    _check_forwarding_shape(raw, late)
     _check_transport_fallback(raw, late)
     _check_encapsulation_headroom(raw, late)
     # After the flows, because it reads them. Wired in beside the sessions

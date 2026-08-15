@@ -8224,6 +8224,11 @@ def build_path_legs(raw=None, sides=None):
     return out or None
 
 
+# The curated owner phrase per finding, for the places that need the reason on
+# its own rather than the whole message.
+OWNER_PHRASE = {code: owner for code, owner, _h, _n in VERDICT_RULES}
+
+
 # Which box the verdict blames, where that is not the box its direction lights.
 #
 # Membership is not a judgement call: it is every finding whose owner names this
@@ -8322,11 +8327,17 @@ def build_sides(findings, raw=None):
         # This is the drawing only. build_verdict reasons on finding_side, so
         # what explains what, and which findings can corroborate each other, are
         # untouched - a port ceiling still cannot explain an inbound fault.
-        mine = [f for f in findings
-                if (finding_side(f.get("code")) == side
-                    or cause_owner_side(f.get("code")) == side)
-                and f.get("severity") in ("warning", "critical")
+        # Kept apart, because a zone that has a finding because it *faces* it
+        # and a zone that has one because it *owns* it are answering different
+        # questions, and the summary below has to answer the right one.
+        loud = [f for f in findings
+                if f.get("severity") in ("warning", "critical")
                 and f.get("code") not in VERDICT_EXEMPT]
+        facing = [f for f in loud if finding_side(f.get("code")) == side]
+        owning = [f for f in loud
+                  if cause_owner_side(f.get("code")) == side
+                  and finding_side(f.get("code")) != side]
+        mine = facing + owning
         state = ("fail" if any(f["severity"] == "critical" for f in mine)
                  else "warn" if mine else "pass")
         # Nothing connects to this box, so there is no inbound path to report
@@ -8349,8 +8360,19 @@ def build_sides(findings, raw=None):
                  # cause, so it is said here.
                  "owns_cause": False}
         if mine:
-            entry["worst"] = sorted(mine, key=lambda f: -rank.get(
-                "fail" if f["severity"] == "critical" else "warn", 0))[0]["message"]
+            top = sorted(mine, key=lambda f: -rank.get(
+                "fail" if f["severity"] == "critical" else "warn", 0))[0]
+            # Two zones lighting for one finding used to print its whole
+            # message under both, which said the same thing twice and wasted
+            # the second box. They are not the same answer: the zone the fault
+            # faces is where it shows, and the zone that owns it is why. So the
+            # facing one keeps the measurement and the owning one gets the
+            # reason, which is a sentence the finding already carries.
+            if top in owning:
+                entry["worst"] = "The cause is %s." % OWNER_PHRASE.get(
+                    top.get("code"), "this box")
+            else:
+                entry["worst"] = top["message"]
         if side == "downstream" and serving:
             lb = _dominant_client(raw)
             entry["via"] = lb

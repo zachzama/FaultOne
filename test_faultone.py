@@ -7955,6 +7955,34 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(self.owning(zones), [want])
 
+    def test_no_two_boxes_say_the_same_thing(self):
+        """Lighting a zone for what it owns as well as what it faces put one
+        finding in two boxes, and both printed its whole message. A reader met
+        the same paragraph twice and the second box earned nothing.
+
+        They are not the same answer. The zone the fault faces is where it
+        shows; the zone that owns it is why. Eleven scenarios light two boxes
+        and every one of them now says two different things.
+        """
+        for code, rep, _v, zones in self.every_report():
+            said = [z.get("worst") for z in zones.values()
+                    if z["state"] in self.LIT and z.get("worst")]
+            with self.subTest(code=code):
+                self.assertEqual(len(said), len(set(said)),
+                                 "two boxes are printing the same summary")
+
+    def test_the_box_that_owns_a_fault_says_why_rather_than_what(self):
+        """And the split is the right way round: the measurement belongs to the
+        direction it was taken in, the reason to the box responsible."""
+        mod = fresh()
+        setup, kwargs = S["ephemeral_ports_low"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        by = {z["side"]: z.get("worst") or "" for z in rep["sides"]}
+        self.assertIn("The cause is this box's local port range", by["local"])
+        self.assertIn("ports in ", by["upstream"], "the measurement moved off the "
+                                                   "side it was measured on")
+
     def test_a_report_with_a_fault_lights_something(self):
         for code, _rep, v, zones in self.every_report():
             if v["severity"] not in self.BAD:

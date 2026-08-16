@@ -2137,6 +2137,19 @@ def peer_port(addr):
     return m.group(1) if m else None
 
 
+def ports_in_order(ports):
+    """Ports sorted as numbers, which they are not stored as.
+
+    A port is carried as text everywhere here - peer_port returns the digits it
+    matched, and the sets it is compared against are sets of strings - so the
+    default sort puts 4500 before 500 before 53. That is wrong wherever a list
+    is shown, and worse wherever one is cut short: a run of listeners trimmed
+    to the first few kept 4500 and 1194 and dropped 53, which is the one that
+    would have told a reader what the box was.
+    """
+    return sorted(ports, key=lambda p: (int(p) if str(p).isdigit() else 0, str(p)))
+
+
 def parse_socket_states(text, own_access=(None, None)):
     """Count sockets by state, and note who the pending ones are talking to.
 
@@ -2207,7 +2220,11 @@ def parse_socket_states(text, own_access=(None, None)):
             established.append(peer_port(local))
             local_ends.append((peer_host(local), peer_port(local)))
             peers.append((peer_host(peer), peer_port(local)))
-            outbound_dests.append((peer_host(peer), peer_port(peer)))
+            # The local port travels with the destination because it is the
+            # only thing that says which way the connection was opened, and it
+            # cannot be judged here: `listening` is still being filled, and a
+            # LISTEN line is free to arrive after the sockets it explains.
+            outbound_dests.append((peer_host(peer), peer_port(peer), peer_port(local)))
         elif key == "TIME_WAIT" and local:
             # A connection that has closed still owns its four-tuple until
             # the timer expires, so the port it used cannot serve another
@@ -2216,7 +2233,7 @@ def parse_socket_states(text, own_access=(None, None)):
             # established ones several times over, and leaving them out
             # understated the pressure by exactly that factor.
             if (peer_host(peer), peer_port(local)) != own_access:
-                waiting_dests.append((peer_host(peer), peer_port(peer)))
+                waiting_dests.append((peer_host(peer), peer_port(peer), peer_port(local)))
         if key in ("SYN_SENT", "CLOSE_WAIT") and peer:
             host = peer_host(peer)
             pending.setdefault(key, {})
@@ -2227,12 +2244,22 @@ def parse_socket_states(text, own_access=(None, None)):
     # traffic to thousands of places those two numbers are nothing alike.
     # Counted here and reduced to numbers: the destination list is every place
     # this box has been, and does not belong in a report.
+    # Which end decides that is the local port, not the remote one. Tested
+    # against the remote port, every client of a busy server counted as a
+    # place this box had been: a plain web server with sixty clients and no
+    # outbound connections at all reported sixty destinations, said so in the
+    # same breath as reporting zero outbound connections, and past fifty of
+    # them was described to its owner as a box forwarding other people's
+    # traffic and pointed at 8.8.8.8 instead of anything it depends on. A
+    # client's ephemeral port is never one this box listens on, so the test
+    # passed for every one of them. pick_backend draws the same line correctly
+    # one screen down.
     dest_counts, waiting_counts = {}, {}
-    for host, port in outbound_dests + waiting_dests:
-        if host and port and peer_port(f"x:{port}") and port not in listening:
+    for host, port, local_port in outbound_dests + waiting_dests:
+        if host and port and local_port not in listening:
             dest_counts[(host, port)] = dest_counts.get((host, port), 0) + 1
-    for host, port in waiting_dests:
-        if host and port and peer_port(f"x:{port}") and port not in listening:
+    for host, port, local_port in waiting_dests:
+        if host and port and local_port not in listening:
             waiting_counts[(host, port)] = waiting_counts.get((host, port), 0) + 1
     worst = max(dest_counts.items(), key=lambda kv: (kv[1], kv[0]), default=None)
     inbound = sum(1 for p in established if p and p in listening)
@@ -2252,7 +2279,7 @@ def parse_socket_states(text, own_access=(None, None)):
             served_endpoints[key] = served_endpoints.get(key, 0) + 1
     return {"states": states, "pending": pending, "served_on": served_on,
             "served_endpoints": served_endpoints,
-            "listen_ports": sorted(listening), "bound": bound, "peers": peers,
+            "listen_ports": ports_in_order(listening), "bound": bound, "peers": peers,
             "outbound_destinations": len(dest_counts),
             "outbound_worst_dest": f"{worst[0][0]}:{worst[0][1]}" if worst else None,
             "outbound_worst_count": worst[1] if worst else 0,
@@ -2308,7 +2335,7 @@ def parse_udp_sockets(text):
                           "recv_buffer": int(buffered.group(1)) if buffered else None})
         queued += recv_q
     return {"listeners": listeners, "connected": connected, "queued_bytes": queued,
-            "listen_ports": sorted({l["port"] for l in listeners})}
+            "listen_ports": ports_in_order({l["port"] for l in listeners})}
 
 
 def cmd_udp_sockets():
@@ -2727,6 +2754,9 @@ _NFT_TABLE = re.compile(r"^table\s+(\S+)\s+(\S+)\s*\{")
 _NFT_CHAIN = re.compile(r"^\s*chain\s+(\S+)\s*\{")
 _NFT_POLICY = re.compile(r"policy\s+(\w+)")
 _NFT_COUNTER = re.compile(r"counter packets (\d+) bytes (\d+)")
+# nft renders a rule's comment inline, in double quotes. Cut out before the
+# verdict is read, so what somebody wrote about a rule cannot become the rule.
+_NFT_COMMENT = re.compile(r'\bcomment\s+"[^"]*"')
 _NFT_HOOK = re.compile(r"type filter hook (\w+)")
 # Which way traffic was going when a chain saw it. Both spellings, because nft
 # hooks are lowercase and iptables built-ins are not, and only the built-ins
@@ -2805,7 +2835,14 @@ def parse_nft_ruleset(text):
         counter = _NFT_COUNTER.search(line)
         if not counter or not chain:
             continue
-        verdict = next((v for v in ("drop", "reject") if re.search(r"\b%s\b" % v, line)),
+        # Read off the rule, and a comment is not the rule. nft prints comments
+        # inline, so a rule that accepts under `comment "do not reject this"`
+        # was recorded as a rule that rejects - and rules_that_counted then
+        # offers it, worst first, as the rule that stopped somebody's traffic.
+        # An accept rule on a busy box has the fastest-moving counter there is,
+        # so it goes to the top of that list.
+        deciding = _NFT_COMMENT.sub("", line)
+        verdict = next((v for v in ("drop", "reject") if re.search(r"\b%s\b" % v, deciding)),
                        None)
         rules.append({"table": table, "chain": chain,
                       "packets": int(counter.group(1)), "bytes": int(counter.group(2)),
@@ -6238,14 +6275,30 @@ def discards_the_target(routes, target_ip):
         address = ipaddress.ip_address(target_ip)
     except ValueError:
         return None                 # a name that never resolved; nothing to place
+    # The narrowest match, not the first, because that is the one the kernel
+    # will actually apply - routing is longest-prefix and this has to name the
+    # route that decides, not merely a route that contains. It did not matter
+    # while `default` was unreadable and every other prefix was disjoint; it
+    # matters the moment a box holds an all-addresses discard and a specific
+    # one, which is the ordinary shape of a deny-by-default table.
+    best, best_len = None, -1
     for route in routes:
+        prefix = route["prefix"]
+        # `ip route` prints the all-addresses prefix by name, and ip_network
+        # cannot read the name - so the one discard route that catches every
+        # destination was the one route that could never match a target, while
+        # every narrower prefix beside it matched fine. Both tables spell it
+        # this way, so it takes the family of whatever is being placed.
+        if prefix == "default":
+            prefix = "::/0" if address.version == 6 else "0.0.0.0/0"
         try:
-            network = ipaddress.ip_network(route["prefix"], strict=False)
+            network = ipaddress.ip_network(prefix, strict=False)
         except ValueError:
             continue
-        if address.version == network.version and address in network:
-            return route
-    return None
+        if (address.version == network.version and address in network
+                and network.prefixlen > best_len):
+            best, best_len = route, network.prefixlen
+    return best
 
 
 def cmd_route_to(target):
@@ -14440,7 +14493,7 @@ def _check_rotation(raw, findings):
     # which is the most expensive way to be wrong.
     datagram = (raw.get("udp_sockets") or {}).get("listeners") or []
     if datagram:
-        where = ", ".join(str(p) for p in sorted({l["port"] for l in datagram})[:4])
+        where = ", ".join(str(p) for p in ports_in_order({l["port"] for l in datagram})[:4])
         findings.append({
             "severity": "ok",
             "layer": 4,

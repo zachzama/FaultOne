@@ -7685,6 +7685,27 @@ class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
         rule = nd.parse_nft_ruleset(nft)["rules"][0]
         self.assertEqual(rule["faces"], "in")
 
+    def test_what_somebody_wrote_about_a_rule_is_not_the_rule(self):
+        """nft prints comments inline. Read as part of the rule, an accept
+        under a comment mentioning a drop becomes a drop - and then
+        rules_that_counted offers it, worst first, as the rule that stopped
+        somebody's traffic, which on a busy box it will always top."""
+        nft = ("table inet filter {\n\tchain input {\n"
+               "\t\ttype filter hook input priority filter; policy accept;\n"
+               '\t\ttcp dport 443 counter packets 9 bytes 700 accept comment "do not reject this"\n'
+               "\t}\n}\n")
+        rule = nd.parse_nft_ruleset(nft)["rules"][0]
+        self.assertIsNone(rule["verdict"])
+        # And the comment stays on the rule, which is what a reader is shown.
+        self.assertIn("do not reject this", rule["rule"])
+
+    def test_a_rule_that_really_does_drop_still_says_so(self):
+        nft = ("table inet filter {\n\tchain input {\n"
+               "\t\ttype filter hook input priority filter; policy accept;\n"
+               '\t\ttcp dport 25 counter packets 4 bytes 200 drop comment "spam"\n'
+               "\t}\n}\n")
+        self.assertEqual(nd.parse_nft_ruleset(nft)["rules"][0]["verdict"], "drop")
+
     def test_it_outranks_the_absence_it_explains(self):
         """A client refused at the firewall never becomes a connection, so
         "nothing is reaching it" is this rule's consequence rather than a
@@ -7726,6 +7747,31 @@ class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
     def test_an_address_outside_every_discard_is_not_caught(self):
         routes = nd.parse_discard_routes(self.ROUTES)
         self.assertIsNone(nd.discards_the_target(routes, "10.0.0.90"))
+
+    def test_the_route_that_catches_everything_catches_everything(self):
+        """`ip route` prints the all-addresses prefix by name, so the one
+        discard route that throws away every destination was the only one that
+        could not be placed - while the narrower prefixes beside it matched."""
+        routes = nd.parse_discard_routes("unreachable default metric 4278198272\n")
+        caught = nd.discards_the_target(routes, "8.8.8.8")
+        self.assertIsNotNone(caught)
+        self.assertEqual(caught["kind"], "unreachable")
+
+    def test_the_named_prefix_is_read_in_the_family_being_placed(self):
+        routes = nd.parse_discard_routes("blackhole default\n")
+        self.assertIsNotNone(nd.discards_the_target(routes, "2001:db8::1"))
+        self.assertIsNotNone(nd.discards_the_target(routes, "8.8.8.8"))
+
+    def test_the_route_that_decides_is_the_narrowest_one(self):
+        """Routing is longest-prefix, so a box holding an all-addresses discard
+        and a specific one has to be reported against the specific one - naming
+        the wider route sends a reader to the wrong line of the table."""
+        routes = nd.parse_discard_routes("unreachable default\n"
+                                         "blackhole 192.168.5.0/24\n")
+        caught = nd.discards_the_target(routes, "192.168.5.9")
+        self.assertEqual(caught["prefix"], "192.168.5.0/24")
+        # And something only the wide route covers still reports the wide one.
+        self.assertEqual(nd.discards_the_target(routes, "8.8.8.8")["prefix"], "default")
 
     def test_a_name_that_never_resolved_places_nowhere(self):
         routes = nd.parse_discard_routes(self.ROUTES)
@@ -10585,6 +10631,17 @@ class TestTheOtherPlane(unittest.TestCase):
     def test_a_connected_datagram_socket_is_counted_apart(self):
         self.assertEqual(nd.parse_udp_sockets(self.SS)["connected"], 1)
 
+    def test_the_listeners_shown_are_the_low_numbered_ones(self):
+        """The finding names four of them, and sorted as text the four it kept
+        were 1194, 123, 4500 and 500 - dropping 53, the one that says what this
+        box is. Ports are stored as text; ordering them is not automatic."""
+        ss = "".join("UNCONN 0 0 0.0.0.0:%s 0.0.0.0:*\n" % p
+                     for p in ("1194", "123", "4500", "500", "53"))
+        got = nd.parse_udp_sockets(ss)
+        self.assertEqual(got["listen_ports"], ["53", "123", "500", "1194", "4500"])
+        shown = nd.ports_in_order({l["port"] for l in got["listeners"]})[:4]
+        self.assertIn("53", shown)
+
     def test_sockets_are_never_presented_as_clients(self):
         """One socket serves any number of peers without the kernel recording
         one of them, so nothing here may be read as a count of who is being
@@ -13231,6 +13288,50 @@ tcp4       0      0  *.22             *.*               LISTEN
         parsed = nd.parse_socket_states(self.SS)
         peers = parsed["pending"]["SYN_SENT"]
         self.assertTrue(any("198.51.100.9" in host for host in peers))
+
+    # ---- which end decides the direction ---------------------------------
+
+    SERVER = ("LISTEN     0      128    0.0.0.0:443          0.0.0.0:*\n"
+              + "".join("ESTAB 0 0 10.0.0.5:443 203.0.113.%d:5%03d\n" % (i + 1, i)
+                        for i in range(60)))
+
+    def test_a_client_is_not_a_place_this_box_has_been(self):
+        """The local port says which way a connection was opened; the remote
+        one cannot. Tested against the remote port, every client counted as a
+        destination - and a client's ephemeral port is never one this box
+        listens on, so every one of them passed."""
+        parsed = nd.parse_socket_states(self.SERVER)
+        self.assertEqual(parsed["inbound"], 60)
+        self.assertEqual(parsed["outbound"], 0)
+        self.assertEqual(parsed["outbound_destinations"], 0)
+        self.assertIsNone(parsed["outbound_worst_dest"])
+
+    def test_a_busy_server_is_not_forwarding_other_peoples_traffic(self):
+        """Past FORWARDER_DESTINATIONS the tool stops looking for what this box
+        depends on and aims at the internet instead, telling the owner their
+        server is a forwarder. Sixty clients used to be enough to trigger it."""
+        parsed = dict(nd.parse_socket_states(self.SERVER), ok=True)
+        self.assertLess(parsed["outbound_destinations"], nd.FORWARDER_DESTINATIONS)
+        findings = []
+        target, _kind = nd._choose_target(None, parsed, findings)
+        self.assertNotIn("target_is_forwarded", [f["code"] for f in findings])
+
+    def test_the_connections_this_box_opened_are_still_counted(self):
+        text = self.SERVER + "".join(
+            "ESTAB 0 0 10.0.0.5:4%04d 10.0.0.9:5432\n" % i for i in range(4))
+        parsed = nd.parse_socket_states(text)
+        self.assertEqual(parsed["outbound"], 4)
+        self.assertEqual(parsed["outbound_destinations"], 1)
+        self.assertEqual(parsed["outbound_worst_dest"], "10.0.0.9:5432")
+        self.assertEqual(parsed["outbound_worst_count"], 4)
+
+    def test_ports_are_ordered_as_numbers_because_they_are_stored_as_text(self):
+        """Sorted as text, 53 lands after 4500 - and any list cut short drops
+        it, which is the port that would have said what the box was."""
+        text = "".join("LISTEN 0 128 0.0.0.0:%s 0.0.0.0:*\n" % p
+                       for p in ("1194", "123", "4500", "500", "53"))
+        parsed = nd.parse_socket_states(text)
+        self.assertEqual(parsed["listen_ports"], ["53", "123", "500", "1194", "4500"])
 
     def test_thresholds_are_above_normal_churn(self):
         # A couple of sockets in an odd state is ordinary; the thresholds have

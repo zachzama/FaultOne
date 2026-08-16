@@ -7,6 +7,37 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
+## Open: where 2026-08-16 stopped, and the one job left running
+
+Everything is committed and pushed - `origin/main` is at "Measure the viewer's
+coverage instead of counting how its tests are written", the tree is clean and
+the suite is green at 1,575. Nothing is half-applied and nothing needs undoing.
+
+**The job that did not survive the machine.** `dev/branch_sweep.py true` was
+thirteen sites into fifty-four with no survivors when this stopped. It lives in
+a scratch directory, not the repo, so it is gone - re-run it rather than looking
+for it. About forty minutes, and the number that matters is the survivor list at
+the end:
+
+```bash
+python3 dev/branch_sweep.py true     # else-sides; false ran clean on 2026-08-16
+```
+
+**Then the thing neither direction covers.** The sweep reads ternaries only. The
+thirteen `&&` guards in `VIEWER_TEMPLATE` have never been forced either way, and
+each of them decides whether a piece of markup is drawn at all. Widening the
+regex in that script is the whole job.
+
+**Two limits worth knowing before trusting a run of it.** Forcing false only
+tests then-sides, which is why the true direction exists - the `setFavicon`
+fallback that no test noticed was an else-side. And run it against a full tree:
+a scratch copy of only the two Python files makes about sixteen documentation
+tests error for want of a README, and an error counts the same as a failure when
+you are grepping for either.
+
+The parser review that filled most of that day is recorded under "every parser
+was read" below. Nothing from it is outstanding.
+
 ## Open: a flaky test, diagnosed by mechanism rather than caught
 
 `DiagnoseHarness.test_healthy_device` failed roughly one run in six. It passed

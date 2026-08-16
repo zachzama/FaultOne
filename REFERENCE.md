@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 171
+difference is which one it puts at the top, and that is the whole product: 172
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1357,12 +1357,12 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **38** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **171** | Distinct conclusions it can reach and state in plain language. 141 are faults; 30 are context, like which switch port you're on. |
+| **Data collections** | **39** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Findings** | **172** | Distinct conclusions it can reach and state in plain language. 141 are faults; 31 are context, like which switch port you're on. |
 | **Ranked causes** | **141** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1389 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1400 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 171 findings are the useful figure** if you want to know what the tool can
+**The 172 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1526,7 +1526,7 @@ It needs the walk, because only the walk keeps the quote. A text traceroute
 prints the router's address and throws the quote away, and on those traces
 this is silent and the inference carries on alone.
 
-### The 38 things it inspects
+### The 39 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1548,27 +1548,28 @@ this is silent and the inference carries on alone.
 17. Which process holds each socket, so a finding that blames a service on this box can name it (Linux `ss`/`netstat`, `lsof` elsewhere)
 18. TCP retransmission counters
 19. Per-connection TCP statistics: loss and stalls broken down by destination (Linux)
-20. Clock synchronisation and offset, where a time daemon can be asked
-21. Listening ports
-22. Neighbour inventory (with `--inventory`)
+20. The route this box would use for the target, asked of the kernel rather than read off the table, and compared against the first hop the trace found
+21. Clock synchronisation and offset, where a time daemon can be asked
+22. Listening ports
+23. Neighbour inventory (with `--inventory`)
 
 **Off the device**
-22. Gateway reachability and loss
-23. Target reachability and loss
-24. Hop-by-hop path (traceroute, or mtr where installed)
-25. TCP-probe path, when the standard one is filtered
-26. Path MTU
-27. DNS resolution
-28. Each configured DNS resolver, individually
-29. TCP reachability of specific ports
-30. TLS handshake and certificate on ports that should have one
-31. Bonded interface members, and which of them are down (Linux)
-32. Neighbour table size against its own ceiling (Linux)
-33. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
-34. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
-35. The TLS certificate this box *serves*, read from the outside in
-36. This box's own service, asked over HTTP for an answer rather than a connection
-37. Proxy configuration, how this box is told to reach the internet: the
+23. Gateway reachability and loss
+24. Target reachability and loss
+25. Hop-by-hop path (traceroute, or mtr where installed)
+26. TCP-probe path, when the standard one is filtered
+27. Path MTU
+28. DNS resolution
+29. Each configured DNS resolver, individually
+30. TCP reachability of specific ports
+31. TLS handshake and certificate on ports that should have one
+32. Bonded interface members, and which of them are down (Linux)
+33. Neighbour table size against its own ceiling (Linux)
+34. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
+35. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
+36. The TLS certificate this box *serves*, read from the outside in
+37. This box's own service, asked over HTTP for an answer rather than a connection
+38. Proxy configuration, how this box is told to reach the internet: the
     `http_proxy` family, and on macOS the system settings including a PAC file
     or WPAD. Read, never probed
 
@@ -2154,7 +2155,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1389 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1400 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3646,7 +3647,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1389 tests, no dependencies, no network, a few seconds, so they run
+1400 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3725,7 +3726,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 171 findings with readable rules instead of
+> way out - and who owns it. Ranks 172 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

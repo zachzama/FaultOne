@@ -5665,6 +5665,14 @@ PANEL_HELP = {
         "desc": "What each interface negotiated with the switch port. Half duplex or an "
                 "unexpectedly slow link points at that cable or a mismatched port.",
     },
+    "route_to": {
+        "label": "the route to the target", "layer": 3,
+        "desc": "Which route this box would actually use for the target, asked of the "
+                "kernel rather than worked out from the routing table. Compared against "
+                "the first hop the trace found: when they disagree the probe and the "
+                "traffic are taking different routes, and everything measured below is "
+                "about the other one.",
+    },
     "path_mtu": {
         "label": "path MTU probe", "layer": 3,
         "desc": "Largest packet that reaches the target unfragmented. A result below the "
@@ -5879,6 +5887,110 @@ def _default_route_iface(raw):
             if tok in known:
                 return tok
     return None
+
+
+# ---------------------------------------------------------------------------
+# Which route the kernel would actually use for the target.
+#
+# The routing table is read here to find the default gateway and for nothing
+# else, which leaves the most useful question about it unasked: is the path
+# being measured the path the traffic takes.
+#
+# Comparing the first hop against the *default* gateway would be wrong, and
+# wrong in the direction that produces false alarms. A more specific route, a
+# second table, a VPN that grabs a prefix - all of those are ordinary and all
+# of them make the first hop something other than the default next hop. The
+# kernel already answers the exact question: `ip route get` says which route
+# would be used for one destination, out which interface, from which address.
+#
+# So this asks, and then compares the answer against what the trace observed.
+# It is the one-box version of computing a path from forwarding state instead
+# of probing for it.
+# ---------------------------------------------------------------------------
+
+_ROUTE_GET_VIA = re.compile(r"\bvia (\S+)")
+_ROUTE_GET_DEV = re.compile(r"\bdev (\S+)")
+_ROUTE_GET_SRC = re.compile(r"\bsrc (\S+)")
+_ROUTE_GET_BSD = re.compile(r"^\s*(gateway|interface):\s*(\S+)", re.M)
+
+
+def parse_route_to(text):
+    """`ip route get` or `route -n get` into the next hop it names.
+
+    A destination on a directly connected network has no next hop at all - the
+    kernel prints the interface and no `via`, because there is nothing between
+    here and there. That is not a missing answer, it is the answer, and the
+    caller has to know the difference.
+    """
+    if not text:
+        return None
+    line = text.strip().splitlines()[0] if "via " in text or " dev " in text else ""
+    if line:
+        via = _ROUTE_GET_VIA.search(text)
+        dev = _ROUTE_GET_DEV.search(text)
+        src = _ROUTE_GET_SRC.search(text)
+        return {"via": via.group(1) if via else None,
+                "dev": dev.group(1) if dev else None,
+                "src": src.group(1) if src else None, "onlink": not via}
+    found = dict(_ROUTE_GET_BSD.findall(text))
+    if not found:
+        return None
+    via = found.get("gateway")
+    # BSD names a link-layer route's gateway after the interface, which is the
+    # same thing as no next hop.
+    if via and not _looks_like_ipv4(via) and ":" not in via:
+        via = None
+    return {"via": via, "dev": found.get("interface"), "src": None,
+            "onlink": not via}
+
+
+def cmd_route_to(target):
+    """Ask the kernel which route it would use to reach the target."""
+    if not valid_target(target):
+        return bad_target()
+    if OS_NAME == "Windows":
+        return {"ok": False, "cmd": "ip route get", "applicable": False,
+                "error": "asking for one destination's route is not supported here"}
+    attempts = [["ip", "route", "get", target], ["route", "-n", "get", target]]
+    # A box with neither command cannot answer route questions at all, and
+    # `routes_unreadable` already says so. Counting this as a second failed
+    # check marks the confidence of every verdict down twice for one missing
+    # capability, which is the mistake the firewall reader made first.
+    if not any(which(cmd[0]) for cmd in attempts):
+        return {"ok": False, "cmd": "ip route get", "applicable": False,
+                "error": "nothing here can be asked which route it would use"}
+    res = run_first_usable(attempts, timeout=10)
+    if not res.get("ok"):
+        return res
+    chosen = parse_route_to(res.get("stdout") or "")
+    if chosen:
+        res.update(chosen)
+    return res
+
+
+def route_disagrees_with_trace(raw, hops, target):
+    """Does the first hop the trace found match the route the kernel would use.
+
+    Only the first hop can be checked this way: it is the only one this box
+    decides. Everything past it belongs to somebody else's forwarding table and
+    is not knowable from here, which is the whole reason a trace is sent at all.
+
+    Returns nothing where the comparison cannot be made rather than guessing at
+    it - no route answer, no hops, or a first hop that did not reply.
+    """
+    chosen = (raw or {}).get("route_to") or {}
+    if not chosen.get("ok") or not hops:
+        return None
+    first = hops[0]
+    if first.get("timed_out") or not first.get("host"):
+        return None
+    # On-link, the first hop is the destination itself. Anything else means the
+    # trace crossed a router the kernel says is not in the way.
+    expected = chosen.get("via") or (target if chosen.get("onlink") else None)
+    if not expected or first["host"] == expected:
+        return None
+    return {"expected": expected, "observed": first["host"],
+            "dev": chosen.get("dev"), "onlink": bool(chosen.get("onlink"))}
 
 
 def guess_default_gateway(route_result):
@@ -7220,6 +7332,7 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   "clients_may_be_on_the_datagram_plane",
                   "tunnel_payload_room",
                   "forwards_inside_tunnels",
+                  "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
                   # forwarding look the same here, so it names both.
@@ -7489,6 +7602,7 @@ FINDING_SIDE.update({
     "tunnel_payload_room": "upstream",
     # About the way out, and specifically about what it does not cover.
     "forwards_inside_tunnels": "upstream",
+    "trace_took_another_route": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
     "own_service_silent": "downstream",
@@ -7727,6 +7841,8 @@ RAW_STAGE = {
     # Kept when the TCP path is used instead, so both attempts are on record.
     "path_trace_icmp": "internet",
     "path_mtu": "mtu",
+    # Which route this box would use for the target: the way out.
+    "route_to": "internet",
     "dns_lookup": "dns", "dns_health": "dns",
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
@@ -9802,6 +9918,40 @@ def _check_encapsulation_headroom(raw, findings):
                "being done by the service rather than the kernel and what it hands out "
                "cannot be read from here. The number above is the ceiling it has to "
                "stay under.")),
+    })
+
+
+def _check_route_agrees(raw, findings, hops, target):
+    """The trace and the kernel disagreeing about the first hop.
+
+    Not a fault on its own. A box with policy routing, a second table, or a
+    tunnel that grabs a prefix will legitimately send the probe one way and the
+    traffic another, and that is a configuration rather than a break.
+
+    It is the most important piece of context on the page when it happens,
+    though, because everything below it is about a path the traffic does not
+    take. A loss figure, a latency wall, a site edge, a NAT: all measured on
+    the wrong route, and all of them will read as facts about the service.
+    """
+    off = route_disagrees_with_trace(raw, hops, target)
+    if not off:
+        return
+    findings.append({
+        "severity": "ok",
+        "layer": 3,
+        "code": "trace_took_another_route",
+        "message": (
+            f"The path below was traced through {off['observed']}, and this box's own "
+            f"routing table sends traffic for {target} "
+            + (f"straight onto {off['dev']} with no router in the way"
+               if off["onlink"] else
+               f"via {off['expected']}%s" % (" on %s" % off["dev"] if off["dev"] else ""))
+            + ". The probe and the traffic are taking different routes, so every hop "
+              "below describes a path this box does not actually send that traffic "
+              "down - the loss, the latency and the site edge are all measured on the "
+              "other one. That is ordinary on a box with policy routing or a tunnel "
+              "holding a prefix, and it is worth knowing before acting on anything "
+              "further down."),
     })
 
 
@@ -12377,6 +12527,11 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
 
         # The walk records what it sent from, which is what a translation
         # is a difference against. Absent on every other trace.
+        # Before anything is concluded from the hops: whether they are the
+        # route this box would actually use. Everything below reads differently
+        # if they are not.
+        raw["route_to"] = cmd_route_to(target)
+        _check_route_agrees(raw, findings, hops, target)
         path_insight = annotate_hops(
             hops, gw, target,
             sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")

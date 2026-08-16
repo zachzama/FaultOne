@@ -6674,6 +6674,128 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhetherTheTraceWentWhereTheTrafficGoes(unittest.TestCase):
+    """The routing table was read to find the default gateway and for nothing
+    else, which left the most useful question about it unasked: is the path
+    being measured the path the traffic takes.
+
+    Comparing the first hop against the *default* gateway would answer it
+    wrongly, and wrongly in the direction that produces false alarms - a more
+    specific route, a second table, a tunnel holding a prefix are all ordinary
+    and all make the first hop something other than the default next hop. The
+    kernel answers the exact question instead, and this compares its answer
+    against what the trace observed.
+
+    Only the first hop can be checked this way. It is the only one this box
+    decides; everything past it is somebody else's forwarding table and is why
+    a trace gets sent at all.
+    """
+
+    LINUX_VIA = "8.8.8.8 via 10.0.0.1 dev eth0 src 10.0.0.5 uid 1000 \n    cache"
+    LINUX_ONLINK = "10.0.0.90 dev eth0 src 10.0.0.5 uid 1000 \n    cache"
+    BSD_VIA = ("   route to: 8.8.8.8\ndestination: default\n"
+               "    gateway: 10.0.0.1\n  interface: en0\n")
+    BSD_ONLINK = ("   route to: 10.0.0.90\ndestination: 10.0.0.90\n"
+                  "    gateway: en0\n  interface: en0\n")
+
+    def test_both_platforms_name_the_same_next_hop(self):
+        for name, text in (("linux", self.LINUX_VIA), ("bsd", self.BSD_VIA)):
+            with self.subTest(platform=name):
+                got = nd.parse_route_to(text)
+                self.assertEqual(got["via"], "10.0.0.1")
+                self.assertFalse(got["onlink"])
+
+    def test_a_destination_on_this_network_has_no_next_hop_and_says_so(self):
+        """Not a missing answer. There is nothing between here and there, and
+        a caller that read the absent gateway as "could not tell" would skip
+        the one case where the first hop should be the target itself."""
+        for name, text in (("linux", self.LINUX_ONLINK), ("bsd", self.BSD_ONLINK)):
+            with self.subTest(platform=name):
+                got = nd.parse_route_to(text)
+                self.assertIsNone(got["via"])
+                self.assertTrue(got["onlink"])
+
+    def test_an_interface_name_is_not_mistaken_for_a_gateway(self):
+        """BSD prints the interface where the gateway would go on a link-layer
+        route, so `gateway: en0` means no gateway rather than one called en0."""
+        self.assertIsNone(nd.parse_route_to(self.BSD_ONLINK)["via"])
+
+    def test_nothing_readable_is_no_answer_rather_than_a_wrong_one(self):
+        self.assertIsNone(nd.parse_route_to(""))
+        self.assertIsNone(nd.parse_route_to("RTNETLINK answers: Network is unreachable"))
+
+    # ---- the comparison ---------------------------------------------------
+
+    def compare(self, via, onlink, first, target="8.8.8.8", timed_out=False):
+        return nd.route_disagrees_with_trace(
+            {"route_to": {"ok": True, "via": via, "dev": "eth0", "onlink": onlink}},
+            [{"host": first, "timed_out": timed_out}], target)
+
+    def test_agreement_is_silence(self):
+        self.assertIsNone(self.compare("10.0.0.1", False, "10.0.0.1"))
+
+    def test_a_first_hop_the_kernel_would_not_use_is_reported(self):
+        got = self.compare("10.0.0.1", False, "192.168.9.1")
+        self.assertEqual((got["expected"], got["observed"]), ("10.0.0.1", "192.168.9.1"))
+
+    def test_on_link_the_first_hop_should_be_the_target_itself(self):
+        """The case a default-gateway comparison gets backwards: with nothing
+        in the way, a first hop that is a router is the disagreement, and a
+        first hop that is the destination is correct."""
+        self.assertIsNone(self.compare(None, True, "8.8.8.8"))
+        self.assertIsNotNone(self.compare(None, True, "10.0.0.1"))
+
+    def test_it_says_nothing_where_it_cannot_compare(self):
+        """Three ways the comparison is not available, and none of them is a
+        disagreement. A silent first hop especially: a router that forwards
+        without answering probes is ordinary."""
+        self.assertIsNone(self.compare("10.0.0.1", False, None, timed_out=True))
+        self.assertIsNone(nd.route_disagrees_with_trace(
+            {"route_to": {"ok": True, "via": "10.0.0.1"}}, [], "8.8.8.8"))
+        # A failed read that still carries a parsed next hop. An empty one
+        # proves nothing here: with no next hop there is nothing to compare
+        # against and it stays silent whether or not the read is checked.
+        self.assertIsNone(nd.route_disagrees_with_trace(
+            {"route_to": {"ok": False, "via": "10.0.0.1", "onlink": False}},
+            [{"host": "192.168.9.1", "timed_out": False}], "8.8.8.8"))
+
+    def test_it_never_compares_past_the_first_hop(self):
+        """Everything after it belongs to another device's forwarding table.
+        A second hop that differs from anything here is not knowable and must
+        not be graded."""
+        raw = {"route_to": {"ok": True, "via": "10.0.0.1", "onlink": False}}
+        hops = [{"host": "10.0.0.1", "timed_out": False},
+                {"host": "203.0.113.9", "timed_out": False}]
+        self.assertIsNone(nd.route_disagrees_with_trace(raw, hops, "8.8.8.8"))
+
+    # ---- and what it says -------------------------------------------------
+
+    def test_it_is_context_and_warns_that_everything_below_moved(self):
+        """Not a fault: policy routing and a tunnel holding a prefix are
+        configurations. But every hop below it describes a path the traffic
+        does not take, and that has to be said before anyone acts on them."""
+        mod = fresh()
+        setup, kwargs = S["trace_took_another_route"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "trace_took_another_route")
+        self.assertEqual(found["severity"], "ok")
+        self.assertIn("192.168.9.1", found["message"])
+        self.assertIn("10.0.0.1", found["message"])
+        self.assertIn("different routes", found["message"])
+
+    def test_an_ordinary_box_says_nothing_about_its_route(self):
+        """Where the probe and the traffic agree, which is almost every box,
+        this is one more sentence nobody needs."""
+        mod = fresh()
+        setup, kwargs = S["tcp_flow_loss_backends"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertNotIn("trace_took_another_route",
+                         [f["code"] for f in rep["findings"]])
+
+
 class TestWhatABrokerIsActuallyDoing(unittest.TestCase):
     """Three readings about a box whose job is carrying other people's traffic
     through datagram tunnels, rather than about the box itself.
@@ -12004,8 +12126,8 @@ class TestDocsMatchReality(unittest.TestCase):
             # 33 when proxy configuration was added, 34 when the socket
             # table gained the process holding each socket, 35 with the
             # interface queues, 36 with the firewall rule counters, 37 with
-            # the datagram tunnel count.
-            "collections": (38, [r"\*\*(\d+)\s+things are inspected",
+            # the datagram tunnel count, 39 with the route to the target.
+            "collections": (39, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -12083,6 +12205,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_routes": "Routing table and default gateway",
         "cmd_socket_owners": "Which process holds each socket",
         "cmd_udp_tunnels": "Datagram tunnels, counted and never listed",
+        "cmd_route_to": "The route this box would use for the target",
         "cmd_firewall_counters": "Firewall rule counters, read either side of "
                                  "the probes",
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
@@ -12797,6 +12920,7 @@ class TestBareBox(unittest.TestCase):
         "cmd_own_tls": (443,), "cmd_tls_check_local": (443, "example.com"),
         "cmd_own_http": (8080,),
         "cmd_path_mtu": ("8.8.8.8", 1500),
+        "cmd_route_to": ("8.8.8.8",),
     }
 
     def bare(self, tools_exist=False):
@@ -17022,6 +17146,16 @@ def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
                                              "stdout": "", "interfaces": []}
         base = nd.cmd_link_modes
         nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+@scenario("trace_took_another_route")
+def _(nd):
+    """The kernel routes the target via 10.0.0.1 and the trace went elsewhere."""
+    trace(nd, " 1  192.168.9.1 (192.168.9.1)  1.0 ms\n"
+              " 2  8.8.8.8 (8.8.8.8)  20.0 ms\n")
+    nd.cmd_route_to = lambda t: {"ok": True, "cmd": "ip route get",
+                                 "stdout": "%s via 10.0.0.1 dev eth0 src 10.0.0.5" % t,
+                                 "via": "10.0.0.1", "dev": "eth0", "src": "10.0.0.5",
+                                 "onlink": False}
 
 @scenario("forwards_inside_tunnels")
 def _(nd): two_planes(nd, tunnels=180, tcp_sessions=2)

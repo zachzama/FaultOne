@@ -329,6 +329,32 @@ confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
 
+## Settled: the trace is checked against the route, and only the first hop
+
+Compared against SuzieQ, which computes a path from collected forwarding state
+instead of probing for it, and therefore has no load-balancing artefacts to
+work around at all. That is not reachable from one box - it needs every
+device's tables - but one piece of it is.
+
+The routing table was read to find the default gateway and for nothing else.
+Nothing asked whether the path being measured is the path the traffic takes.
+
+**Not by comparing against the default gateway.** That answers the question
+wrongly and in the direction that produces false alarms: a more specific route,
+a second table, a tunnel holding a prefix are all ordinary and all make the
+first hop something other than the default next hop. `ip route get` answers the
+exact question for one destination, and `route -n get` does on BSD.
+
+**Only the first hop, and that is not a limitation to fix.** It is the only hop
+this box decides. Everything past it belongs to another device's forwarding
+table and is not knowable from here, which is the entire reason a trace gets
+sent rather than computed.
+
+Context, never a fault. Policy routing and a split tunnel are configurations,
+not breaks. What it earns is being said *before* the hop list: everything below
+it - loss, the latency wall, the site edge, a NAT - was measured on a route the
+traffic does not take, and all of it reads as fact.
+
 ## Settled: a box with no firewall is not a box that failed a check
 
 `collection_coverage` excludes checks that cannot apply here, which is why a

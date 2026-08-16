@@ -1482,6 +1482,44 @@ class TestCallQuality(unittest.TestCase):
         self.assertEqual(nd.parse_ping_stats({"ok": True, "stdout": "no stats here"}), {})
         self.assertEqual(nd.parse_ping_stats({"ok": False}), {})
 
+    WINDOWS = ("\nPing statistics for 8.8.8.8:\n"
+               "    Packets: Sent = 4, Received = 3, Lost = 1 (25% loss),\n"
+               "Approximate round trip times in milli-seconds:\n"
+               "    Minimum = 13ms, Maximum = 15ms, Average = 14ms\n")
+
+    def test_ping_stats_windows_are_read_in_the_order_windows_prints_them(self):
+        """Windows names its figures and orders them Minimum, Maximum, Average
+        - the middle one is the maximum where the slash form's middle one is
+        the average. Read positionally, the two swap, which is a wrong number
+        rather than a missing one."""
+        st = nd.parse_ping_stats({"ok": True, "stdout": self.WINDOWS})
+        self.assertEqual(st["min_ms"], 13)
+        self.assertEqual(st["avg_ms"], 14)
+        self.assertEqual(st["max_ms"], 15)
+        self.assertEqual(st["stdev_ms"], 2)
+
+    def test_ping_counts_windows(self):
+        """The percentage parsed on both platforms and the sample size on only
+        one, so every judgement about loss on a Windows box was made without
+        the denominator it is supposed to require."""
+        win = {"ok": True, "stdout": self.WINDOWS}
+        self.assertEqual(nd.parse_ping_counts(win), (4, 1))
+        self.assertEqual(nd.parse_ping_loss(win), 25.0)
+
+    def test_ping_counts_unix_still_read(self):
+        lin = {"ok": True, "stdout":
+               "4 packets transmitted, 3 received, 25% packet loss, time 3004ms\n"}
+        self.assertEqual(nd.parse_ping_counts(lin), (4, 1))
+        bsd = {"ok": True, "stdout":
+               "4 packets transmitted, 3 packets received, 25.0% packet loss\n"}
+        self.assertEqual(nd.parse_ping_counts(bsd), (4, 1))
+
+    def test_a_summary_that_is_neither_layout_still_says_nothing(self):
+        for nothing in ("", "no summary here", "Sent = but not a number"):
+            with self.subTest(text=nothing):
+                self.assertEqual(nd.parse_ping_counts({"ok": True, "stdout": nothing}),
+                                 (None, None))
+
 
 class TestArpTable(unittest.TestCase):
     LINUX = ("192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:01 REACHABLE\n"

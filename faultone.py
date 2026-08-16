@@ -3288,6 +3288,12 @@ MOS_BAD = 3.6
 
 PING_STATS_RE = re.compile(
     r"=\s*([\d.]+)\s*/\s*([\d.]+)\s*/\s*([\d.]+)(?:\s*/\s*([\d.]+))?\s*ms")
+# "Minimum = 13ms, Maximum = 15ms, Average = 14ms". Named rather than ordered,
+# and in an order of its own - the middle figure is the maximum here and the
+# average in the form above.
+PING_STATS_WIN_RE = re.compile(
+    r"Minimum\s*=\s*([\d.]+)ms.*?Maximum\s*=\s*([\d.]+)ms.*?Average\s*=\s*([\d.]+)ms",
+    re.I | re.S)
 
 
 # The hop count on the way *in*, off the TTL of a ping reply.
@@ -3346,18 +3352,36 @@ def hops_from_ttl(arrived):
 
 
 def parse_ping_stats(ping_result):
-    """min/avg/max/stddev from a ping summary, on Linux (mdev) or BSD (stddev)."""
+    """min/avg/max/stddev from a ping summary.
+
+    Two layouts. Linux and BSD print them as a slash-separated run after an
+    `=`, differing only in whether a fourth figure is there. Windows names each
+    one and puts them in a different order, and used to match neither - so it
+    returned nothing at all, while the branch below claimed in a comment to be
+    handling it.
+    """
     if not ping_result.get("ok"):
         return {}
-    m = PING_STATS_RE.search(ping_result.get("stdout") or "")
+    text = ping_result.get("stdout") or ""
+    m = PING_STATS_RE.search(text)
     if not m:
-        return {}
+        win = PING_STATS_WIN_RE.search(text)
+        if not win:
+            return {}
+        # Minimum, Maximum, Average - not the min/avg/max the slash form uses.
+        # Read in the order they are printed, the average and the maximum swap,
+        # which is a wrong number rather than a missing one.
+        low, high, avg = (float(win.group(i)) for i in (1, 2, 3))
+        # No deviation is offered, and the spread is a usable stand-in: this is
+        # what that comment was always for.
+        return {"min_ms": low, "avg_ms": avg, "max_ms": high,
+                "stdev_ms": round(high - low, 2)}
     out = {"min_ms": float(m.group(1)), "avg_ms": float(m.group(2)),
            "max_ms": float(m.group(3))}
     if m.group(4):
         out["stdev_ms"] = float(m.group(4))
     else:
-        # Windows gives no deviation; spread is a usable stand-in for jitter.
+        # A summary of three: the spread stands in for a deviation nobody gave.
         out["stdev_ms"] = round(out["max_ms"] - out["min_ms"], 2)
     return out
 
@@ -6115,6 +6139,18 @@ def parse_ping_loss(ping_result):
     return None
 
 
+# The same two numbers, written two ways. Windows spends a line on them and
+# names them rather than ordering them, so the percentage parsed on both
+# platforms and the sample size on only one - which left every judgement about
+# loss on a Windows box without the denominator the docstring below demands.
+# Both spellings are English, like the "% loss" this sits beside: a localised
+# ping is not read here, and saying so is cheaper than half-solving it.
+_PING_COUNTS = (
+    re.compile(r"(\d+)\s+packets? transmitted,\s*(\d+)\s+(?:packets? )?received"),
+    re.compile(r"Sent\s*=\s*(\d+),\s*Received\s*=\s*(\d+)", re.I),
+)
+
+
 def parse_ping_counts(ping_result):
     """(sent, lost) from a ping summary, or (None, None).
 
@@ -6127,11 +6163,12 @@ def parse_ping_counts(ping_result):
     if not ping_result.get("ok"):
         return None, None
     out = ping_result.get("stdout") or ""
-    m = re.search(r"(\d+)\s+packets? transmitted,\s*(\d+)\s+(?:packets? )?received", out)
-    if not m:
-        return None, None
-    sent, received = int(m.group(1)), int(m.group(2))
-    return sent, max(0, sent - received)
+    for pattern in _PING_COUNTS:
+        m = pattern.search(out)
+        if m:
+            sent, received = int(m.group(1)), int(m.group(2))
+            return sent, max(0, sent - received)
+    return None, None
 
 
 # Below this many packets, an error count is not an error rate. One error on a

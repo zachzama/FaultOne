@@ -1360,7 +1360,7 @@ they're spelled out:
 | **Data collections** | **40** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **176** | Distinct conclusions it can reach and state in plain language. 145 are faults; 31 are context, like which switch port you're on. |
 | **Ranked causes** | **145** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1444 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1448 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 176 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2156,7 +2156,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1444 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1448 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2490,15 +2490,15 @@ catches a failure invisible to everything else. The interface can say 1500
 while something along the path silently drops full-size packets, so pings
 and SSH work fine while large transfers, file copies, TLS handshakes and VPN
 traffic stall. FaultOne sends do-not-fragment pings at descending sizes
-(interface MTU, then 1492/1444/1280/1000: the common tunnel sizes) and
+(interface MTU, then 1492/1448/1280/1000: the common tunnel sizes) and
 reports the largest that gets through:
 
 ```
 PATH MTU TO 8.8.8.8
    1500 bytes   blocked
    1492 bytes   blocked
-   1444 bytes   passes
-  -> largest that gets through: 1444  (interface is set to 1500)
+   1448 bytes   passes
+  -> largest that gets through: 1448  (interface is set to 1500)
 ```
 
 That gap is a PMTU blackhole and is reported critical. Skipped under
@@ -3648,7 +3648,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1444 tests, no dependencies, no network, a few seconds, so they run
+1448 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

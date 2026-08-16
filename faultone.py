@@ -18,10 +18,6 @@ Usage:
     #   ssh -J jump user@box "python3 - --report --quick" < faultone.py
     #   ssh -J jump user@box "python3 - --export -" < faultone.py > report.json
 
-    # Local web UI (binds 127.0.0.1 - see the SECURITY note below):
-    sudo python3 faultone.py                  # binds to 127.0.0.1:8080
-    sudo python3 faultone.py --port 9000
-
     # JSON report instead, for the richer offline view:
     sudo python3 faultone.py --export report.json
     sudo python3 faultone.py --export report.json --target 1.1.1.1
@@ -34,16 +30,24 @@ Usage:
 
 SECURITY
 --------
-This tool executes real system commands (ping, traceroute, etc.) with
-whatever privileges you run it as - typically root, since some of these
-commands need elevated privileges on some OSes. There is NO authentication
-built in. It binds to 127.0.0.1 (localhost only) by default for that
-reason. Only bind it to a non-localhost address on a trusted network, and
-ideally put it behind SSH port-forwarding or a reverse proxy with auth
-instead. User-supplied hostnames/IPs are strictly validated and commands
-are run without a shell, so classic "; rm -rf" style injection isn't
-possible - but there is still no login, so anyone who can reach the port
-can run diagnostics against arbitrary hosts from your machine.
+It opens no port and listens for nothing. There is no server here and so
+nothing to authenticate to: every command above writes to your terminal or
+to a file and exits. That whole category of risk is absent rather than
+defended, which is why there is nothing here about binding addresses or
+putting it behind a proxy.
+
+What it does do is execute real system commands (ping, traceroute, ss and
+so on) with whatever privileges you run it as, typically root, because
+some of them need that on some systems. It connects outward - to its own
+listeners, to the target, to resolvers - and never accepts a connection.
+Hostnames and addresses you supply are strictly validated and commands run
+without a shell, so classic "; rm -rf" injection is not possible.
+
+The output is the thing to be careful with. A report is a map of the
+network it was taken on: internal addressing, MAC addresses, switch names,
+resolvers, listening ports. --export writes 0600 for that reason. Treat
+one the way you would treat a network diagram - fine in a ticket, fine with
+the people who own that network, not committed to a public repository.
 
 No third-party dependencies - standard library only. Nothing is vendored, so
 nothing else's licence travels with this file: the optional tools it can use

@@ -6675,6 +6675,51 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestTheFileDescribesTheToolItIs(unittest.TestCase):
+    """The first thirty lines are the first thing a stranger reads.
+
+    Server mode was removed and the header went on advertising it: a local web
+    UI, a `--port` flag that no longer parses, and a SECURITY note explaining
+    how to secure a listening service the tool does not run. Meanwhile the
+    README two directories away said "no port opened". The docs guards here
+    count findings and thresholds and never read that block.
+    """
+
+    HEADER = nd.__doc__ or ""
+
+    def test_it_does_not_advertise_a_flag_that_does_not_exist(self):
+        parser = nd.build_parser()
+        flags = {a for action in parser._actions for a in action.option_strings}
+        for claimed in re.findall(r"--[a-z][a-z-]+", self.HEADER):
+            with self.subTest(flag=claimed):
+                self.assertIn(claimed, flags,
+                              "the header offers a flag the parser does not take")
+
+    def test_it_does_not_offer_a_server_it_no_longer_has(self):
+        for gone in ("web UI", "binds to 127.0.0.1", "reverse proxy with auth",
+                     "anyone who can reach the port"):
+            with self.subTest(text=gone):
+                self.assertNotIn(gone, self.HEADER)
+
+    def test_the_security_note_says_what_is_actually_true(self):
+        """Not just that the old claims are gone. A note that says nothing is
+        as bad as one that says the wrong thing, on the section a reader checks
+        before running something as root."""
+        for kept in ("opens no port", "listens for nothing",
+                     "whatever privileges you run it as", "0600"):
+            with self.subTest(text=kept):
+                self.assertIn(kept, self.HEADER)
+
+    def test_nothing_in_the_tool_listens(self):
+        """The claim the note now makes, checked against the code rather than
+        against itself."""
+        source = open(nd.__file__, encoding="utf-8").read()
+        for serving in (".listen(", "BaseHTTPRequestHandler", "HTTPServer",
+                        "socketserver"):
+            with self.subTest(construct=serving):
+                self.assertNotIn(serving, source)
+
+
 class TestWhatTheProxyItselfBelieves(unittest.TestCase):
     """PROTOTYPE. The first reading here that knows the name of a product, and
     the only one the kernel cannot produce: a socket table says what is

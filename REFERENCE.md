@@ -3001,6 +3001,32 @@ deliberately avoids.
 
 ### Resets, and why the count of them is not a finding
 
+### The proxy's own view of its backends
+
+`proxy_backend_down` is the one finding here that does not come from the
+kernel. A socket table says what is connected; it never says which of those a
+service has *decided* to stop using, which health check failed, or how long it
+has been out. Where a proxy exposes a stats socket, that is readable, and
+nothing else on the box carries it.
+
+It reads only where a socket is already there. That conditionality is the
+finding's main limit and is worth stating plainly: **its silence means nothing.**
+A box with no stats socket, or one whose socket is not where this looks, is
+indistinguishable from a box whose backends are all healthy. Nothing else in
+this tool has that property, because everything else reads something the kernel
+always has.
+
+What it adds when it does read: the backend's name, which check failed and what
+the check said, and how long it has been down. A backend taken out of rotation
+is invisible to every other check on the run - the connections to it simply
+stop existing, and a socket table cannot tell "stopped using" from "never used".
+
+Why a product's interface is read at all, when the vendor's own state
+directories were declined: the rule is that an interface may be read where it
+is documented, read-only, enabled by the operator on purpose, and carries data
+with no substitute. A published stats socket is all four. Undocumented internals
+are none of them, and say more about who runs the box than the reading is worth.
+
 A proxy sends a lot of TCP resets, and most of them are housekeeping.
 [HAProxy closes backend connections with RST on purpose](https://gitlab.com/gitlab-com/gl-infra/production-engineering/-/issues/10589),
 via `SO_LINGER`, to conserve ports and memory. So `OutRsts` is recorded in the

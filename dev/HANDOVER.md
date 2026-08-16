@@ -403,36 +403,39 @@ touches a condition or a class name.
 What is left in that template and still read rather than run is CSS and lookup
 tables, which cannot be executed and are checked correctly as text.
 
-## Open: the proxy stats read is a prototype and a question, not a feature
+## Settled: a product's interface is readable where it is documented and chosen
 
-`cmd_haproxy_stats` reads a HAProxy stats socket where one exists and reports
-which backends the proxy has taken out of rotation. It is the only reading here
-the kernel cannot produce: a socket table says what is connected, never which
-of those a service has decided to stop using, which check failed, or how many
-times it has flapped.
+`cmd_haproxy_stats` stays. It is the only reading here the kernel cannot
+produce: a socket table says what is connected, never which of those a service
+has decided to stop using, which check failed, or how many times it has
+flapped.
 
-**It is also the first thing in this file that knows the name of a product**,
-and that is a decision about what this tool is rather than about what it reads.
-It is written as one block so it can come out in one commit if the answer is
-no: `HAPROXY_SOCKETS`, `read_stats_socket`, `parse_proxy_stats`,
-`cmd_haproxy_stats`, `CHECK_MEANS`, `_check_proxy_backends`, the
-`proxy_backend_down` rule and its registry rows. About 200 lines.
+The question was never the code - 132 lines, a scenario, twenty-one tests - it
+was whether this tool may know the name of a product. The rule that decides it,
+so no future one is argued from scratch:
 
-Arguments recorded so the decision is made once:
+**Read a product's interface where it is documented, read-only, enabled by the
+operator on purpose, and the data has no substitute.**
 
-- **For.** A documented read-only interface the operator chose to expose, not a
-  vendor's private directory layout, which is what the 2026-08-12 decision was
-  about. The data has no substitute anywhere else on the box.
-- **Against.** Conditional on somebody having enabled the socket, so it can
-  never be relied on. And the name. `haproxy` is not on the withheld list, but
-  the reason that list exists applies to it in spirit.
-- **Not a dodge.** Reading "whatever stats socket is there" without naming the
-  product was considered and is a fig leaf: the CSV format is the product.
+That admits the stats socket: it is a published interface someone chose to
+expose, and nothing else on the box carries what it says. It excludes the
+vendor's state directories declined on 2026-08-12, which are undocumented
+internals whose layout says more about who runs this box than the name does.
+It excludes nginx's `stub_status`, already declined on value - seven numbers,
+where the socket table and `ListenOverflows` say more, closer to the source.
 
-The related decision that was *declined* on value rather than principle:
-nginx's `stub_status`. Seven numbers, and the socket table plus
-`ListenOverflows` already say more, closer to the source. It would add a
-dependency on operator configuration to learn less.
+The distinction that matters is not "is it a product name" but **what the name
+reveals**. A vendor's private directory layout is a statement about the author's
+employer. HAProxy is infrastructure half the internet runs; a tool that reads it
+says nothing about who wrote the tool. That is why `haproxy` is not on the
+withheld list the suite guards, and the guard is what keeps that judgement
+honest rather than a habit.
+
+**What was actually missing, and is now fixed.** The code was tested and the
+collector was in the inspected list, but the finding had no prose anywhere -
+not in REFERENCE, not in the README. A capability a reader cannot find is one
+that gets rebuilt. It is written up now, including what it cannot say: it is
+conditional on someone having enabled the socket, so its silence means nothing.
 
 ## Settled: the baseline diffs findings, not ten scalars
 

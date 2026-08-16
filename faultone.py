@@ -886,6 +886,24 @@ def parse_ethtool_optics(text):
     out = {"alarms": [], "warnings": []}
     for m in OPTIC_LINE_RE.finditer(text or ""):
         key, value = m.group(1).strip().lower(), m.group(2).strip()
+        # A module prints its own limits beside its readings, and every limit
+        # repeats the name of the reading it belongs to: "Laser output power
+        # high alarm threshold" carries a dBm figure in exactly the shape
+        # "Laser output power" does. Read as readings they win by coming last
+        # in the dump, so a healthy module reported its lowest warning
+        # threshold as its transmit power.
+        if key.endswith("threshold"):
+            continue
+        # The flags repeat those names too, and are matched before the readings
+        # for the same reason. "Module temperature high alarm" begins with the
+        # name of the temperature reading, so the branch below used to take the
+        # line, store "Off" as the temperature, and drop the alarm - on the one
+        # check whose whole point is that the module's own thresholds beat any
+        # generic number we pick.
+        if value.lower() in ("on", "off") and ("alarm" in key or "warning" in key):
+            if value.lower() == "on":
+                (out["alarms"] if "alarm" in key else out["warnings"]).append(m.group(1).strip())
+            continue
         if key.startswith("identifier"):
             out["identifier"] = value
         elif key.startswith("vendor name"):
@@ -909,9 +927,6 @@ def parse_ethtool_optics(text):
                 out["rx_dark"] = True
         elif key.startswith("module temperature"):
             out["temperature"] = value
-        elif value.lower() == "on" and ("alarm" in key or "warning" in key):
-            # The module's own thresholds beat any generic number we pick.
-            (out["alarms"] if "alarm" in key else out["warnings"]).append(m.group(1).strip())
     return out
 
 
@@ -2466,8 +2481,20 @@ def parse_proxy_stats(text):
             value = row.get(name) or ""
             return int(value) if value.isdigit() else None
 
+        # A row with no status is not a server anything can be said about, and
+        # there are three ways to get one: a version whose CSV does not carry
+        # the column, a field that is genuinely empty, and - the likely one -
+        # the last row of a read that hit its chunk cap partway through a line.
+        # Dropped rather than graded, and dropped rather than allowed to end the
+        # run, which is what reading [0] off an empty split used to do: the
+        # IndexError escaped parse, escaped diagnose, and cost the whole report
+        # on the one kind of box that has a stats socket to read.
+        status = (row.get("status") or "").split()
+        if not status:
+            continue
+
         out.append({"proxy": row.get("pxname"), "server": row.get("svname"),
-                    "status": (row.get("status") or "").split()[0].upper(),
+                    "status": status[0].upper(),
                     "check_status": row.get("check_status") or None,
                     "since_s": number("lastchg"), "downtime_s": number("downtime"),
                     "times_down": number("chkdown"), "queued": number("qcur")})

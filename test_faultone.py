@@ -454,6 +454,58 @@ class TestOpticsParsing(unittest.TestCase):
         self.assertEqual(p["alarms"], [])
         self.assertEqual(len(p["warnings"]), 1)
 
+    # What a module actually prints. The fixture above is the readings only,
+    # and every field this parser gets wrong it gets wrong on the lines that
+    # fixture leaves out: the module's own limits, and its own flags. Both
+    # repeat the name of the reading they belong to, so both used to be read
+    # as readings.
+    FULL = """	Identifier                                : 0x03 (SFP)
+	Vendor name                               : FINISAR CORP
+	Vendor PN                                 : FTLX8571D3BCL
+	Laser output power                        : 0.5012 mW / -3.00 dBm
+	Receiver signal average optical power     : 0.4004 mW / -3.97 dBm
+	Module temperature                        : 33.05 degrees C
+	Laser output power high alarm             : Off
+	Module temperature high alarm             : Off
+	Module temperature low warning            : Off
+	Laser rx power low alarm                  : Off
+	Laser output power high alarm threshold   : 0.6310 mW / -2.00 dBm
+	Laser output power low warning threshold  : 0.0912 mW / -10.40 dBm
+	Module temperature high alarm threshold   : 78.00 degrees C
+	Module temperature low warning threshold  : -8.00 degrees C
+	Laser rx power low alarm threshold        : 0.0100 mW / -20.00 dBm
+"""
+
+    def test_thresholds_are_not_read_as_readings(self):
+        """A limit is printed in the same shape as the reading it bounds, and
+        comes after it, so reading them alike lets the last limit win."""
+        p = nd.parse_ethtool_optics(self.FULL)
+        self.assertEqual(p["tx_dbm"], -3.00)
+        self.assertEqual(p["rx_dbm"], -3.97)
+        self.assertEqual(p["temperature"], "33.05 degrees C")
+
+    def test_a_temperature_alarm_is_an_alarm_not_a_temperature(self):
+        text = self.FULL.replace("Module temperature high alarm             : Off",
+                                 "Module temperature high alarm             : On")
+        p = nd.parse_ethtool_optics(text)
+        self.assertEqual(len(p["alarms"]), 1)
+        self.assertIn("temperature", p["alarms"][0].lower())
+        # And the reading it shares a name with is still the reading.
+        self.assertEqual(p["temperature"], "33.05 degrees C")
+
+    def test_receive_power_alarm_survives_the_abbreviated_spelling(self):
+        """Some builds print "Rcvr signal avg optical power" for both the
+        reading and its flags, which is the spelling that collides."""
+        text = self.FULL + "	Rcvr signal avg optical power low alarm   : On\n"
+        p = nd.parse_ethtool_optics(text)
+        self.assertEqual(len(p["alarms"]), 1)
+        self.assertEqual(p["rx_dbm"], -3.97)
+
+    def test_a_module_raising_nothing_raises_nothing(self):
+        p = nd.parse_ethtool_optics(self.FULL)
+        self.assertEqual(p["alarms"], [])
+        self.assertEqual(p["warnings"], [])
+
     def test_copper_port_output_yields_nothing_useful(self):
         self.assertEqual(nd.parse_ethtool_optics("Cannot get module EEPROM data: Operation not supported"),
                          {"alarms": [], "warnings": []})
@@ -7229,6 +7281,37 @@ class TestWhatTheProxyItselfBelieves(unittest.TestCase):
         for junk in ("", "not a csv", "no header\nweb1,UP\n", None):
             with self.subTest(text=junk):
                 self.assertEqual(nd.parse_proxy_stats(junk), [])
+
+    def test_a_row_with_no_status_costs_that_row_and_not_the_run(self):
+        """Three ways to get one, and the read cap makes the third routine.
+        None of them may raise: nothing catches an exception between here and
+        the top of the program, so one of these rows used to cost the entire
+        report - on the one kind of box that has a stats socket at all."""
+        cases = {
+            "empty field": ("# pxname,svname,status,chkdown\n"
+                            "api,web1,UP,0\n"
+                            "api,web2,,0\n"),
+            "no status column in this version": ("# pxname,svname,chkdown\n"
+                                                 "api,web1,0\n"),
+            "read stopped mid-row at the chunk cap": ("# pxname,svname,status,chkdown\n"
+                                                      "api,web1,UP,0\n"
+                                                      "api,web2"),
+        }
+        for why, csv in cases.items():
+            with self.subTest(why=why):
+                got = nd.parse_proxy_stats(csv)
+                self.assertEqual([s["server"] for s in got],
+                                 ["web1"] if "web1,UP" in csv else [])
+
+    def test_an_ungradeable_row_is_dropped_rather_than_counted_up(self):
+        """It is not a server that is fine, it is a server nothing is known
+        about, and the two must not read alike in the finding's arithmetic."""
+        csv = ("# pxname,svname,status,chkdown\n"
+               "api,web1,DOWN,2\n"
+               "api,web2")
+        got = nd.parse_proxy_stats(csv)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["status"], "DOWN")
 
     def test_a_server_taken_out_deliberately_is_not_a_fault(self):
         """Somebody put it in maintenance. Grading that as a fault teaches a

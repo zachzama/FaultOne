@@ -158,6 +158,28 @@ The reason it runs in CI too is that the slow machine has to be the one that
 reports. Windows takes eight times longer than Linux, and no run on a laptop
 can show why.
 
+## `branch_sweep.py`: which branches of the viewer does nothing exercise?
+
+```bash
+python3 dev/branch_sweep.py false   # then-sides: is the markup ever drawn?
+python3 dev/branch_sweep.py true    # else-sides: is the fallback ever taken?
+```
+
+A test that asserts a string appears in `VIEWER_TEMPLATE` passes against code
+wired to a constant, because the dead branch still contains the string. That has
+been wrong three times here. Counting those assertions was the first attempt at
+sizing the problem and it sized the wrong thing - it measures how a test is
+written, not whether the behaviour is covered. Fifty-four of them looked like a
+hole; forcing all fifty-four branches found **no** uncovered then-side.
+
+Run both directions. The else-sides are not the lesser half: `setFavicon` had
+two fallbacks on one line, and deleting the first changed no test's answer
+because a fixture had given both the same colour.
+
+Half an hour, one full suite run per site, so this is a thing to run when the
+viewer's branching changes rather than part of the suite. It reads ternaries
+only - the `&&` guards in that template have never been forced either way.
+
 ## `audit.py`: do the rules between findings hold, one fault or six?
 
 ```bash

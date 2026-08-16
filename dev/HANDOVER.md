@@ -518,6 +518,31 @@ A count with no name attached is the thing this file warns about elsewhere, so
 treat it as a direction of travel: it should only go down, and the three
 unmentioned functions should go first.
 
+**And then that count was measured properly, and it was measuring the wrong
+thing.** The three unmentioned functions were covered first - `setFavicon`,
+`addPanel` and `renderResult` now run against a DOM stub through
+`run_viewer_dom`. Then every conditional in the template was forced, one at a
+time, and the suite run against each: **54 sites, 0 survivors.** There is no
+branch in that template whose "then" side can be switched off without a test
+noticing.
+
+So the 54 substring assertions are not a coverage hole. They are a second and
+weaker check sitting beside a real one, which is worth tidying and is not worth
+treating as risk. **The count was a proxy, the mutation is the measurement, and
+the two disagreed.** Reach for the sweep rather than the count:
+
+```bash
+# forces each `cond ?` in VIEWER_TEMPLATE to `false`, one at a time, and runs
+# the suite against each. A site nothing complains about is an untested branch.
+python3 dev/branch_sweep.py false     # then-sides: 0 survivors on 2026-08-16
+python3 dev/branch_sweep.py true      # else-sides
+```
+
+Two things that direction does not cover, and one of them found a real bug the
+same day. Forcing false only tests the *then* side; the `setFavicon` fallback
+that no test noticed was an *else*. And the sweep reads ternaries only - the
+thirteen `&&` guards in that template have never been forced either way.
+
 ## Settled: a product's interface is readable where it is documented and chosen
 
 `cmd_haproxy_stats` stays. It is the only reading here the kernel cannot

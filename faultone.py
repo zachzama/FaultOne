@@ -6541,9 +6541,14 @@ def parse_traceroute_hops(output):
         host = ip_match.group(0) if ip_match else None
         display = host or "*"
         if ip_match:
+            # traceroute puts the address in round brackets after the name and
+            # tracert puts it in square ones. Only the round pair was read, so
+            # on Windows - a layout this claims to handle - every hop that
+            # resolved was drawn as its bare address, and the names along the
+            # path are what identify whose network it is.
             name_match = re.search(
-                r"([A-Za-z0-9_.\-]+)\s*\(" + re.escape(ip_match.group(0)) + r"\)", line
-            )
+                r"([A-Za-z0-9_.\-]+)\s*[(\[]" + re.escape(ip_match.group(0)) + r"[)\]]",
+                line)
             if name_match:
                 display = name_match.group(1)
 

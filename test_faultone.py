@@ -176,6 +176,25 @@ class TestTracerouteParsing(unittest.TestCase):
         self.assertEqual(hops[0]["display"], "router.example.net")
         self.assertEqual(hops[0]["host"], "10.0.0.5")
 
+    def test_the_other_bracket_is_also_a_name(self):
+        """tracert puts the address in square brackets after the name where
+        traceroute uses round ones. Only the round pair was read, so on a layout
+        this claims to
+        handle every resolved hop drew as its address - and the names along a
+        path are what identify whose network it is. The fixture above this one
+        has no resolved hop in it, which is why nothing saw it."""
+        hops = nd.parse_traceroute_hops(
+            "  4    14 ms    13 ms    14 ms  edge.example.net [203.0.113.80]\n")
+        self.assertEqual(hops[0]["display"], "edge.example.net")
+        self.assertEqual(hops[0]["host"], "203.0.113.80")
+
+    def test_a_bracket_that_belongs_to_another_address_is_not_a_name(self):
+        """The name has to be the one written against this hop's address."""
+        hops = nd.parse_traceroute_hops(
+            "  4    14 ms  198.51.100.7  other.example.net [203.0.113.80]\n")
+        self.assertEqual(hops[0]["host"], "198.51.100.7")
+        self.assertEqual(hops[0]["display"], "198.51.100.7")
+
     def test_empty_input(self):
         self.assertEqual(nd.parse_traceroute_hops(""), [])
         self.assertEqual(nd.parse_traceroute_hops(None), [])

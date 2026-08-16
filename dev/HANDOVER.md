@@ -264,10 +264,9 @@ neighbouring finding implying an answer would undercut it.
 ## Open: the resume card quotes numbers that moved again
 
 `zachzama/zachzama.github.io` carries a FaultOne project card with the finding
-and test counts on it. They are now **165 findings and 1,334 tests** as of
-v1.16.0, and nothing checks the card against the tool. Every release makes it
-staler. Either update it with the release or stop quoting the numbers.
-
+and test counts on it. They are **178 findings and 1,474 tests** as of v1.19.0,
+and the card still says 153 and 965. Nothing checks it, and every release makes
+it staler. Either update it with the release or stop quoting the numbers.
 ## Settled: three of the last four capability gaps were never gaps
 
 Worth recording because the mistake repeated and the shape of it is
@@ -328,6 +327,35 @@ that cannot read rules count as two checks that could not run and marked the
 confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
+
+## Open: the socket guard has a hole three things have gone through
+
+`TestTheSuiteSendsNothing` booby-traps `connect`, `connect_ex` and name
+resolution. It does not watch `sendto`, and it does not watch socket
+*creation*. Three things have now gone through that gap and all three are
+stubbed in `fresh()` by hand:
+
+- `dns_ptr` - a UDP `sendto`, no connect
+- `trace_constant_flow` - a raw ICMP socket
+- `cmd_haproxy_stats` - a unix-domain connect
+- `cmd_proxy_reachable` - a real TCP connect to whatever a fixture named
+
+Hand-stubbing works and does not generalise: the next one will be found by a
+test behaving differently on somebody else's machine, which is exactly what the
+guard exists to prevent. Widening it to cover `socket.socket` and `sendto`
+would close it properly.
+
+## Open: three renderers were tested by grep, and two of them were wrong
+
+A test asserting that a string appears in `VIEWER_TEMPLATE` passes against code
+wired to a constant, because the dead branch still contains the string. It has
+happened three times: the privilege badge, the plane tag, and the quiet lane.
+
+The fix each time was the same and should be the default: pull the fragment out
+as a named function, and have the test run it in node with `escapeHtml`
+alongside. `planeTag`, `planeNote` and `quietLane` are done this way and are
+the pattern to copy. Anything else in that template still tested by substring
+is untested.
 
 ## Open: the proxy stats read is a prototype and a question, not a feature
 

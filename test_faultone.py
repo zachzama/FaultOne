@@ -9934,6 +9934,122 @@ class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
         self.assertNotIn("app_limited", {c for c, *_ in nd.VERDICT_RULES})
 
 
+class TestAHeadingNeverStandsOverNothing(unittest.TestCase):
+    """A heading is a promise that something follows it. Both of these were
+    written inline against a condition, so the only check available was that
+    the words appear in the template - and they appear either way."""
+
+    def test_the_path_heading_arrives_with_a_path(self):
+        html = run_viewer_fn(self, "pathSection", ["<div>hops</div>", None],
+                             deps=("escapeHtml", "planeNote"))
+        self.assertIn("The path, out and back on each side", html)
+        self.assertIn("hops", html)
+
+    def test_and_stays_away_without_one(self):
+        self.assertEqual(
+            run_viewer_fn(self, "pathSection", ["", None],
+                          deps=("escapeHtml", "planeNote")), "")
+
+    def test_the_direction_heading_arrives_with_the_zones(self):
+        html = run_viewer_fn(self, "whereSection", ["<div>zones</div>", 3])
+        self.assertIn("Which direction the fault is on", html)
+        self.assertIn("zones", html)
+
+    def test_and_stays_away_on_a_box_with_no_sides_to_show(self):
+        self.assertEqual(run_viewer_fn(self, "whereSection", ["", 0]), "")
+
+
+class TestAFindingsTagsAsDrawn(unittest.TestCase):
+    """The severity tag, layer badge, relation, hardware note and hint chip.
+
+    All five were built inline in the render, so the only test reaching the
+    hint looked for `f.hint ?` within 200 characters of `class="hint"` in the
+    template - which says where a condition sits, not whether it is ever true.
+    """
+
+    LAYERS = {"1": {"name": "Physical", "hint": "cabling, radio, link light"},
+              "3": {"name": "Network", "hint": "addressing and routing"}}
+
+    def tags(self, lowest=None, **f):
+        return run_viewer_fn(self, "findingTags",
+                             [f, self.LAYERS, lowest],
+                             deps=("escapeHtml", "layerBadge"))
+
+    def test_the_severity_is_always_said(self):
+        self.assertIn(">warning<", self.tags(severity="warning"))
+
+    def test_a_hint_appears_only_when_the_finding_has_one(self):
+        """The hint table is incomplete on purpose - an unclassified finding
+        shows nothing rather than a guess - so the absent case is the one that
+        matters and the one a substring test cannot see."""
+        self.assertIn("cable", self.tags(severity="warning", hint="cable"))
+        self.assertNotIn('class="hint"', self.tags(severity="warning"))
+
+    def test_the_layer_badge_names_the_layer_and_stays_away_without_one(self):
+        badge = self.tags(severity="warning", layer=1)
+        self.assertIn("L1", badge)
+        self.assertIn("Physical", badge)
+        self.assertNotIn('class="layer', self.tags(severity="warning"))
+
+    def test_the_lowest_broken_layer_is_marked_and_an_ok_one_is_not(self):
+        """The whole ranking argument in one badge: the lowest layer with a
+        live fault is the cause. An ok finding at that layer is not."""
+        self.assertIn('class="layer low"',
+                      self.tags(severity="critical", layer=1, lowest=1))
+        self.assertNotIn("layer low",
+                         self.tags(severity="ok", layer=1, lowest=1))
+        self.assertNotIn("layer low",
+                         self.tags(severity="critical", layer=3, lowest=1))
+
+    def test_a_relation_is_named_in_words(self):
+        self.assertIn("the cause", self.tags(severity="critical", relation="cause"))
+        self.assertNotIn('class="rel rel-', self.tags(severity="warning"))
+
+    def test_something_needing_hands_says_so(self):
+        self.assertIn("needs hands on it",
+                      self.tags(severity="warning", kind="hardware"))
+        self.assertNotIn("needs hands on it", self.tags(severity="warning"))
+
+    def test_a_hostile_hint_cannot_become_markup(self):
+        html = self.tags(severity="warning", hint="<img src=x onerror=alert(1)>")
+        self.assertNotIn("<img", html)
+
+
+class TestAZoneCardAsDrawn(unittest.TestCase):
+    """The three boxes that answer "where is the fault" before anything asks
+    the reader what a layer is."""
+
+    def card(self, **z):
+        return run_viewer_fn(self, "zoneCard", [dict({"state": "pass"}, **z)])
+
+    def test_the_zone_is_named_and_carries_its_state(self):
+        html = self.card(side="downstream", state="fail")
+        self.assertIn("clients reaching this box", html)
+        self.assertIn('class="zone fail"', html)
+        self.assertIn("FAULT", html)
+
+    def test_the_box_holding_the_cause_says_so(self):
+        """Red against green is the pair a reader is most likely not to be able
+        to separate, so the box that owns the verdict says it in words."""
+        self.assertIn("the cause", self.card(side="local", owns_cause=True))
+        self.assertNotIn("rel-cause", self.card(side="local"))
+
+    def test_the_route_to_a_side_is_named_when_there_is_one(self):
+        self.assertIn("via 10.20.0.7", self.card(side="downstream", via="10.20.0.7"))
+        self.assertNotIn('class="zvia"', self.card(side="downstream"))
+
+    def test_the_worst_thing_on_a_side_is_quoted_when_there_is_one(self):
+        self.assertIn("32% loss", self.card(side="upstream", worst="32% loss"))
+        self.assertNotIn('class="zwhy"', self.card(side="upstream"))
+
+    def test_an_unknown_side_falls_back_to_its_own_name(self):
+        self.assertIn("sideways", self.card(side="sideways"))
+
+    def test_a_hostile_via_cannot_become_markup(self):
+        self.assertNotIn("<img", self.card(side="downstream",
+                                           via="<img src=x onerror=alert(1)>"))
+
+
 class TestTheHopListAsDrawn(unittest.TestCase):
     """Every conditional in the hop list, run rather than read.
 

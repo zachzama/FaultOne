@@ -374,9 +374,21 @@ every substring test still passes, and the list draws the address where the
 name should be. Running the fragment catches it. Nine cruder mutations were
 caught too, including the site edge wired to a constant.
 
-Still tested by substring, and still worth converting the same way: the hint
-chip on a finding (`f.hint ?`), the zone owns-cause marker (`z.owns_cause`),
-and the section headings. Each is smaller than the hop list was.
+The three that were left went the same way in the pass after: `findingTags`
+with `layerBadge` under it, `zoneCard`, and the two section headings as
+`pathSection` and `whereSection`. Headings are worth naming for a reason of
+their own - a heading is a promise that something follows it, and the failure
+to guard is a title standing over an empty section, which is exactly the case a
+substring search cannot see because the words are in the template either way.
+
+Two mutations from that pass are the ones to reach for when this comes up
+again, because both leave every substring assertion passing: draw the hint chip
+from `f.code` instead of `f.hint`, and drop `&& f.severity !== 'ok'` from the
+lowest-layer mark so an ok finding is marked as the lowest broken layer. Neither
+touches a condition or a class name.
+
+What is left in that template and still read rather than run is CSS and lookup
+tables, which cannot be executed and are checked correctly as text.
 
 ## Open: the proxy stats read is a prototype and a question, not a feature
 

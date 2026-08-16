@@ -16424,6 +16424,55 @@ function hopList(col, names){
     </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 }
 
+// A finding's tags, and the zone box beside them. Both were built inline in
+// the render, so the only tests that could reach them searched this template
+// for a string - which passes against a branch that is never taken, because the
+// dead branch still holds the string. See HANDOVER; it had been wrong three
+// times before the hop list was pulled out the same way.
+//
+// `layers` and `lowest` are passed rather than closed over: which layer is the
+// lowest broken one is a property of the report, not of a badge.
+function layerBadge(f, layers, lowest){
+  if(!f.layer) return '';
+  const meta = (layers || {})[String(f.layer)] || {};
+  const isLowest = f.layer === lowest && f.severity !== 'ok';
+  return `<span class="layer${isLowest ? ' low' : ''}" title="${escapeHtml(meta.hint || '')}">L${f.layer}${meta.name ? ' \u00b7 ' + escapeHtml(meta.name) : ''}</span>`;
+}
+
+function findingTags(f, layers, lowest){
+  return `<span class="tag">${escapeHtml(f.severity)}</span>${layerBadge(f, layers, lowest)}${
+    f.relation ? `<span class="rel rel-${escapeHtml(f.relation)}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
+    f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}${
+    f.hint ? `<span class="hint">&rarr; ${escapeHtml(f.hint)}</span>` : ''}`;
+}
+
+function zoneCard(z){
+  return `<div class="zone ${z.state}">
+          <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}${
+            z.owns_cause ? `<span class="rel rel-cause">the cause</span>` : ''}</div>
+          ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
+          <div class="zstate">${escapeHtml(ZONE_WORD[z.state] || z.state)}</div>
+          ${z.worst ? `<div class="zwhy">${escapeHtml(z.worst)}</div>` : ''}
+        </div>`;
+}
+
+// A heading and the thing it introduces, kept together. Separately they drift:
+// a heading is a promise that something follows it, and the failure worth
+// guarding is a title standing over an empty section. Named so a test can ask
+// for the empty case, which is the one a substring search cannot see - the
+// string is in the template either way.
+function pathSection(pathHtml, otherPlane){
+  if(!pathHtml) return '';
+  return '<div class="section-title over">The path, out and back on each side</div>'
+    + planeNote(otherPlane)
+    + pathHtml;
+}
+
+function whereSection(sidesHtml, howMany){
+  if(!howMany) return '';
+  return '<div class="section-title">Which direction the fault is on</div>' + sidesHtml;
+}
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -16438,12 +16487,6 @@ function renderDiagnosis(data, opts){
   const layers = data.layers || {};
   if(data.panel_help) panelHelp = data.panel_help;
   const lowest = data.lowest_broken_layer || null;
-  const layerBadge = f => {
-    if(!f.layer) return '';
-    const meta = layers[String(f.layer)] || {};
-    const isLowest = f.layer === lowest && f.severity !== 'ok';
-    return `<span class="layer${isLowest ? ' low' : ''}" title="${escapeHtml(meta.hint || '')}">L${f.layer}${meta.name ? ' · ' + escapeHtml(meta.name) : ''}</span>`;
-  };
   const v = data.verdict;
   const verdictHtml = v ? `
     <div class="verdict ${v.severity || 'warning'}">
@@ -16477,13 +16520,7 @@ function renderDiagnosis(data, opts){
     <div class="zones">
       ${sides.map((z, i) => `
         ${i ? boundaryArrow(sides, i, sideFlows) : ''}
-        <div class="zone ${z.state}">
-          <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}${
-            z.owns_cause ? `<span class="rel rel-cause">the cause</span>` : ''}</div>
-          ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
-          <div class="zstate">${ZONE_WORD[z.state] || z.state}</div>
-          ${z.worst ? `<div class="zwhy">${escapeHtml(z.worst)}</div>` : ''}
-        </div>`).join('')}
+        ${zoneCard(z)}`).join('')}
     </div>` : '';
 
   const stages = data.stages || [];
@@ -16623,14 +16660,9 @@ function renderDiagnosis(data, opts){
         ${lanes}${traced}</div>`;
   }).join('') + probeHtml + '</div>' : '';
   const pathWrap = document.getElementById('pathWrap');
-  if(pathWrap) pathWrap.innerHTML = pathHtml
-    ? '<div class="section-title over">The path, out and back on each side</div>'
-      + planeNote(otherPlane)
-      + pathHtml
-    : '';
+  if(pathWrap) pathWrap.innerHTML = pathSection(pathHtml, otherPlane);
 
-  document.getElementById('whereWrap').innerHTML = sides.length
-    ? '<div class="section-title">Which direction the fault is on</div>' + sidesHtml : '';
+  document.getElementById('whereWrap').innerHTML = whereSection(sidesHtml, sides.length);
   document.getElementById('ranWrap').innerHTML = stageHtml
     ? '<div class="section-title">What was checked</div>' + stageHtml : '';
   document.getElementById('foundWrap').innerHTML = findings.length
@@ -16640,10 +16672,7 @@ function renderDiagnosis(data, opts){
     <div class="finding ${f.severity}">
       <div class="sev"></div>
       <div>
-        <div class="tagline"><span class="tag">${f.severity}</span>${layerBadge(f)}${
-          f.relation ? `<span class="rel rel-${f.relation}">${escapeHtml(RELATION_LABEL[f.relation] || f.relation)}</span>` : ''}${
-          f.kind === 'hardware' ? `<span class="rel rel-hardware">needs hands on it</span>` : ''}${
-          f.hint ? `<span class="hint">&rarr; ${escapeHtml(f.hint)}</span>` : ''}</div>
+        <div class="tagline">${findingTags(f, layers, lowest)}</div>
         <div class="msg">${escapeHtml(f.message)}</div>
       </div>
     </div>

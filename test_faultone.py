@@ -10232,6 +10232,68 @@ class TestTheHopListAsDrawn(unittest.TestCase):
         self.assertNotIn("<script>alert(1)", html)
 
 
+class TestAStateFromAReportCannotLeaveItsAttribute(unittest.TestCase):
+    """The other half of "nothing in a report can become markup".
+
+    That guard covered text - hostnames, banners, certificate strings. It did
+    not cover the values interpolated into class attributes, and those come out
+    of the same file: a report is parsed with `JSON.parse` and handed straight
+    to the render, with nothing between. Every severity and state below arrived
+    that way, and `class="zone ${z.state}"` with a quote in it ends the
+    attribute and opens a tag.
+
+    Found by review on 2026-08-16, in four fragments at once, two of them
+    written in this session. The fix is `cls`, which passes only the shape the
+    vocabulary has and turns anything else into nothing.
+    """
+
+    XSS = '"><img src=x onerror=alert(1)>'
+
+    def test_the_helper_passes_the_vocabulary_and_nothing_else(self):
+        for good in ("pass", "warn", "fail", "skip", "ok", "crit", "no", "zone fail"):
+            self.assertEqual(run_viewer_fn(self, "cls", [good]), good)
+        for bad in (self.XSS, '" onload="x', "<script>", "UPPER", "9lives", ""):
+            self.assertEqual(run_viewer_fn(self, "cls", [bad]), "",
+                             "%r survived into a class attribute" % bad)
+
+    def test_a_missing_state_is_not_the_string_undefined(self):
+        for empty in (None, ""):
+            self.assertEqual(run_viewer_fn(self, "cls", [empty]), "")
+
+    def test_a_hostile_zone_state_cannot_open_a_tag(self):
+        html = run_viewer_fn(self, "zoneCard", [{"side": "local", "state": self.XSS}])
+        self.assertNotIn("<img", html)
+        self.assertIn('class="zone "', html, "the attribute is not left empty")
+
+    def test_a_hostile_hop_state_cannot_open_a_tag(self):
+        html = run_viewer_fn(self, "hopList", [
+            {"target": "x", "of": 1, "hops": [
+                {"hop": 1, "host": "a", "ms": 1, "state": self.XSS,
+                 "why": "something"}]}, {}],
+            deps=("hopWhy", "fanoutLine"))
+        self.assertNotIn("<img", html)
+
+    def test_a_hostile_fan_out_count_cannot_become_markup(self):
+        """A count, not a name - which is why it was interpolated raw. A report
+        is JSON, so a count is whatever the file says it is."""
+        html = run_viewer_fn(self, "fanoutLine",
+                             [{"fanout": self.XSS, "fanout_also": []}])
+        self.assertNotIn("<img", html)
+
+    def test_a_hostile_layer_number_cannot_become_markup(self):
+        html = run_viewer_fn(self, "findingTags",
+                             [{"severity": "warning", "layer": self.XSS}, {}, None],
+                             deps=("layerBadge",))
+        self.assertNotIn("<img", html)
+
+    def test_a_hostile_arrow_state_cannot_open_a_tag(self):
+        sides = [{"side": "downstream", "state": self.XSS},
+                 {"side": "local", "state": "pass"},
+                 {"side": "upstream", "state": "pass"}]
+        html = run_viewer_fn(self, "boundaryArrow", [sides, 1, {}])
+        self.assertNotIn("<img", html)
+
+
 class TestTheSourceMatrixAsDrawn(unittest.TestCase):
     """Drawn whenever the run was asked to ask, rather than only where the
     answers differ.
@@ -11026,7 +11088,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
         out = []
         for m in re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, re.M | re.S):
             out.append(m.group(0))
-        for name in ("escapeHtml", "boundaryArrow"):
+        for name in ("escapeHtml", "cls", "boundaryArrow"):
             i = src.index("function " + name + "(")
             depth, j = 0, src.index("{", i)
             for k in range(j, len(src)):
@@ -16171,7 +16233,7 @@ class TestNothingInAReportCanBecomeMarkup(unittest.TestCase):
             names = tuple(n for n in dict.fromkeys(
                 re.findall(r"^\s*function (\w+)\(", src, re.M))
                 if ("function " + n + "(") in src)
-        for name in names:
+        for name in (("cls",) + tuple(names) if "function cls(" in src else names):
             i = src.index("function " + name + "(")
             depth, j = 0, src.index("{", i)
             for k in range(j, len(src)):
@@ -16399,7 +16461,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         src = nd.VIEWER_TEMPLATE
         out = ["const escapeHtml = s => String(s);",
                "const HOP_WORD = {warn:'DEGRADED', crit:'FAULT'};"]
-        for name in names:
+        for name in (("cls",) + tuple(names) if "function cls(" in src else names):
             i = src.index("function " + name + "(")
             depth, j = 0, src.index("{", i)
             for k in range(j, len(src)):
@@ -17391,7 +17453,16 @@ def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
     out = []
     for const in _re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, _re.M | _re.S):
         out.append(const.group(0))
-    for fn in tuple(deps) + (name,):
+    # `cls` and `escapeHtml` are primitives any fragment may reach for, so they
+    # are always lifted rather than declared per call. A test that had to
+    # remember them would fail with "not defined" the first time a fragment
+    # started escaping something, which is the wrong signal entirely.
+    wanted, seen = [], set()
+    for fn in ("escapeHtml", "cls") + tuple(deps) + (name,):
+        if fn not in seen and ("function %s(" % fn) in src:
+            seen.add(fn)
+            wanted.append(fn)
+    for fn in wanted:
         i = src.index("function " + fn + "(")
         depth, j = 0, src.index("{", i)
         for k in range(j, len(src)):

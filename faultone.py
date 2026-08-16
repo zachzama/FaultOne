@@ -16261,6 +16261,18 @@ const ledsEl = document.getElementById('leds');
 let panelSeq = 0;
 let panelHelp = {}; // raw-report key -> {desc, layer}
 
+// A value that lands in a class attribute, reduced to something that cannot
+// leave it. Severities and states come from a closed vocabulary - pass, warn,
+// fail, skip, ok, crit - but they arrive inside a report this box did not
+// write, and `class="zone ${z.state}"` with a quote in it ends the attribute
+// and opens a tag. escapeHtml is the wrong tool here: it is for text, and it
+// says nothing about what belongs in a class. Anything outside the shape of
+// the vocabulary becomes nothing, which renders unstyled rather than hostile.
+function cls(value){
+  const s = String(value == null ? '' : value);
+  return /^[a-z][a-z0-9 _-]{0,40}$/.test(s) ? s : '';
+}
+
 function escapeHtml(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -16411,7 +16423,7 @@ function fanoutLine(h){
   const also = h.fanout_also || [];
   const title = also.length ? 'also answered: ' + also.join(', ') : '';
   return `<div class="hwhy fan"${title ? ` title="${escapeHtml(title)}"` : ''}>`
-    + `${h.fanout} routers answered here \u2014 the path fans out</div>`;
+    + `${escapeHtml(String(h.fanout))} routers answered here \u2014 the path fans out</div>`;
 }
 
 function boundaryArrow(sides, i, flows){
@@ -16469,10 +16481,10 @@ function boundaryArrow(sides, i, flows){
       + 'has stopped');
     const outState = arrived ? 'pass' : (stalled ? 'unknown' : leg.state);
     return `<div class="zarrow split" title="${escapeHtml(why.join(' · '))}">`
-      + `<span class="${outState}">→</span>`
-      + `<span class="${stalled ? 'fail' : leg.state}">←</span></div>`;
+      + `<span class="${cls(outState)}">→</span>`
+      + `<span class="${stalled ? 'fail' : cls(leg.state)}">←</span></div>`;
   }
-  return `<div class="zarrow ${leg.state}" title="${
+  return `<div class="zarrow ${cls(leg.state)}" title="${
     escapeHtml(ZONE_NAME[leg.side] || leg.side)} · both directions, judged together">`
     + '<span>⇄</span></div>';
 }
@@ -16535,7 +16547,7 @@ function hopList(col, names){
   names = names || {};
   return `<div class="hops" title="${escapeHtml(hopWhy(col))}">${col.hops.map(h => `
       ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
-      <div class="hrow ${h.state === 'ok' ? '' : h.state}">
+      <div class="hrow ${cls(h.state === 'ok' ? '' : h.state)}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
         <span class="hh">${escapeHtml(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
@@ -16543,7 +16555,7 @@ function hopList(col, names){
           : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
       </div>${fanoutLine(h)}${names[h.host] ? `<div class="hname">${escapeHtml(names[h.host])}</div>` : ''}${
-          h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+          h.why ? `<div class="hwhy ${cls(h.state)}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       ${col.hops_in ? `<div class="pboth">${
         col.hops.length} out, ${col.hops_in} back${
@@ -16563,7 +16575,7 @@ function layerBadge(f, layers, lowest){
   if(!f.layer) return '';
   const meta = (layers || {})[String(f.layer)] || {};
   const isLowest = f.layer === lowest && f.severity !== 'ok';
-  return `<span class="layer${isLowest ? ' low' : ''}" title="${escapeHtml(meta.hint || '')}">L${f.layer}${meta.name ? ' \u00b7 ' + escapeHtml(meta.name) : ''}</span>`;
+  return `<span class="layer${isLowest ? ' low' : ''}" title="${escapeHtml(meta.hint || '')}">L${escapeHtml(String(f.layer))}${meta.name ? ' \u00b7 ' + escapeHtml(meta.name) : ''}</span>`;
 }
 
 function findingTags(f, layers, lowest){
@@ -16574,7 +16586,7 @@ function findingTags(f, layers, lowest){
 }
 
 function zoneCard(z){
-  return `<div class="zone ${z.state}">
+  return `<div class="zone ${cls(z.state)}">
           <div class="zname">${escapeHtml(ZONE_NAME[z.side] || z.side)}${
             z.owns_cause ? `<span class="rel rel-cause">the cause</span>` : ''}</div>
           ${z.via ? `<div class="zvia">via ${escapeHtml(z.via)}</div>` : ''}
@@ -16685,7 +16697,7 @@ function renderDiagnosis(data, opts){
     const layer = st.layer ? `<span class="layer">L${escapeHtml(String(st.layer))}</span>` : '';
     const why = (st.because && st.because.length)
       ? ` title="${escapeHtml(st.because.join(', '))}"` : '';
-    return `<span class="stage ${st.state}"${why}>${escapeHtml(st.stage)} <b>${
+    return `<span class="stage ${cls(st.state)}"${why}>${escapeHtml(st.stage)} <b>${
       {pass:'PASS', warn:'WARN', fail:'FAIL', skip:'—'}[st.state] || ''}</b>${layer}</span>`;
   }).join('') + '</div>' : '';
 

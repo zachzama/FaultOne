@@ -3594,12 +3594,16 @@ def _tcp_counters_bsd():
         return {}
     out = {}
     # BSD switches to singular at 1 ("0 data packet (0 byte)"), so both forms
-    # have to match or the counters silently vanish.
+    # have to match or the counters silently vanish. Thousands separators are
+    # allowed on both numbers for the same reason and not only on the first:
+    # grouped the one way this already expected, "(987,654,321 bytes)" stopped
+    # the whole line matching, and a box that could not read its own counters
+    # is one where every check built on them reports itself unavailable.
     text = res.get("stdout", "")
-    m = re.search(r"([\d,]+)\s+data packets?\s+\(\d+\s+bytes?\)\s+retransmitted", text)
+    m = re.search(r"([\d,]+)\s+data packets?\s+\([\d,]+\s+bytes?\)\s+retransmitted", text)
     if m:
         out["RetransSegs"] = int(m.group(1).replace(",", ""))
-    m = re.search(r"([\d,]+)\s+data packets?\s+\(\d+\s+bytes?\)\s*$", text, re.M)
+    m = re.search(r"([\d,]+)\s+data packets?\s+\([\d,]+\s+bytes?\)\s*$", text, re.M)
     if m:
         out["OutSegs"] = int(m.group(1).replace(",", ""))
     # Recent macOS prints the whole tcp block as zeros to an unprivileged

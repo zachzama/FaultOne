@@ -20348,6 +20348,36 @@ class TestEveryFindingFires(unittest.TestCase):
         self.assertEqual(got["OutSegs"], 3_900_000)
         self.assertEqual(got["RetransSegs"], 2_400)
 
+    def test_the_byte_counts_are_grouped_the_same_way_the_packet_counts_are(self):
+        """The fixture above groups the packet counts and not the bytes, which
+        is not a shape any box prints - whatever puts separators in one number
+        puts them in the other. Grouped on both, the parenthesised half stopped
+        the line matching and both counters vanished, and a box that cannot
+        read its own counters reports every check built on them unavailable."""
+        mod = fresh()
+        mod.OS_NAME = "Darwin"
+        mod.run = lambda cmd, timeout=10, limit=None: {
+            "ok": True, "cmd": " ".join(cmd), "stderr": "", "code": 0,
+            "stdout": "tcp:\n\t4,102,331 packets sent\n"
+                      "\t\t3,900,000 data packets (987,654,321 bytes)\n"
+                      "\t\t2,400 data packets (1,234 bytes) retransmitted\n"}
+        got = mod._tcp_counters_bsd()
+        self.assertEqual(got["OutSegs"], 3_900_000)
+        self.assertEqual(got["RetransSegs"], 2_400)
+
+    def test_the_singular_forms_still_parse_beside_the_grouped_ones(self):
+        """"0 data packet (0 byte)" is the shape the zero guard depends on."""
+        mod = fresh()
+        mod.OS_NAME = "Darwin"
+        mod.run = lambda cmd, timeout=10, limit=None: {
+            "ok": True, "cmd": " ".join(cmd), "stderr": "", "code": 0,
+            "stdout": "tcp:\n\t9 packets sent\n"
+                      "\t\t1 data packet (1 byte)\n"
+                      "\t\t1 data packet (1 byte) retransmitted\n"}
+        got = mod._tcp_counters_bsd()
+        self.assertEqual(got["OutSegs"], 1)
+        self.assertEqual(got["RetransSegs"], 1)
+
     def test_an_unmeasurable_retransmit_check_says_so_in_the_report(self):
         """A reader who doesn't see the heading assumes retransmits were
         checked and were clean, which is the opposite of what happened."""

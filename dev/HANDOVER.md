@@ -88,21 +88,40 @@ A test-count badge was considered and rejected: it would be a number in a URL,
 and the guard that pins every other count in the docs reads prose, not a
 shields path. It would be the one count in the repository free to drift.
 
-## Open: --source measures one address, not every address
+## Settled: every address asks for itself, and the table is drawn on request
 
-`--source ADDR` binds the probes to one of the addresses a box holds. A box
-holding several has one path per address, and there is no way to ask for all of
-them in one run.
+`--source all` asks each global-scope address whether it can reach the target.
+Link-local and loopback are left out - neither can reach off the segment, so a
+failure from them is only what they are - and one address is the ordinary run.
 
-The shape it wants: iterate the global-scope addresses only, since link-local
-and loopback are noise; run the box-reading checks once rather than per address;
-report a matrix of source against reachable, loss, latency and port. The
-constraint that decides whether it is worth building is the traceroute. Measured
-on one machine, a quick run is about 7s and a full one about 64s, and nearly all
-of that difference is the trace. Taken per source, twelve addresses is thirteen
-minutes. Taken once from the primary, and again only for a source that actually
-failed, it is about two. The second shape is also the better diagnosis, because
-it traces the path that broke rather than twelve identical ones.
+**The constraint was never the traceroute.** `SOURCE_ADDRESS` is a global read
+in nineteen places, and probes cannot run together while each has to assign it
+in turn. `_source_flag` and `cmd_ping` take the source as an argument now,
+defaulting to the global, so the other seventeen sites are untouched and a test
+pins that the run-wide setting is never written. Only the probe repeats:
+everything read about the box is a property of the box, and the trace stays out
+because tracing twelve identical paths to learn what one already said is how a
+run of seconds becomes one of minutes. Twelve addresses cost about what one
+does.
+
+**The drawing decision, which went the other way from the last three.** The
+plane tag, the fan-out mark and the instances table all stay quiet unless they
+change a reading. This one is drawn whenever the run was asked to ask, because
+the flag is the gate: somebody typed it, and three agreeing rows are the answer
+to what they typed. Silence is the one reply that cannot be told apart from the
+flag having done nothing - a different failure from being quietly noisy. Four
+shapes were drawn before choosing; the rejected ones are worth knowing about.
+Only-on-disagreement makes healthy indistinguishable from ignored, and the
+finding already fires there. A column on the instances table conflates one row
+per listener with one row per address, and a box can hold an address it serves
+nothing on.
+
+Both renderers end in a sentence rather than three rows of "yes", because a
+table of agreements is a measurement and not yet a reading.
+
+**Not built, and each its own decision:** ports per source - the original shape
+said "reachable, loss, latency and port", and only ping is probed - and the
+re-trace from an address that failed.
 
 ## Open: the ranking decisions nobody has reviewed
 

@@ -15716,6 +15716,18 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      colour alone is not readable to everyone and does not survive a printout
      or a screenshot pasted into a ticket. */
   .zones{display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap;}
+  /* One row per address this box holds. Under the zones because it is a
+     statement about the way out: which of this box's addresses can take it. */
+  .srcs{width:100%; border-collapse:collapse; margin:10px 0 2px;
+    font-family:var(--mono); font-size:11px;}
+  .srcs th{text-align:left; font-weight:400; color:var(--text-dim);
+    padding:2px 10px 4px 0; border-bottom:1px solid var(--border);}
+  .srcs td{padding:3px 10px 3px 0; color:var(--text-dim);}
+  .srcs td:first-child{color:var(--text);}
+  .srcs tr.no td, .srcs tr.no td:first-child{color:var(--crit);}
+  .srcs .num{text-align:right;}
+  .srcnote{font-family:var(--mono); font-size:10.5px; color:var(--text-dim);
+    opacity:.85; margin:0 0 6px;}
   /* Two heads stacked. line-height:1 still leaves the glyphs' own leading
      between them, which reads as a gap rather than as one arrow split in two,
      so the stack is tightened until they sit as a pair. */
@@ -16086,7 +16098,7 @@ VIEWER_TEMPLATE = r"""<!doctype html>
      figures fix the advance width; slashed zero keeps a zero from reading as a
      capital O in an interface name or a hex address. Applied only where digits
      are load-bearing, since tabular figures in prose are worse than neither. */
-  .verdict .vmeta, .stage, .led-row, .report-meta, .hrow,
+  .verdict .vmeta, .stage, .led-row, .report-meta, .hrow, .srcs,
   .finding .tag, .changes .row, pre{
     font-variant-numeric:tabular-nums;
     font-feature-settings:"tnum" 1, "zero" 1;
@@ -16583,6 +16595,34 @@ function pathSection(pathHtml, otherPlane){
     + pathHtml;
 }
 
+// Every address this box holds, asked the same question. Drawn whenever the
+// run was asked to ask - the flag is the gate, and three agreeing rows are the
+// answer somebody typed a flag to get. Silence here is the one reply that
+// cannot be told apart from the flag having done nothing, which is why this
+// does not follow the draw-it-only-where-it-differs rule the plane tag and the
+// fan-out mark do.
+function sourceTable(rows, target){
+  rows = rows || [];
+  if(rows.length < 2) return '';
+  const cell = (r, key, suffix) => r[key] == null ? '-' : escapeHtml(String(r[key])) + (suffix || '');
+  const body = rows.map(r => `<tr class="${r.reached ? '' : 'no'}">`
+    + `<td>${escapeHtml(r.address)}</td>`
+    + `<td>${escapeHtml(r.interface || '-')}</td>`
+    + `<td>${r.reached ? 'yes' : 'no'}</td>`
+    + `<td class="num">${cell(r, 'loss_pct', '%')}</td>`
+    + `<td class="num">${cell(r, 'avg_ms', ' ms')}</td></tr>`).join('');
+  const failed = rows.filter(r => !r.reached).map(r => r.address);
+  const note = !failed.length
+    ? 'every address this box holds can reach the target'
+    : failed.length < rows.length
+      ? failed.join(', ') + ' reaches nothing while its neighbours do'
+      : 'no address on this box can reach the target, so this is the target rather than the addressing';
+  return `<table class="srcs"><tr><th>address</th><th>interface</th>`
+    + `<th>reaches ${escapeHtml(target || 'the target')}</th>`
+    + `<th class="num">loss</th><th class="num">latency</th></tr>${body}</table>`
+    + `<div class="srcnote">${escapeHtml(note)}</div>`;
+}
+
 function whereSection(sidesHtml, howMany){
   if(!howMany) return '';
   return '<div class="section-title">Which direction the fault is on</div>' + sidesHtml;
@@ -16777,7 +16817,10 @@ function renderDiagnosis(data, opts){
   const pathWrap = document.getElementById('pathWrap');
   if(pathWrap) pathWrap.innerHTML = pathSection(pathHtml, otherPlane);
 
-  document.getElementById('whereWrap').innerHTML = whereSection(sidesHtml, sides.length);
+  const srcTable = sourceTable(((data.raw || {}).source_matrix) || [],
+                               (data.raw || {}).probe_target || data.target);
+  document.getElementById('whereWrap').innerHTML =
+    whereSection(sidesHtml + srcTable, sides.length || (srcTable ? 1 : 0));
   document.getElementById('ranWrap').innerHTML = stageHtml
     ? '<div class="section-title">What was checked</div>' + stageHtml : '';
   document.getElementById('foundWrap').innerHTML = findings.length
@@ -17574,6 +17617,39 @@ def _render_services(report, out, tint, width):
         out.append("")
         out.append("TCP RETRANSMITS (this device's own traffic)")
         out.append(f"  not measured - {tcp.get('error') or 'the counters read as unavailable'}")
+
+    # Every address asked the same question, where the run was asked to ask.
+    # Drawn whenever it ran rather than only where the answers differ: the flag
+    # is the gate. Somebody typed it, three agreeing rows are the answer to what
+    # they typed, and silence would be the one reply that cannot be told apart
+    # from the flag having done nothing.
+    matrix = (report.get("raw") or {}).get("source_matrix") or []
+    if len(matrix) > 1:
+        out.append("")
+        out.append(f"SOURCES TO {(report.get('raw') or {}).get('probe_target') or report.get('target', '?')}")
+        addr_w = min(max(len(r["address"]) for r in matrix), max(width - 44, 15))
+        out.append(f"  {'address':<{addr_w}}  {'iface':<10}{'reaches':<11}{'loss':>6}"
+                   f"{'latency':>12}")
+        for row in matrix:
+            addr = row["address"]
+            if len(addr) > addr_w:
+                addr = addr[:addr_w - 1] + "…"
+            loss = "-" if row.get("loss_pct") is None else f"{row['loss_pct']}%"
+            avg = "-" if row.get("avg_ms") is None else f"{row['avg_ms']:.1f} ms"
+            line = (f"  {addr:<{addr_w}}  {(row.get('interface') or '-'):<10}"
+                    f"{('yes' if row.get('reached') else 'no'):<11}{loss:>6}{avg:>12}")
+            out.append(tint(line, "ok" if row.get("reached") else "critical"))
+        # One sentence under the rows, because a table of three yeses is a
+        # measurement and not yet a reading.
+        unreachable = [r["address"] for r in matrix if not r.get("reached")]
+        if not unreachable:
+            out.append("  -> every address this box holds can reach the target")
+        elif len(unreachable) < len(matrix):
+            out.append(f"  -> {', '.join(unreachable[:3])} reaches nothing while its "
+                       f"neighbours do")
+        else:
+            out.append("  -> no address on this box can reach the target, so this is "
+                       "the target rather than the addressing")
 
     ports = report.get("port_results", [])
     if ports:

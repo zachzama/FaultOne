@@ -10232,6 +10232,98 @@ class TestTheHopListAsDrawn(unittest.TestCase):
         self.assertNotIn("<script>alert(1)", html)
 
 
+class TestTheSourceMatrixAsDrawn(unittest.TestCase):
+    """Drawn whenever the run was asked to ask, rather than only where the
+    answers differ.
+
+    The plane tag and the fan-out mark stay quiet unless they change a reading,
+    and this deliberately does not: somebody typed a flag, and three agreeing
+    rows are the answer to what they typed. Silence is the one reply that
+    cannot be told apart from the flag having done nothing.
+    """
+
+    ROWS = [{"address": "10.0.0.5", "interface": "eth0", "reached": True,
+             "loss_pct": 0, "avg_ms": 12.5},
+            {"address": "10.0.0.60", "interface": "eth0", "reached": True,
+             "loss_pct": 0, "avg_ms": 12.9}]
+
+    def failing(self):
+        return self.ROWS + [{"address": "10.0.0.61", "interface": "eth0",
+                             "reached": False, "loss_pct": 100, "avg_ms": None}]
+
+    def text(self, rows):
+        rep = {"target": "8.8.8.8", "findings": [], "stages": [],
+               "raw": {"source_matrix": rows, "probe_target": "8.8.8.8"}}
+        out = nd.render_text_report(rep, color=False, width=100)
+        if "SOURCES TO" not in out:
+            return ""
+        block = out[out.index("SOURCES TO"):]
+        return block[:block.index("\n\n")] if "\n\n" in block else block
+
+    def html(self, rows):
+        return run_viewer_fn(self, "sourceTable", [rows, "8.8.8.8"])
+
+    def test_the_table_is_drawn_when_every_address_reached(self):
+        """The case the whole decision turned on."""
+        for drawn in (self.text(self.ROWS), self.html(self.ROWS)):
+            self.assertIn("10.0.0.5", drawn)
+            self.assertIn("10.0.0.60", drawn)
+
+    def test_and_says_so_in_a_sentence_rather_than_leaving_three_yeses(self):
+        for drawn in (self.text(self.ROWS), self.html(self.ROWS)):
+            self.assertIn("every address this box holds can reach", drawn)
+
+    def test_a_failing_address_is_marked_and_named(self):
+        for drawn in (self.text(self.failing()), self.html(self.failing())):
+            self.assertIn("10.0.0.61", drawn)
+            self.assertIn("reaches nothing while its neighbours do", drawn)
+        # Named is not enough - the row itself has to carry it, or the one line
+        # that differs looks like the two above it.
+        html = self.html(self.failing())
+        self.assertIn('<tr class="no">', html, "the failing row is not marked")
+        self.assertEqual(html.count('<tr class="no">'), 1,
+                         "a reaching row was marked as failing")
+
+    def test_all_of_them_failing_points_at_the_target_instead(self):
+        none = [dict(r, reached=False, loss_pct=100, avg_ms=None) for r in self.ROWS]
+        for drawn in (self.text(none), self.html(none)):
+            self.assertIn("this is the target rather than the addressing", drawn)
+
+    def test_one_address_draws_nothing(self):
+        """A matrix of one row is a longer way of saying what the run said."""
+        self.assertEqual(self.text(self.ROWS[:1]), "")
+        self.assertEqual(self.html(self.ROWS[:1]), "")
+
+    def test_a_run_that_never_asked_draws_nothing(self):
+        self.assertEqual(self.text([]), "")
+        self.assertEqual(self.html([]), "")
+
+    def test_a_measurement_that_could_not_be_read_is_not_drawn_as_zero(self):
+        """In both renderers. A latency that was never measured is not a fast
+        one, and a zero there reads as the best row on the table."""
+        row = [l for l in self.text(self.failing()).splitlines()
+               if "10.0.0.61" in l][0]
+        self.assertNotIn("0.0 ms", row, "an unmeasured latency became a number")
+        self.assertIn("-", row)
+        cells = self.html(self.failing()).split("10.0.0.61")[1].split("</tr>")[0]
+        self.assertIn("<td class=\"num\">-</td>", cells,
+                      "an unmeasured latency became a number on the page")
+        self.assertNotIn(">0 ms<", cells)
+
+    def test_the_terminal_and_the_page_say_the_same_thing(self):
+        """Two renderers, one reading. They have disagreed before."""
+        for rows in (self.ROWS, self.failing()):
+            text, html = self.text(rows), self.html(rows)
+            for row in rows:
+                self.assertIn(row["address"], text)
+                self.assertIn(row["address"], html)
+
+    def test_a_hostile_address_cannot_become_markup(self):
+        rows = [dict(self.ROWS[0], address="<img src=x onerror=alert(1)>"),
+                self.ROWS[1]]
+        self.assertNotIn("<img", self.html(rows))
+
+
 class TestEveryAddressAsksForItself(unittest.TestCase):
     """`--source all`. A box holding a service address beside its own has a
     path per address, and the ordinary run leaves from whichever the kernel

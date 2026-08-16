@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 174
+difference is which one it puts at the top, and that is the whole product: 175
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1358,11 +1358,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **39** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **174** | Distinct conclusions it can reach and state in plain language. 143 are faults; 31 are context, like which switch port you're on. |
-| **Ranked causes** | **143** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1427 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **175** | Distinct conclusions it can reach and state in plain language. 144 are faults; 31 are context, like which switch port you're on. |
+| **Ranked causes** | **144** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1435 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 174 findings are the useful figure** if you want to know what the tool can
+**The 175 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2155,7 +2155,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1427 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1435 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2489,15 +2489,15 @@ catches a failure invisible to everything else. The interface can say 1500
 while something along the path silently drops full-size packets, so pings
 and SSH work fine while large transfers, file copies, TLS handshakes and VPN
 traffic stall. FaultOne sends do-not-fragment pings at descending sizes
-(interface MTU, then 1492/1427/1280/1000: the common tunnel sizes) and
+(interface MTU, then 1492/1435/1280/1000: the common tunnel sizes) and
 reports the largest that gets through:
 
 ```
 PATH MTU TO 8.8.8.8
    1500 bytes   blocked
    1492 bytes   blocked
-   1427 bytes   passes
-  -> largest that gets through: 1427  (interface is set to 1500)
+   1435 bytes   passes
+  -> largest that gets through: 1435  (interface is set to 1500)
 ```
 
 That gap is a PMTU blackhole and is reported critical. Skipped under
@@ -3647,7 +3647,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1427 tests, no dependencies, no network, a few seconds, so they run
+1435 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3726,7 +3726,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 174 findings with readable rules instead of
+> way out - and who owns it. Ranks 175 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

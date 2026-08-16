@@ -14,6 +14,7 @@ SPDX-License-Identifier: MIT
 """
 
 import ast
+import errno
 import importlib.util
 import inspect
 import json
@@ -6672,6 +6673,109 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         traced peer spent a day being right and invisible."""
         self.assertIn("z.owns_cause", nd.VIEWER_TEMPLATE)
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
+
+
+class TestRefusedAndTimedOutAreTwoFaults(unittest.TestCase):
+    """HAProxy grades every health check into a small enum, and the two that
+    matter most here are `L4CON` and `L4TOUT`: refused means nothing is
+    listening, timed out means something is and it is not completing. They send
+    a reader to opposite places.
+
+    Both arrived here as one string on one field, and the caller returned early
+    on it with no finding at all. A box that would not finish a connection to
+    its own listener reported nothing, under a verdict reading "the service is
+    up and nothing is reaching it".
+    """
+
+    def dial(self, refusal, error="timed out", quick=False):
+        mod = fresh()
+        serving(mod, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                     "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                     "ESTAB 0 0 10.0.0.5:443 198.51.100.1:52000\n")
+        mod.cmd_own_http = (lambda port, address="127.0.0.1", tls=False, timeout=5:
+                            {"ok": False, "cmd": "HEAD /", "port": port,
+                             "host": address, "tls": tls,
+                             "unreachable_locally": error, "refusal": refusal})
+        return mod.diagnose(quick=quick, target="8.8.8.8", check_ports=None,
+                            baseline=None)
+
+    def test_the_classifier_tells_the_three_apart(self):
+        import socket as _s
+        self.assertEqual(nd.why_it_would_not_connect(_s.timeout("timed out")), "timeout")
+        self.assertEqual(nd.why_it_would_not_connect(
+            ConnectionRefusedError(errno.ECONNREFUSED, "refused")), "refused")
+        self.assertEqual(nd.why_it_would_not_connect(
+            OSError(errno.EADDRNOTAVAIL, "no")), "no such address")
+        self.assertIsNone(nd.why_it_would_not_connect(OSError("something else")))
+
+    def test_the_collector_records_the_classification_itself(self):
+        """The tests above hand the classification in, so none of them proves
+        the collector produces it. This runs the real `cmd_own_http` with the
+        socket replaced, which is the only place the two connect sites are
+        actually exercised.
+        """
+        import socket as _s
+        for kind, raised in (("timeout", _s.timeout("timed out")),
+                             ("refused", ConnectionRefusedError(errno.ECONNREFUSED, "no"))):
+            with self.subTest(kind=kind):
+                mod = fresh()
+
+                def refuse(_a, _p, _t, _e=raised):
+                    raise _e
+                mod.connect_from = refuse
+                # fresh() stubs every collector, so calling the name would
+                # reach the stub and prove nothing. Rebinding the real code
+                # object against this module's globals runs the shipped
+                # function against the socket replaced above.
+                real = types.FunctionType(nd.cmd_own_http.__code__, mod.__dict__,
+                                          "cmd_own_http",
+                                          nd.cmd_own_http.__defaults__)
+                got = real(443)
+                self.assertEqual(got["refusal"], kind)
+                self.assertTrue(got["unreachable_locally"])
+
+    def test_a_handshake_that_times_out_to_our_own_listener_is_critical(self):
+        rep = self.dial("timeout")
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "own_service_not_accepting")
+        self.assertEqual(found["severity"], "critical")
+        self.assertEqual(rep["verdict"]["based_on"][0], "own_service_not_accepting")
+
+    def test_and_the_verdict_stops_saying_the_service_is_up(self):
+        """The wrong answer this exists to remove."""
+        self.assertNotIn("The service is up",
+                         self.dial("timeout")["verdict"]["headline"])
+
+    def test_it_says_nothing_was_refused_so_something_is_listening(self):
+        """The whole distinction, in the sentence. A refusal and a timeout look
+        the same to anyone reading "could not connect", and they are opposite
+        problems."""
+        found = next(f for f in self.dial("timeout")["findings"]
+                     if f["code"] == "own_service_not_accepting")
+        self.assertIn("Nothing was refused", found["message"])
+        self.assertIn("accept queue", found["message"])
+
+    def test_a_refusal_stays_with_the_check_that_says_it_better(self):
+        """Refused means nothing is listening on that address, which is what
+        `service_address_unserved` is for and says with the address check's own
+        evidence behind it. Two findings for one fault is worse than one."""
+        codes = [f["code"] for f in self.dial("refused")["findings"]]
+        self.assertNotIn("own_service_not_accepting", codes)
+
+    def test_the_real_unserved_address_scenario_still_reports_once(self):
+        mod = fresh()
+        setup, kwargs = S["service_address_unserved"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        codes = [f["code"] for f in rep["findings"]]
+        self.assertIn("service_address_unserved", codes)
+        self.assertNotIn("own_service_not_accepting", codes)
+
+    def test_a_quick_run_does_not_pretend_to_have_asked(self):
+        """The own-service checks are among the slow parts `--quick` skips, so
+        a quick run has no answer here rather than a clean one."""
+        self.assertNotIn("own_service_not_accepting",
+                         [f["code"] for f in self.dial("timeout", quick=True)["findings"]])
 
 
 class TestWhatChangedSinceTheLastVisit(unittest.TestCase):
@@ -17423,6 +17527,16 @@ def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
                                              "stdout": "", "interfaces": []}
         base = nd.cmd_link_modes
         nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+@scenario("own_service_not_accepting")
+def _(nd):
+    """Listening on 443, and a connection from this box to itself times out."""
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.1:52000\n")
+    nd.cmd_own_http = lambda port, address="127.0.0.1", tls=False, timeout=5: {
+        "ok": False, "cmd": "HEAD /", "port": port, "host": address, "tls": tls,
+        "unreachable_locally": "timed out", "refusal": "timeout"}
 
 @scenario("target_is_discarded", target="192.0.2.9")
 def _(nd):

@@ -1677,6 +1677,28 @@ def connect_from(address, port, timeout):
 _NO_SUCH_ADDRESS = {errno.EADDRNOTAVAIL, errno.EINVAL}
 
 
+def why_it_would_not_connect(exc):
+    """Refused, timed out, or the address is not here.
+
+    Three different faults that a single "could not connect" hides, and the
+    distinction HAProxy grades every health check by: refused means nothing is
+    listening, and timed out means something is and it is not completing. They
+    send a reader to opposite places.
+
+    Only the classification lives here. What each one means is decided where
+    the listener is known, because a refusal on an address this box does not
+    hold is a different sentence from one on an address it does.
+    """
+    if isinstance(exc, socket.timeout):
+        return "timeout"
+    code = getattr(exc, "errno", None)
+    if code == errno.ECONNREFUSED:
+        return "refused"
+    if code in _NO_SUCH_ADDRESS:
+        return "no such address"
+    return None
+
+
 def der_validity(der):
     """(notBefore, notAfter) as dates, read out of the certificate's own bytes.
 
@@ -1739,6 +1761,7 @@ def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
         connected = time.monotonic()
     except (OSError, ValueError) as e:
         result["unreachable_locally"] = str(e)
+        result["refusal"] = why_it_would_not_connect(e)
         return result
     try:
         sock = raw
@@ -1813,6 +1836,7 @@ def cmd_own_tls(port, timeout=5, address="127.0.0.1"):
         raw = connect_from(address, port, timeout)
     except (OSError, ValueError) as e:
         result["unreachable_locally"] = str(e)
+        result["refusal"] = why_it_would_not_connect(e)
         return result
     connected = time.monotonic()
     try:
@@ -6984,6 +7008,14 @@ VERDICT_RULES = [
      "the edge, the load balancer in front, or the path to them."),
     # Above the certificate findings: a service that answers nothing is more
     # broken than one whose certificate is wrong, and a client meets it first.
+    # Above the findings that need a completed connection, because it is the
+    # reason they could not run: nothing below here got as far as a handshake.
+    ("own_service_not_accepting", "the service on this box, or a rule in front of it",
+     "This box cannot finish a connection to its own listener",
+     "Nothing was refused, so something is listening and is not completing the "
+     "handshake. Check the accept queue and whether a rule on this box is dropping "
+     "traffic to that port - a packet that cannot cross from this box to itself will "
+     "not cross from a client."),
     ("own_service_silent", "the service on this box, not the network",
      "The service accepts connections and answers nothing",
      "The port is open, the handshake completes and no client gets a reply. "
@@ -7724,6 +7756,7 @@ FINDING_SIDE.update({
     "trace_took_another_route": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
+    "own_service_not_accepting": "downstream",
     "own_service_silent": "downstream",
     "own_service_erroring": "downstream",
     "own_service_not_http": "downstream",
@@ -7916,6 +7949,7 @@ STAGE_RULES = [
                "tls_handshake_failed", "tls_expired", "tls_not_yet_valid",
                "own_tls_expired", "own_tls_handshake_failed",
                "own_service_silent", "own_service_erroring",
+               "own_service_not_accepting",
                "own_service_upstream_error"},
      {"port_refused", "port_timeout", "ports_truncated", "tls_expiring", "tls_handshake_slow", "family_unreachable",
       "own_tls_expiring", "own_tls_untrusted", "own_service_not_http",
@@ -8526,6 +8560,7 @@ CAUSE_OWNED_BY_BOX = frozenset({
     "close_wait_backlog",
     "fd_pressure",
     "own_service_erroring",
+    "own_service_not_accepting",
     "own_service_silent",
     "own_tls_expired",
     "own_tls_expiring",
@@ -9061,6 +9096,7 @@ SHARED_FAMILY = {
     "own_tls_untrusted": "own_cert",
     "own_service_erroring": "own_service",
     "own_service_not_http": "own_service",
+    "own_service_not_accepting": "own_service",
     "own_service_silent": "own_service",
     "own_service_upstream_error": "own_service",
     # This box failing to take delivery, counted in two places. The kernel's
@@ -11373,7 +11409,32 @@ def _own_service_timing(res, port, findings):
 def _own_service_findings(res, port, findings, owners=()):
     """One listener's answer, or its refusal to give one."""
     if res.get("unreachable_locally"):
-        return                      # bound elsewhere; nothing was asked
+        # Refused and timed out are two different faults, and collapsing them
+        # meant a box that would not complete a connection to its own listener
+        # produced no finding at all, under a verdict reading "the service is
+        # up and nothing is reaching it".
+        #
+        # Refused stays silent here on purpose: it means nothing is listening
+        # on that address, which `service_address_unserved` says better and
+        # with the address check's own evidence behind it.
+        if res.get("refusal") == "timeout":
+            findings.append({
+                "severity": "critical",
+                "layer": 4,
+                "code": "own_service_not_accepting",
+                "message": (
+                    f"This box is listening on port {port} and did not finish a "
+                    f"connection to its own listener: the handshake was started from "
+                    f"here and timed out."
+                    + _that_service_is(owners, port)
+                    + " Nothing was refused, so something is listening and is not "
+                      "completing. A packet that cannot cross from this box to itself "
+                      "will not cross from a client either, and every check that needs "
+                      "a connection to this service is below this line and did not "
+                      "run. Look at the accept queue, and at whether a rule on this "
+                      "box is dropping traffic to that port."),
+            })
+        return
     _own_service_timing(res, port, findings)
     if res.get("silent"):
         findings.append({
@@ -14320,6 +14381,7 @@ FINDING_HINT = {
     "tls_intercepted": "certificate",
 
     # --- something is listening, and it is the problem ---------------------
+    "own_service_not_accepting": "this box",
     "own_service_silent": "the service",
     "own_service_erroring": "the service",
     "own_service_not_http": "the service",

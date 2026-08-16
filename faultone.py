@@ -5611,13 +5611,23 @@ def _link_modes_linux(base="/sys/class/net"):
 MEDIA_SPEED_RE = re.compile(r"(\d+)base", re.I)
 
 
-def _link_modes_bsd():
-    """macOS/BSD: pull mtu and the negotiated media line out of `ifconfig -a`."""
-    res = run(["ifconfig", "-a"])
-    if not res.get("ok"):
-        return {}
+# What `status:` reads on a link that is actually carrying. Held as whole words
+# because the interesting one is a substring of its own negation: "inactive"
+# contains "active", and a link reported up while it is down is worse than one
+# reported unknown. "associated" is the wireless spelling of the same state.
+IFCONFIG_LINK_UP = frozenset(("active", "associated"))
+
+
+def parse_ifconfig_modes(text):
+    """mtu, media and link state per interface, out of `ifconfig -a` text.
+
+    Split from the command so it can be handed a fixture and asked what it
+    makes of it, the same way parse_server_limits is - the state read here is
+    what the baseline diff compares between visits, and it was previously only
+    reachable by stubbing the command runner.
+    """
     modes, current = {}, None
-    for line in res.get("stdout", "").splitlines():
+    for line in (text or "").splitlines():
         head = re.match(r"^([A-Za-z0-9_.\-]+):\s", line)
         if head:
             current = head.group(1)
@@ -5640,10 +5650,23 @@ def _link_modes_bsd():
             elif "half-duplex" in stripped:
                 modes[current]["duplex"] = "half"
         elif stripped.startswith("status:"):
-            active = "active" in stripped
+            # Taken as a whole word. Tested as a substring, "status: inactive"
+            # answered yes - so a dead link read as a live one, and the
+            # baseline diff, whose whole job is to notice a link going down
+            # between two visits, compared up against up and saw no change.
+            state = stripped.split(":", 1)[1].strip().lower()
+            active = state in IFCONFIG_LINK_UP
             modes[current]["carrier"] = active
             modes[current]["operstate"] = "up" if active else "down"
     return modes
+
+
+def _link_modes_bsd():
+    """macOS/BSD: pull mtu and the negotiated media line out of `ifconfig -a`."""
+    res = run(["ifconfig", "-a"])
+    if not res.get("ok"):
+        return {}
+    return parse_ifconfig_modes(res.get("stdout", ""))
 
 
 def cmd_link_modes():

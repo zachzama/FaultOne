@@ -1990,6 +1990,49 @@ class TestSysfsCounterReading(unittest.TestCase):
     def test_no_sysfs_tree_yields_nothing(self):
         self.assertEqual(nd._link_modes_linux("/nonexistent/path"), {})
 
+    # ---- the other platform's spelling of the same state ------------------
+
+    IFCONFIG = ("en0: flags=8863<UP,BROADCAST,RUNNING,MULTICAST> mtu 1500\n"
+                "\tmedia: autoselect (1000baseT <full-duplex>)\n"
+                "\tstatus: active\n"
+                "en1: flags=8863<UP,BROADCAST,RUNNING,MULTICAST> mtu 1500\n"
+                "\tmedia: autoselect (100baseTX <full-duplex>)\n"
+                "\tstatus: inactive\n"
+                "en2: flags=8863<UP,BROADCAST> mtu 9000\n"
+                "\tmedia: autoselect\n"
+                "\tstatus: no carrier\n")
+
+    def test_inactive_is_not_active_however_it_is_spelled(self):
+        """"inactive" contains "active", so a substring test answered yes on a
+        dead link - and a link reported up while it is down is worse than one
+        reported unknown."""
+        modes = nd.parse_ifconfig_modes(self.IFCONFIG)
+        self.assertTrue(modes["en0"]["carrier"])
+        self.assertFalse(modes["en1"]["carrier"])
+        self.assertFalse(modes["en2"]["carrier"])
+        self.assertEqual([modes[n]["operstate"] for n in ("en0", "en1", "en2")],
+                         ["up", "down", "down"])
+
+    def test_a_link_going_down_between_visits_is_a_change(self):
+        """What the state is read for. Read as up either way, the baseline diff
+        compares up against up and reports that nothing happened."""
+        before = nd.parse_ifconfig_modes(self.IFCONFIG)["en0"]["operstate"]
+        after = nd.parse_ifconfig_modes(
+            self.IFCONFIG.replace("status: active", "status: inactive"))["en0"]["operstate"]
+        self.assertNotEqual(before, after)
+
+    def test_the_wireless_spelling_of_up_is_up(self):
+        modes = nd.parse_ifconfig_modes(
+            "wlan0: flags=8843<UP> mtu 1500\n\tstatus: associated\n")
+        self.assertTrue(modes["wlan0"]["carrier"])
+
+    def test_the_rest_of_the_ifconfig_reading_is_unchanged(self):
+        modes = nd.parse_ifconfig_modes(self.IFCONFIG)
+        self.assertEqual(modes["en0"]["speed_mbps"], 1000)
+        self.assertEqual(modes["en0"]["duplex"], "full")
+        self.assertEqual(modes["en2"]["mtu"], 9000)
+        self.assertEqual(nd.parse_ifconfig_modes(""), {})
+
     def test_unknown_counters_survive_into_the_interface_summary(self):
         base = self.build(present=["rx_packets", "tx_packets"])
         nd._read_link_stats = lambda: (nd._link_stats_linux(base), "test")

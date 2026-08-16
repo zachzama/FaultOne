@@ -5981,6 +5981,13 @@ PANEL_HELP = {
                 "to a packet, and a pair of reads says which rules actually fired while the "
                 "probes were in flight. Needs root, and says nothing without it.",
     },
+    "proxy_reachable": {
+        "label": "can this box reach the proxy it is told to use", "layer": 7,
+        "desc": "One TCP connect to each configured proxy, nothing sent and nothing read. "
+                "A proxy that refuses or does not answer breaks every application here "
+                "while ping, traceroute and DNS all pass, because none of those read the "
+                "setting - which is the shape of clean report this exists to stop.",
+    },
     "proxy_stats": {
         "label": "the proxy's own view of its backends", "layer": 7,
         "desc": "Which backends the proxy on this box has taken out of rotation, which "
@@ -7142,6 +7149,17 @@ VERDICT_RULES = [
     # broken than one whose certificate is wrong, and a client meets it first.
     # Above the findings that need a completed connection, because it is the
     # reason they could not run: nothing below here got as far as a handshake.
+    ("answered_closer_than_the_path", "something between here and the target",
+     "Something nearer than the target is answering for it",
+     "A handshake that finished sooner than the path allows, and a reply from fewer "
+     "hops than the trace walked. That is what a transparent proxy looks like from "
+     "here, and it is usually policy rather than a fault - but everything below about "
+     "reaching that address describes the connection to whatever answered."),
+    ("proxy_unreachable", "the proxy this box is told to use, not the path to it",
+     "The proxy every application here is told to use does not answer",
+     "Nothing else on this report will show it: every probe here goes direct and does "
+     "not read the proxy setting, so they pass while nothing on the box can load "
+     "anything. Check the proxy is up and that this box is allowed to reach it."),
     ("proxy_backend_down", "the backend the proxy stopped using, not this box",
      "The proxy here has taken backends out of rotation",
      "The proxy's own health checks decided these are not answering. It knows which "
@@ -7895,6 +7913,8 @@ FINDING_SIDE.update({
     "own_tls_expired": "downstream",
     "own_service_not_accepting": "downstream",
     "proxy_backend_down": "upstream",
+    "proxy_unreachable": "upstream",
+    "answered_closer_than_the_path": "upstream",
     "own_service_silent": "downstream",
     "own_service_erroring": "downstream",
     "own_service_not_http": "downstream",
@@ -8077,7 +8097,8 @@ STAGE_RULES = [
       "tcp_flow_sendbuf_limited", "tcp_flow_receiver_limited",
       # What sits between this site and the internet. Neither is a fault on
       # its own, and both change what the way out can do.
-      "cgnat", "double_nat", "nat_observed", "proxy_backend_down"}),
+      "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
+      "proxy_unreachable", "answered_closer_than_the_path"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -8154,6 +8175,8 @@ RAW_STAGE = {
     "qdisc": "link",
     # What the proxy thinks of what it connects out to.
     "proxy_stats": "internet",
+    # Whether the proxy this box is told to use answers at all.
+    "proxy_reachable": "internet",
     # Egress rules are the way out, which is the internet stage.
     "firewall": "internet",
     # This box's own service and the certificate it serves, both read from the
@@ -10369,6 +10392,111 @@ CHECK_MEANS = {
     "L7STS": "the application answered, with a status the check rejects",
     "L7OK": "the application answered correctly",
 }
+
+
+# A handshake that completes in less than this share of the round trip did not
+# make the round trip. Generous on purpose: a legitimate cache or edge node is
+# genuinely nearer than the name it serves, and the claim being made is only
+# that something closer answered - not that anybody is doing anything wrong.
+CLOSER_THAN_PATH_PCT = 40
+# And a floor under it, because on a path of a couple of milliseconds every
+# measurement is noise and a share of nothing means nothing.
+CLOSER_THAN_PATH_FLOOR_MS = 20
+# How many hops short of the traced path a reply can arrive from before it is
+# somebody else answering. One or two is ordinary: the trace and the reply can
+# take different routes, and the initial TTL is assumed rather than known.
+TTL_SHORTFALL_HOPS = 3
+
+
+def answered_closer_than_the_path(raw, hops, port_results=()):
+    """Signs that something nearer than the target completed the connection.
+
+    Two instruments, deliberately, because they fail in different ways and
+    agreeing is what turns either into a finding.
+
+    Timing: a TCP handshake to a host 80ms away that completes in 2ms did not
+    reach that host. Round trips are noisy and a nearby cache is a real thing,
+    so this alone is a suggestion.
+
+    Distance: a reply whose TTL says it crossed two routers, on a path the
+    trace walked twelve of, came from something two hops away. Discrete rather
+    than noisy, and wrong in different circumstances - an assumed initial TTL,
+    an asymmetric return path.
+
+    Neither is an accusation. Transparent interception is usually somebody's
+    policy rather than a fault, and the report's job is to say the connection
+    is not ending where the reader thinks it is.
+    """
+    out = {}
+    reached = hops and hops[-1].get("host") and not hops[-1].get("timed_out")
+    # The round trip the ping measured, falling back to the last hop the trace
+    # reached: a box with ICMP filtered has no ping figure and still has a
+    # traced path, and the comparison is worth making on either.
+    rtt = (parse_ping_stats(raw.get("ping_internet") or {}) or {}).get("avg_ms")
+    if rtt is None and reached:
+        rtt = (hops[-1] or {}).get("avg_ms")
+    quickest = [p for p in (port_results or [])
+                if p.get("open") and p.get("connect_ms") is not None]
+    if rtt and rtt >= CLOSER_THAN_PATH_FLOOR_MS and quickest:
+        soonest = min(quickest, key=lambda p: p["connect_ms"])
+        share = round(100.0 * soonest["connect_ms"] / rtt, 1)
+        if share <= CLOSER_THAN_PATH_PCT:
+            out["timing"] = {"connect_ms": soonest["connect_ms"], "rtt_ms": rtt,
+                             "share_pct": share, "port": soonest.get("port")}
+    implied = hops_from_ttl(parse_ping_ttl(raw.get("ping_internet") or {}))
+    if implied and reached:
+        came_from, assumed = implied
+        walked = len(hops)
+        if walked - came_from >= TTL_SHORTFALL_HOPS:
+            out["distance"] = {"replied_from": came_from, "traced": walked,
+                               "ttl_assumed": assumed}
+    return out or None
+
+
+def _check_answered_closer(raw, findings, target, hops, port_results):
+    """Something between here and the target answering as the target.
+
+    The one interception check that needs neither TLS nor a certificate.
+    `tls_intercepted` reads the issuer of what came back, which works and only
+    works where there is a handshake to read and a name to recognise. This is
+    the same fault seen from the outside of the envelope, on any port.
+    """
+    seen = answered_closer_than_the_path(raw, hops, port_results) or {}
+    timing, distance = seen.get("timing"), seen.get("distance")
+    # Both, or nothing. Either alone is a lead and neither is worth a finding:
+    # a round trip is noisy and a nearby cache really is nearer than the name
+    # it serves, and an initial TTL is assumed rather than known. They are
+    # wrong under different conditions, so the two agreeing is the whole of
+    # what makes this sayable - and the alternative is a warning on every box
+    # with an edge node in front of it.
+    if not (timing and distance):
+        return
+    parts = []
+    if timing:
+        parts.append(
+            "the TCP handshake on port %s finished in %sms on a path with a %sms round "
+            "trip, which is %s%% of it" % (timing["port"], timing["connect_ms"],
+                                           round(timing["rtt_ms"]), timing["share_pct"]))
+    if distance:
+        parts.append(
+            "the reply arrived having crossed %d router(s) on a path the trace walked "
+            "%d of, counted from a starting TTL of %d"
+            % (distance["replied_from"], distance["traced"], distance["ttl_assumed"]))
+    findings.append({
+        "severity": "warning",
+        "layer": 4,
+        "code": "answered_closer_than_the_path",
+        "message": (
+            f"Something nearer than {target} appears to be answering for it: "
+            + ", and ".join(parts) + ". "
+            + "Two independent readings agree, which is what makes this worth "
+              "saying rather than a guess: one is a timing and the other is a hop "
+              "count, and they are wrong under different conditions. "
+            + "This is what a transparent proxy looks like from here, and it is usually "
+              "somebody's policy rather than a fault. It matters because everything "
+              "below about reaching that address describes the connection to whatever "
+              "answered, not to the host you named."),
+    })
 
 
 def _check_proxy_backends(raw, findings):
@@ -14290,6 +14418,74 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                 })
 
 
+_PROXY_URL = re.compile(r"^(?:[a-z]+://)?(?:[^@/]*@)?\[?([^\]/:]+)\]?(?::(\d+))?",
+                        re.I)
+
+
+def proxy_endpoints(cfg):
+    """Every host and port this box is told to reach the internet through.
+
+    Deduplicated, because the same proxy is usually named three times - once
+    for http, once for https, once in the system settings - and probing it
+    three times would report one dead proxy as three faults.
+
+    A PAC file names no endpoint here on purpose. Working out which proxy it
+    would choose means running its JavaScript, and this does not have a
+    JavaScript engine or any business acquiring one.
+    """
+    found = {}
+    values = list((cfg.get("env") or {}).values())
+    sysc = cfg.get("system") or {}
+    for key in ("HTTPSProxy", "HTTPProxy"):
+        if sysc.get(key):
+            port = sysc.get(key.replace("Proxy", "Port"))
+            values.append("%s:%s" % (sysc[key], port) if port else sysc[key])
+    for value in values:
+        m = _PROXY_URL.match((value or "").strip())
+        if not m or not m.group(1):
+            continue
+        host = m.group(1)
+        port = int(m.group(2)) if m.group(2) else 8080
+        found[(host, port)] = {"host": host, "port": port}
+    return list(found.values())
+
+
+def cmd_proxy_reachable(cfg, timeout=3):
+    """Can this box open a connection to the proxy it is told to use.
+
+    One TCP connect, no request sent and nothing read. The point is not to
+    exercise the proxy - it is that a proxy which refuses or does not answer
+    breaks every application on the box while ping, traceroute and DNS all
+    pass, which is the shape of report this check exists to stop producing.
+    """
+    endpoints = proxy_endpoints(cfg or {})
+    if not endpoints:
+        return {"ok": False, "cmd": "tcp connect (proxy)", "applicable": False,
+                "error": "no proxy endpoint to probe"}
+    tried = []
+    for where in endpoints:
+        started = time.monotonic()
+        try:
+            connect_from(where["host"], where["port"], timeout).close()
+            tried.append(dict(where, reachable=True,
+                              connect_ms=round((time.monotonic() - started) * 1000, 1)))
+        except (OSError, ValueError) as exc:
+            tried.append(dict(where, reachable=False,
+                              refusal=why_it_would_not_connect(exc) or "unreachable"))
+    return {"ok": True, "cmd": "tcp connect (proxy)", "proxies": tried,
+            "stdout": "\n".join(
+                "%s:%s  %s" % (t["host"], t["port"],
+                               "reachable" if t["reachable"] else t.get("refusal"))
+                for t in tried)}
+
+
+WHAT_A_REFUSAL_MEANS = {
+    "refused": "refused the connection, so nothing is listening on that port",
+    "timeout": "did not answer, so it is either gone or being filtered on the way",
+    "no such address": "is not an address this box can reach at all",
+}
+
+
 def _check_proxy(raw, findings, target):
     """Say when the checks and the traffic take different routes.
 
@@ -14331,6 +14527,32 @@ def _check_proxy(raw, findings, target):
                         if sysc.get("ProxyAutoConfigURLString") else ""))
     if wpad:
         where.append("discovered automatically (WPAD)")
+
+    # And whether it answers. Reading the setting was always the easy half:
+    # the report says every check below describes the direct route, and then
+    # said nothing about the route that is actually in use.
+    raw["proxy_reachable"] = cmd_proxy_reachable(cfg)
+    dead = [p for p in (raw["proxy_reachable"].get("proxies") or [])
+            if not p["reachable"]]
+    if dead:
+        worst = dead[0]
+        findings.append({
+            "severity": "critical",
+            "layer": 7,
+            "code": "proxy_unreachable",
+            "message": (
+                f"This box is told to reach the internet through {worst['host']}:"
+                f"{worst['port']}, and that address "
+                + WHAT_A_REFUSAL_MEANS.get(worst.get("refusal"),
+                                           "could not be connected to")
+                + ". Every application here that honours the setting is failing right "
+                  "now, and nothing else on this report will show it: a ping, a "
+                  "traceroute and a TCP connect to the target all go direct and do not "
+                  "read that setting, so they can pass while nothing on the box can "
+                  "load anything."
+                + (f" {len(dead)} configured proxies are unreachable."
+                   if len(dead) > 1 else "")),
+        })
 
     findings.append({
         "severity": "ok",
@@ -14585,6 +14807,7 @@ FINDING_HINT = {
     # --- something is listening, and it is the problem ---------------------
     "own_service_not_accepting": "this box",
     "proxy_backend_down": "the backend",
+    "proxy_unreachable": "the app",
     "own_service_silent": "the service",
     "own_service_erroring": "the service",
     "own_service_not_http": "the service",
@@ -14846,6 +15069,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         say(f"checking {len(check_ports)} port(s) on {target}")
     port_results = _check_ports(raw, findings, target, check_ports, quick,
                                 speculative=ports_speculative)
+    # After the port checks, because it compares how long a handshake took
+    # against how long the path is, and those timings are what they produce.
+    # Called earlier it read an empty list and concluded nothing, silently.
+    _check_answered_closer(raw, findings, target, hops, port_results)
 
     # Everything else is done; close the counter window and report on it.
     if counter_window:

@@ -6675,6 +6675,141 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestSomethingInTheMiddle(unittest.TestCase):
+    """Interception was covered in exactly one way: `tls_intercepted` reads the
+    issuer of the certificate that came back and matches it against fifteen
+    known products. That works, and only works where there is a handshake to
+    read and a name somebody thought to list.
+
+    These two see the same thing from outside the envelope, on any port, with
+    no certificate involved - and the third checks the proxy a box was told to
+    use, which had been read from the environment and never once dialled.
+    """
+
+    # ---- something nearer than the target answered ------------------------
+
+    def inputs(self, connect_ms=2.0, rtt=80.0, ttl=62, traced=5, open_=True):
+        hops = [{"host": "10.0.0.%d" % (i + 1), "avg_ms": rtt, "timed_out": False}
+                for i in range(traced)]
+        raw = {"ping_internet": {"ok": True, "stdout":
+                                 "64 bytes from x: icmp_seq=1 ttl=%d time=%s ms\n"
+                                 "rtt min/avg/max/mdev = %s/%s/%s/1.0 ms\n"
+                                 % (ttl, rtt, rtt, rtt, rtt)}}
+        return raw, hops, [{"port": 443, "open": open_, "connect_ms": connect_ms}]
+
+    def signals(self, **kw):
+        return nd.answered_closer_than_the_path(*self.inputs(**kw))
+
+    def finding_for(self, **kw):
+        raw, hops, ports = self.inputs(**kw)
+        out = []
+        nd._check_answered_closer(raw, out, "8.8.8.8", hops, ports)
+        return out
+
+    def test_both_readings_see_it_on_an_intercepted_path(self):
+        seen = self.signals()
+        self.assertIn("timing", seen)
+        self.assertIn("distance", seen)
+
+    def test_a_handshake_that_took_the_whole_path_is_not_it(self):
+        self.assertNotIn("timing", self.signals(connect_ms=78.0) or {})
+
+    def test_a_reply_from_the_far_end_is_not_it(self):
+        """A TTL of 59 off a 64 start is five hops, which is the path. The
+        shortfall is what matters, not the absolute number."""
+        self.assertNotIn("distance", self.signals(ttl=59) or {})
+
+    def test_a_hop_or_two_short_is_ordinary_and_not_reported(self):
+        """The trace and the reply can take different routes, and the initial
+        TTL is assumed rather than known. A bar of one would fire on both of
+        those, on paths where nothing is intercepting anything."""
+        # Traced five hops. A reply from four is one short, from three is two
+        # short, and neither is reported. From two it is three short, which is
+        # the documented bar, and it fires at the bar rather than past it.
+        self.assertNotIn("distance", self.signals(ttl=60) or {})   # 4 of 5
+        self.assertNotIn("distance", self.signals(ttl=61) or {})   # 3 of 5
+        self.assertIn("distance", self.signals(ttl=62) or {})      # 2 of 5
+
+
+    def test_a_short_path_is_all_noise_and_says_nothing(self):
+        """On a two-millisecond path every measurement is jitter, and a share
+        of nothing means nothing."""
+        self.assertIsNone(self.signals(connect_ms=0.4, rtt=2.0, ttl=62, traced=5)
+                          and (self.signals(connect_ms=0.4, rtt=2.0) or {}).get("timing"))
+
+    def test_a_closed_port_is_not_a_handshake(self):
+        self.assertNotIn("timing", self.signals(open_=False) or {})
+
+    def test_one_reading_alone_never_produces_a_finding(self):
+        """The whole design. Either alone is a lead: a round trip is noisy and
+        a nearby cache really is nearer than the name it serves, and an initial
+        TTL is assumed rather than known. They are wrong under different
+        conditions, so agreeing is what makes it sayable."""
+        for only, kw in (("timing", {"ttl": 59}), ("distance", {"connect_ms": 78.0})):
+            with self.subTest(only=only):
+                self.assertEqual(set(self.signals(**kw) or {}), {only},
+                                 "the fixture does not isolate one reading")
+                self.assertEqual(self.finding_for(**kw), [],
+                                 "one reading produced a finding on its own")
+        self.assertEqual(len(self.finding_for()), 1, "and both together do")
+
+    def test_the_finding_says_both_agreed_and_why_that_matters(self):
+        mod = fresh()
+        setup, kwargs = S["answered_closer_than_the_path"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "answered_closer_than_the_path")
+        self.assertIn("Two independent readings agree", found["message"])
+        self.assertIn("transparent proxy", found["message"])
+        self.assertIn("usually somebody's policy rather than a fault",
+                      found["message"])
+
+    # ---- the proxy this box was told to use -------------------------------
+
+    def test_one_proxy_named_three_times_is_probed_once(self):
+        """http_proxy, https_proxy and the system setting usually name the same
+        thing. Probing it three times reports one dead proxy as three faults."""
+        found = nd.proxy_endpoints({
+            "env": {"http_proxy": "http://10.0.0.9:3128",
+                    "https_proxy": "http://10.0.0.9:3128"},
+            "system": {"HTTPSProxy": "10.0.0.9", "HTTPSPort": "3128"}})
+        self.assertEqual(found, [{"host": "10.0.0.9", "port": 3128}])
+
+    def test_the_shapes_a_proxy_setting_comes_in(self):
+        for value, expected in (
+                ("http://10.0.0.9:3128", ("10.0.0.9", 3128)),
+                ("proxy.corp:8080", ("proxy.corp", 8080)),
+                ("http://user:pw@10.0.0.9:3128", ("10.0.0.9", 3128)),
+                ("proxy.corp", ("proxy.corp", 8080))):
+            with self.subTest(value=value):
+                got = nd.proxy_endpoints({"env": {"http_proxy": value}})
+                self.assertEqual((got[0]["host"], got[0]["port"]), expected)
+
+    def test_a_pac_file_names_no_endpoint_to_probe(self):
+        """Working out which proxy a PAC would choose means running its
+        JavaScript, and this has no JavaScript engine and no business getting
+        one. Better to probe nothing than to probe a guess."""
+        self.assertEqual(nd.proxy_endpoints(
+            {"system": {"ProxyAutoConfigEnable": "1",
+                        "ProxyAutoConfigURLString": "http://wpad/proxy.pac"}}), [])
+
+    def test_a_dead_proxy_is_critical_and_says_why_nothing_else_shows_it(self):
+        mod = fresh()
+        setup, kwargs = S["proxy_unreachable"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next(f for f in rep["findings"] if f["code"] == "proxy_unreachable")
+        self.assertEqual(found["severity"], "critical")
+        self.assertIn("nothing else on this report will show it", found["message"])
+        self.assertIn("refused", found["message"])
+        self.assertEqual(rep["verdict"]["based_on"][0], "proxy_unreachable")
+
+    def test_a_box_with_no_proxy_configured_probes_nothing(self):
+        got = nd.cmd_proxy_reachable({"env": {}, "system": {}})
+        self.assertIs(got["applicable"], False)
+
+
 class TestTheFileDescribesTheToolItIs(unittest.TestCase):
     """The first thirty lines are the first thing a stranger reads.
 
@@ -12655,7 +12790,7 @@ class TestDocsMatchReality(unittest.TestCase):
             # table gained the process holding each socket, 35 with the
             # interface queues, 36 with the firewall rule counters, 37 with
             # the datagram tunnel count, 39 with the route to the target.
-            "collections": (40, [r"\*\*(\d+)\s+things are inspected",
+            "collections": (41, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -12737,6 +12872,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_firewall_counters": "Firewall rule counters, read either side of "
                                  "the probes",
         "cmd_haproxy_stats": "The proxy's own view of its backends",
+        "cmd_proxy_reachable": "Whether the proxy this box is told to use answers",
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
                      "holding and dropping",
         "cmd_socket_states": "TCP socket states",
@@ -13450,6 +13586,7 @@ class TestBareBox(unittest.TestCase):
         "cmd_own_http": (8080,),
         "cmd_path_mtu": ("8.8.8.8", 1500),
         "cmd_route_to": ("8.8.8.8",),
+        "cmd_proxy_reachable": ({},),
     }
 
     def bare(self, tools_exist=False):
@@ -16502,6 +16639,12 @@ def fresh():
     mod.cmd_haproxy_stats = lambda: {"ok": False, "cmd": "show stat",
                                      "applicable": False,
                                      "error": "not read in the suite"}
+    # A real TCP connect to whatever the fixture named as a proxy. Same reason
+    # as the two above: the suite must not depend on what is listening on the
+    # machine it runs on.
+    mod.cmd_proxy_reachable = lambda cfg, timeout=3: {
+        "ok": False, "cmd": "tcp connect (proxy)", "applicable": False,
+        "error": "not probed in the suite"}
     # ---- healthy baseline for every collector -------------------------
     mod.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr",
                                  "stdout": "2: eth0: <UP>\n    inet 10.0.0.5/24\n"}
@@ -17690,6 +17833,35 @@ PROXY_CSV = ("# pxname,svname,qcur,status,chkfail,chkdown,lastchg,downtime,"
              "api,web2,7,DOWN,3,2,412,930,L4TOUT\n"
              "api,web3,0,MAINT,0,0,7200,0,\n"
              "api,BACKEND,7,UP,,,,,\n")
+
+@scenario("proxy_unreachable")
+def _(nd):
+    """Told to use a proxy that refuses the connection."""
+    nd.cmd_proxy_config = lambda: {"ok": True, "cmd": "proxy configuration",
+                                   "code": 0, "stderr": "", "stdout": "",
+                                   "env": {"https_proxy": "http://10.0.0.9:3128"},
+                                   "system": {}}
+    nd.cmd_proxy_reachable = lambda cfg, timeout=3: {
+        "ok": True, "cmd": "tcp connect (proxy)", "stdout": "",
+        "proxies": [{"host": "10.0.0.9", "port": 3128, "reachable": False,
+                     "refusal": "refused"}]}
+
+@scenario("answered_closer_than_the_path", check_ports=["443"])
+def _(nd):
+    """A handshake far quicker than the path, and a reply from three hops in."""
+    trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  100.64.0.1 (100.64.0.1)  8.0 ms\n"
+              " 3  198.51.100.7 (198.51.100.7)  40.0 ms\n"
+              " 4  203.0.113.9 (203.0.113.9)  75.0 ms\n"
+              " 5  8.8.8.8 (8.8.8.8)  80.0 ms\n")
+    base = nd.cmd_ping
+    nd.cmd_ping = lambda t, c=4, w=2, _b=base: dict(
+        _b(t, c, w),
+        stdout="64 bytes from %s: icmp_seq=1 ttl=62 time=80.0 ms\n"
+               "4 packets transmitted, 4 received, 0%% packet loss\n"
+               "rtt min/avg/max/mdev = 80.0/80.0/80.0/1.0 ms\n" % t)
+    nd.cmd_check_port = lambda host, port, timeout=3, **kw: {
+        "ok": True, "cmd": "tcp connect", "port": int(port), "open": True,
+        "stdout": "", "connect_ms": 2.0}
 
 @scenario("proxy_backend_down")
 def _(nd):

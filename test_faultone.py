@@ -2244,6 +2244,111 @@ class TestTheSuiteSendsNothing(unittest.TestCase):
     test suite quietly acquires a dependency on the network it runs from.
     """
 
+    ALLOWED_HOSTS = ("127.", "::1", "localhost", "0.0.0.0", "::")
+
+    def _offbox(self, host):
+        """Loopback never leaves the box and cannot depend on the network the
+        suite runs from, which is the property being protected."""
+        host = "" if host is None else str(host)
+        return bool(host) and not host.startswith(self.ALLOWED_HOSTS)
+
+    def _watch(self, record):
+        """Booby-trap every way out: creating a socket that is not an ordinary
+        TCP or UDP one, connecting, sending to an address, and resolving a
+        name. Returns a restore callable.
+
+        Creation is watched because two of the four things that got past the
+        old check never connected: a raw ICMP socket, and a unix-domain one to
+        a service that may or may not exist on the machine running the suite.
+        """
+        import socket as _socket
+        real = {"init": _socket.socket.__init__,
+                "connect": _socket.socket.connect,
+                "connect_ex": _socket.socket.connect_ex,
+                "sendto": _socket.socket.sendto,
+                "gai": _socket.getaddrinfo}
+
+        def init(sock, *a, **kw):
+            fam = kw.get("family", a[0] if a else _socket.AF_INET)
+            kind = kw.get("type", a[1] if len(a) > 1 else _socket.SOCK_STREAM)
+            if kind == _socket.SOCK_RAW:
+                record.append("opened a raw socket")
+            elif fam not in (_socket.AF_INET, _socket.AF_INET6):
+                record.append("opened a %r socket" % fam)
+            return real["init"](sock, *a, **kw)
+
+        def target(addr):
+            return addr[0] if isinstance(addr, tuple) else addr
+
+        def connect(sock, addr, *a):
+            if self._offbox(target(addr)):
+                record.append("connected to %s" % target(addr))
+            return real["connect"](sock, addr, *a)
+
+        def connect_ex(sock, addr, *a):
+            if self._offbox(target(addr)):
+                record.append("connected to %s" % target(addr))
+            return real["connect_ex"](sock, addr, *a)
+
+        def sendto(sock, data, *a):
+            if a and self._offbox(target(a[-1])):
+                record.append("sent to %s" % target(a[-1]))
+            return real["sendto"](sock, data, *a)
+
+        def gai(host, port, *a, **kw):
+            for family in (_socket.AF_INET, _socket.AF_INET6):
+                try:
+                    _socket.inet_pton(family, str(host))
+                    return real["gai"](host, port, *a, **kw)
+                except (OSError, ValueError):
+                    pass
+            if self._offbox(host):
+                record.append("resolved %s" % host)
+            return real["gai"](host, port, *a, **kw)
+
+        _socket.socket.__init__ = init
+        _socket.socket.connect = connect
+        _socket.socket.connect_ex = connect_ex
+        _socket.socket.sendto = sendto
+        _socket.getaddrinfo = gai
+
+        def restore():
+            _socket.socket.__init__ = real["init"]
+            _socket.socket.connect = real["connect"]
+            _socket.socket.connect_ex = real["connect_ex"]
+            _socket.socket.sendto = real["sendto"]
+            _socket.getaddrinfo = real["gai"]
+        return restore
+
+    def test_no_scenario_reaches_anything(self):
+        """Every scenario in the corpus, not one of them.
+
+        The check this replaces watched a single scenario and only for
+        datagrams. Four collectors got past it - a reverse lookup, a raw ICMP
+        socket, a unix-domain connect and a plain TCP one - and each was found
+        by hand and stubbed by hand. The next would have been found by a test
+        behaving differently on somebody else's machine, which is the failure
+        this exists to prevent.
+        """
+        import os as _os
+        _os.environ.pop("SSH_CONNECTION", None)
+        record = []
+        restore = self._watch(record)
+        try:
+            for code in sorted(S):
+                mod = fresh()
+                setup, kwargs = S[code]
+                setup(mod)
+                try:
+                    mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+                except Exception:
+                    continue          # a broken fixture is another test's job
+        finally:
+            restore()
+        self.assertEqual(sorted(set(record)), [],
+                         "the suite reached off this box: %s"
+                         % sorted(set(record)))
+
     def test_a_scenario_sends_no_datagrams(self):
         import socket as _socket
         sent = []
@@ -17139,6 +17244,13 @@ def fresh():
     quiet_time.sleep = lambda s: None
     mod.time = quiet_time
     mod.which = lambda c: False
+    # The kernel's own answer to "which address would this box leave from".
+    # It sends nothing - connect() on a datagram socket fixes a destination
+    # rather than transmitting - but the answer comes from this machine's
+    # routing table, so a scenario that reads it produces different text on a
+    # laptop and on a build box with no default route. Pinned to the address
+    # the interface fixture above hands out, so the two agree.
+    mod.kernel_source_address = lambda: "10.0.0.5"
     # A reverse lookup is a real UDP send to a real resolver address. Every
     # collector here is stubbed; this is not a collector, so it was not, and the
     # suite was sending to whatever 10.0.0.53 is on the machine it ran on.

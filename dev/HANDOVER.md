@@ -328,22 +328,35 @@ confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
 
-## Open: the socket guard has a hole three things have gone through
+## Settled: the socket guard watches every way out, on every scenario
 
-`TestTheSuiteSendsNothing` booby-traps `connect`, `connect_ex` and name
-resolution. It does not watch `sendto`, and it does not watch socket
-*creation*. Three things have now gone through that gap and all three are
-stubbed in `fresh()` by hand:
+The guard that was supposed to protect "this suite reaches nothing" did not
+exist. The note here described one that booby-traps `connect`, `connect_ex` and
+name resolution; that was a check run by hand from a scratchpad once and never
+committed. What the suite actually had was a single datagram check, on one
+scenario.
 
-- `dns_ptr` - a UDP `sendto`, no connect
-- `trace_constant_flow` - a raw ICMP socket
-- `cmd_haproxy_stats` - a unix-domain connect
-- `cmd_proxy_reachable` - a real TCP connect to whatever a fixture named
+It now watches socket *creation*, `connect`, `connect_ex`, `sendto` and name
+resolution, across the whole scenario corpus. Creation is in there because two
+of the things that got past never connected: a raw ICMP socket, and a
+unix-domain one to a service that may or may not exist on the machine running
+the suite. Loopback is allowed and a numeric address is not treated as a
+resolution, because neither can depend on the network the suite runs from.
 
-Hand-stubbing works and does not generalise: the next one will be found by a
-test behaving differently on somebody else's machine, which is exactly what the
-guard exists to prevent. Widening it to cover `socket.socket` and `sendto`
-would close it properly.
+**It found a fifth on its first run, and the interesting part is why that one
+looked safe.** `kernel_source_address` opens a UDP socket and connects it to a
+documentation address. Its docstring is right that this sends no packet -
+`connect` on a datagram socket fixes a destination rather than transmitting -
+and that is why it read as harmless. But the answer it returns is *this
+machine's routing table*, so the `interfaces_unreadable` scenario produced one
+message on a laptop with a default route and a different one on a build box
+without. No packet, same defect. It is pinned in `fresh()` to the address the
+interface fixture already hands out, so the two agree.
+
+The five hand-stubs are enforced rather than remembered now: delete any one
+from `fresh()` and the guard names it. That was the whole complaint here -
+hand-stubbing worked and did not generalise, so the next one would have been
+found by a test behaving differently on somebody else's machine.
 
 ## Settled: the hop list is run by its tests, not read by them
 

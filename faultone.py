@@ -2366,6 +2366,126 @@ def udp_window(before, after, seconds):
     return out
 
 
+# ---------------------------------------------------------------------------
+# What the proxy itself believes, where it will say.
+#
+# PROTOTYPE. This is the first thing here that knows the name of a product, and
+# that is a decision about what this tool is, not just about what it reads. It
+# is written so it can be deleted in one block if the answer is no.
+#
+# The case for it: a proxy knows things the kernel cannot. Which backends it
+# has marked down, the check that failed, how long ago, and how many times it
+# has flapped. None of that is derivable from sockets and counters, and on a
+# box whose whole job is proxying it is the richest source on the machine.
+#
+# The case against: it is conditional on somebody having enabled the socket, so
+# it can never be relied on; and naming a product in the source is exactly what
+# the withheld-names guard exists to discourage, even though this particular
+# name is not on that list.
+#
+# What keeps it honest meanwhile: a read-only command on a socket the operator
+# chose to expose, never required, and a box without one produces the report it
+# produced before.
+# ---------------------------------------------------------------------------
+
+HAPROXY_SOCKETS = ("/var/run/haproxy.sock", "/run/haproxy/admin.sock",
+                   "/var/run/haproxy/admin.sock", "/var/lib/haproxy/stats",
+                   "/var/run/haproxy/haproxy.sock")
+# The states the proxy uses for a server it will not send traffic to. MAINT and
+# DRAIN are somebody's decision rather than a fault, and are kept apart for it.
+PROXY_IS_DOWN = ("DOWN",)
+PROXY_ON_PURPOSE = ("MAINT", "DRAIN")
+
+
+def read_stats_socket(path, command="show stat\n", timeout=2.0):
+    """One read-only command to a local stats socket. None if there isn't one."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except (AttributeError, OSError):
+        return None                 # a platform without unix sockets
+    try:
+        sock.settimeout(timeout)
+        sock.connect(path)
+        sock.sendall(command.encode())
+        # Bounded by how many reads rather than by comparing a byte count, so
+        # the cap stays a cap. Every number in the thresholds table is a
+        # judgement somebody has to defend, and "stop reading eventually" is
+        # not one of them.
+        chunks = []
+        for _ in range(PROXY_READ_CHUNKS):
+            block = sock.recv(65536)
+            if not block:
+                break
+            chunks.append(block)
+        return b"".join(chunks).decode("utf-8", "replace")
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+# 64 reads of 64 KB. A stats socket answers in a few kilobytes on any
+# ordinary box; this only exists so a wedged socket cannot hang the run.
+PROXY_READ_CHUNKS = 64
+
+
+def parse_proxy_stats(text):
+    """`show stat` CSV into one row per server the proxy is balancing over.
+
+    The header names the columns and the set of them varies by version, so
+    everything is read by name. FRONTEND and BACKEND rows are the proxy's own
+    totals rather than servers, and are dropped: a backend being down is a
+    consequence of its servers being down, and reporting both is one fault
+    twice.
+    """
+    lines = [l for l in (text or "").splitlines() if l.strip()]
+    if not lines or not lines[0].startswith("#"):
+        return []
+    header = [h.strip() for h in lines[0].lstrip("#").strip().split(",")]
+    out = []
+    for line in lines[1:]:
+        row = dict(zip(header, [c.strip() for c in line.split(",")]))
+        if row.get("svname") in ("FRONTEND", "BACKEND") or not row.get("svname"):
+            continue
+
+        def number(name):
+            value = row.get(name) or ""
+            return int(value) if value.isdigit() else None
+
+        out.append({"proxy": row.get("pxname"), "server": row.get("svname"),
+                    "status": (row.get("status") or "").split()[0].upper(),
+                    "check_status": row.get("check_status") or None,
+                    "since_s": number("lastchg"), "downtime_s": number("downtime"),
+                    "times_down": number("chkdown"), "queued": number("qcur")})
+    return out
+
+
+def cmd_haproxy_stats():
+    """The proxy's own view of its backends, if it is willing to give one."""
+    if OS_NAME == "Windows":
+        return {"ok": False, "cmd": "show stat", "applicable": False,
+                "error": "stats sockets are not read on this platform"}
+    for path in HAPROXY_SOCKETS:
+        if not os.path.exists(path):
+            continue
+        text = read_stats_socket(path)
+        if not text:
+            continue
+        servers = parse_proxy_stats(text)
+        if not servers:
+            continue
+        return {"ok": True, "cmd": "show stat (%s)" % path, "socket": path,
+                "servers": servers,
+                "stdout": "\n".join(
+                    "%s/%s  %s  %s" % (s["proxy"], s["server"], s["status"],
+                                       s["check_status"] or "")
+                    for s in servers)}
+    # Not a failure. Almost no box has one, and a box without one is not a box
+    # that could not be read - there is nothing there to read.
+    return {"ok": False, "cmd": "show stat", "applicable": False,
+            "error": "no proxy stats socket found here"}
+
+
 def cmd_socket_states():
     """This device's own TCP sockets, by state."""
     if OS_NAME == "Windows":
@@ -5857,6 +5977,14 @@ PANEL_HELP = {
                 "to a packet, and a pair of reads says which rules actually fired while the "
                 "probes were in flight. Needs root, and says nothing without it.",
     },
+    "proxy_stats": {
+        "label": "the proxy's own view of its backends", "layer": 7,
+        "desc": "Which backends the proxy on this box has taken out of rotation, which "
+                "check failed, and how long they have been out. The one reading here that "
+                "the kernel cannot produce: a socket table says what is connected, never "
+                "which of those a service has decided to stop using. Read only where a "
+                "stats socket exists, which is almost nowhere.",
+    },
     "qdisc": {
         "label": "interface queues", "layer": 2,
         "desc": "What this box's own egress queues are holding and dropping. Three findings "
@@ -7010,6 +7138,11 @@ VERDICT_RULES = [
     # broken than one whose certificate is wrong, and a client meets it first.
     # Above the findings that need a completed connection, because it is the
     # reason they could not run: nothing below here got as far as a handshake.
+    ("proxy_backend_down", "the backend the proxy stopped using, not this box",
+     "The proxy here has taken backends out of rotation",
+     "The proxy's own health checks decided these are not answering. It knows which "
+     "check failed and how long they have been out, which nothing else here can see. "
+     "Start with the check it names rather than with the network."),
     ("own_service_not_accepting", "the service on this box, or a rule in front of it",
      "This box cannot finish a connection to its own listener",
      "Nothing was refused, so something is listening and is not completing the "
@@ -7757,6 +7890,7 @@ FINDING_SIDE.update({
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
     "own_service_not_accepting": "downstream",
+    "proxy_backend_down": "upstream",
     "own_service_silent": "downstream",
     "own_service_erroring": "downstream",
     "own_service_not_http": "downstream",
@@ -7939,7 +8073,7 @@ STAGE_RULES = [
       "tcp_flow_sendbuf_limited", "tcp_flow_receiver_limited",
       # What sits between this site and the internet. Neither is a fault on
       # its own, and both change what the way out can do.
-      "cgnat", "double_nat", "nat_observed"}),
+      "cgnat", "double_nat", "nat_observed", "proxy_backend_down"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -8014,6 +8148,8 @@ RAW_STAGE = {
     # An egress queue is the link stage: it is this box's own interface
     # holding traffic, which is what that stage is about.
     "qdisc": "link",
+    # What the proxy thinks of what it connects out to.
+    "proxy_stats": "internet",
     # Egress rules are the way out, which is the internet stage.
     "firewall": "internet",
     # This box's own service and the certificate it serves, both read from the
@@ -10215,6 +10351,65 @@ def _check_discard_route(raw, findings, target):
     })
 
 
+# What each check status means, in the words a reader needs rather than the
+# code. Taken from the proxy's own vocabulary because it is a good one: it
+# separates faults that look identical from outside the box.
+CHECK_MEANS = {
+    "L4CON": "the connection was refused, so nothing is listening there",
+    "L4TOUT": "the connection timed out, so something is there and did not answer",
+    "L4OK": "it connects, and nothing above that was checked",
+    "L6TOUT": "the TLS handshake timed out",
+    "L6RSP": "the TLS handshake was answered with something invalid",
+    "L7TOUT": "it connected and the application never replied",
+    "L7RSP": "the application answered with something unreadable",
+    "L7STS": "the application answered, with a status the check rejects",
+    "L7OK": "the application answered correctly",
+}
+
+
+def _check_proxy_backends(raw, findings):
+    """Backends the proxy on this box has taken out of rotation.
+
+    The one thing on this report that the kernel cannot know. A socket table
+    says what is connected; it cannot say which of those the proxy has decided
+    not to send traffic to, which check failed, or how many times it has
+    flapped today.
+
+    Servers taken out deliberately are counted and not graded. Somebody put
+    them in maintenance, and reporting that as a fault teaches a reader that
+    this section is wrong.
+    """
+    servers = ((raw or {}).get("proxy_stats") or {}).get("servers") or []
+    if not servers:
+        return
+    down = [s for s in servers if s["status"] in PROXY_IS_DOWN]
+    parked = [s for s in servers if s["status"] in PROXY_ON_PURPOSE]
+    if not down:
+        return
+    worst = max(down, key=lambda s: s.get("times_down") or 0)
+    means = CHECK_MEANS.get(worst.get("check_status") or "")
+    findings.append({
+        "severity": "critical" if len(down) == len(
+            [s for s in servers if s["status"] not in PROXY_ON_PURPOSE]) else "warning",
+        "layer": 7,
+        "code": "proxy_backend_down",
+        "message": (
+            f"The proxy on this box has taken {len(down)} of its "
+            f"{len(servers) - len(parked)} live backend(s) out of rotation"
+            + (", and %d more %s parked deliberately"
+               % (len(parked), "is" if len(parked) == 1 else "are") if parked else "")
+            + f". The worst is {worst['proxy']}/{worst['server']}"
+            + (f", where {means}" if means else "")
+            + (f", down for {_fmt_span(worst['downtime_s'])}"
+               if worst.get("downtime_s") else "")
+            + (f" and taken out {worst['times_down']} time(s) since the proxy started"
+               if worst.get("times_down") else "")
+            + ". This is the proxy's own judgement rather than anything measured "
+              "here: nothing in a socket table says which backends a service has "
+              "decided to stop using, or which check it was that failed."),
+    })
+
+
 def _check_inbound_filtering(raw, findings):
     """This box turning away traffic addressed to its own service.
 
@@ -11664,6 +11859,8 @@ def _check_arp(raw, findings):
         raw["socket_owners"] = cmd_socket_owners()
     if "qdisc" not in raw:
         raw["qdisc"] = cmd_qdisc()
+    if "proxy_stats" not in raw:
+        raw["proxy_stats"] = cmd_haproxy_stats()
     sock_states = raw["sockets"].get("states", {}) if raw["sockets"].get("ok") else {}
     pending = raw["sockets"].get("pending", {}) if raw["sockets"].get("ok") else {}
     syn_sent = sock_states.get("SYN_SENT", 0)
@@ -12204,6 +12401,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
     _check_udp_queues(raw, late)
+    _check_proxy_backends(raw, late)
     _check_inbound_filtering(raw, late)
     _check_forwarding_shape(raw, late)
     _check_transport_fallback(raw, late)
@@ -14382,6 +14580,7 @@ FINDING_HINT = {
 
     # --- something is listening, and it is the problem ---------------------
     "own_service_not_accepting": "this box",
+    "proxy_backend_down": "the backend",
     "own_service_silent": "the service",
     "own_service_erroring": "the service",
     "own_service_not_http": "the service",
@@ -14516,6 +14715,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # What this box's own egress queues are doing, for the three findings that
     # otherwise offer three candidates and can eliminate none of them.
     raw["qdisc"] = cmd_qdisc()
+    # PROTOTYPE: what the proxy on this box believes about its own backends,
+    # if there is one and it is willing to say. Absent on almost every box.
+    raw["proxy_stats"] = cmd_haproxy_stats()
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
     # The resolved address, kept so a route prefix can be matched against it.

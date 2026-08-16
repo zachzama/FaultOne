@@ -329,6 +329,37 @@ confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
 
+## Open: the proxy stats read is a prototype and a question, not a feature
+
+`cmd_haproxy_stats` reads a HAProxy stats socket where one exists and reports
+which backends the proxy has taken out of rotation. It is the only reading here
+the kernel cannot produce: a socket table says what is connected, never which
+of those a service has decided to stop using, which check failed, or how many
+times it has flapped.
+
+**It is also the first thing in this file that knows the name of a product**,
+and that is a decision about what this tool is rather than about what it reads.
+It is written as one block so it can come out in one commit if the answer is
+no: `HAPROXY_SOCKETS`, `read_stats_socket`, `parse_proxy_stats`,
+`cmd_haproxy_stats`, `CHECK_MEANS`, `_check_proxy_backends`, the
+`proxy_backend_down` rule and its registry rows. About 200 lines.
+
+Arguments recorded so the decision is made once:
+
+- **For.** A documented read-only interface the operator chose to expose, not a
+  vendor's private directory layout, which is what the 2026-08-12 decision was
+  about. The data has no substitute anywhere else on the box.
+- **Against.** Conditional on somebody having enabled the socket, so it can
+  never be relied on. And the name. `haproxy` is not on the withheld list, but
+  the reason that list exists applies to it in spirit.
+- **Not a dodge.** Reading "whatever stats socket is there" without naming the
+  product was considered and is a fig leaf: the CSV format is the product.
+
+The related decision that was *declined* on value rather than principle:
+nginx's `stub_status`. Seven numbers, and the socket table plus
+`ListenOverflows` already say more, closer to the source. It would add a
+dependency on operator configuration to learn less.
+
 ## Settled: the baseline diffs findings, not ten scalars
 
 Surfaced independently by two comparisons - SuzieQ's differentialReachability

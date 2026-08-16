@@ -6675,6 +6675,108 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhatTheProxyItselfBelieves(unittest.TestCase):
+    """PROTOTYPE. The first reading here that knows the name of a product, and
+    the only one the kernel cannot produce: a socket table says what is
+    connected, never which of those a service has decided to stop using, which
+    check failed, or how many times it has flapped today.
+
+    Written so it can be deleted in one block if the answer to that question is
+    no. Everything about it is conditional - a box without a stats socket
+    produces the report it produced before.
+    """
+
+    CSV = ("# pxname,svname,qcur,status,chkfail,chkdown,lastchg,downtime,check_status\n"
+           "api,FRONTEND,0,OPEN,,,,,\n"
+           "api,web1,0,UP,0,0,86400,0,L7OK\n"
+           "api,web2,7,DOWN,3,2,412,930,L4TOUT\n"
+           "api,web3,0,MAINT,0,0,7200,0,\n"
+           "api,BACKEND,7,UP,,,,,\n")
+
+    def test_the_proxy_totals_are_not_servers(self):
+        """FRONTEND and BACKEND are the proxy's own rows. A backend being down
+        is a consequence of its servers being down, and reporting both is one
+        fault counted twice."""
+        got = nd.parse_proxy_stats(self.CSV)
+        self.assertEqual([s["server"] for s in got], ["web1", "web2", "web3"])
+
+    def test_columns_are_read_by_name_because_the_set_varies(self):
+        """The column list differs by version, so position means nothing. A
+        reader keyed on position silently reads the wrong field on an older
+        proxy, which is worse than not reading it."""
+        moved = ("# svname,status,check_status,pxname\n"
+                 "web9,DOWN,L4CON,api\n")
+        got = nd.parse_proxy_stats(moved)
+        self.assertEqual(got[0]["server"], "web9")
+        self.assertEqual(got[0]["check_status"], "L4CON")
+
+    def test_anything_that_is_not_that_csv_reads_as_nothing(self):
+        for junk in ("", "not a csv", "no header\nweb1,UP\n", None):
+            with self.subTest(text=junk):
+                self.assertEqual(nd.parse_proxy_stats(junk), [])
+
+    def test_a_server_taken_out_deliberately_is_not_a_fault(self):
+        """Somebody put it in maintenance. Grading that as a fault teaches a
+        reader the section is wrong."""
+        rep = self.report()
+        found = next(f for f in rep["findings"] if f["code"] == "proxy_backend_down")
+        self.assertIn("web2", found["message"])
+        self.assertNotIn("web3", found["message"])
+        self.assertIn("parked deliberately", found["message"])
+
+    def report(self, csv=None):
+        mod = fresh()
+        setup, kwargs = S["proxy_backend_down"]
+        setup(mod)
+        if csv is not None:
+            mod.cmd_haproxy_stats = lambda: {"ok": True, "cmd": "show stat",
+                                             "stdout": "",
+                                             "servers": nd.parse_proxy_stats(csv)}
+        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def test_the_check_code_is_translated_into_what_it_means(self):
+        """`L4TOUT` is the proxy's vocabulary, not the reader's. The whole
+        reason to take this vocabulary is that it separates faults that look
+        identical from outside, which only helps if it is said in words."""
+        found = next(f for f in self.report()["findings"]
+                     if f["code"] == "proxy_backend_down")
+        self.assertIn("timed out", found["message"])
+        self.assertNotIn("L4TOUT", found["message"])
+
+    def test_every_live_backend_down_is_worse_than_some(self):
+        allgone = self.CSV.replace("api,web1,0,UP,0,0,86400,0,L7OK",
+                                   "api,web1,0,DOWN,3,1,50,60,L4CON")
+        found = next(f for f in self.report(allgone)["findings"]
+                     if f["code"] == "proxy_backend_down")
+        self.assertEqual(found["severity"], "critical")
+        some = next(f for f in self.report()["findings"]
+                    if f["code"] == "proxy_backend_down")
+        self.assertEqual(some["severity"], "warning")
+
+    def test_a_healthy_proxy_says_nothing(self):
+        healthy = self.CSV.replace("api,web2,7,DOWN,3,2,412,930,L4TOUT",
+                                   "api,web2,0,UP,0,0,412,0,L7OK")
+        self.assertNotIn("proxy_backend_down",
+                         [f["code"] for f in self.report(healthy)["findings"]])
+
+    def test_a_box_with_no_stats_socket_is_not_a_box_that_failed_a_check(self):
+        """Almost every box. There is nothing there to read, which is not the
+        same as not being able to read it, and marking the difference down is
+        what collection_coverage exists to avoid."""
+        mod = fresh()
+        got = types.FunctionType(nd.cmd_haproxy_stats.__code__, mod.__dict__,
+                                 "cmd_haproxy_stats")()
+        self.assertFalse(got["ok"])
+        self.assertIs(got["applicable"], False)
+
+    def test_it_says_the_judgement_is_the_proxy_s_and_not_a_measurement(self):
+        """The honest frame. Nothing here measured those backends - the proxy
+        did, and this is repeating it."""
+        found = next(f for f in self.report()["findings"]
+                     if f["code"] == "proxy_backend_down")
+        self.assertIn("proxy's own judgement", found["message"])
+
+
 class TestRefusedAndTimedOutAreTwoFaults(unittest.TestCase):
     """HAProxy grades every health check into a small enum, and the two that
     matter most here are `L4CON` and `L4TOUT`: refused means nothing is
@@ -12508,7 +12610,7 @@ class TestDocsMatchReality(unittest.TestCase):
             # table gained the process holding each socket, 35 with the
             # interface queues, 36 with the firewall rule counters, 37 with
             # the datagram tunnel count, 39 with the route to the target.
-            "collections": (39, [r"\*\*(\d+)\s+things are inspected",
+            "collections": (40, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -12589,6 +12691,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_route_to": "The route this box would use for the target",
         "cmd_firewall_counters": "Firewall rule counters, read either side of "
                                  "the probes",
+        "cmd_haproxy_stats": "The proxy's own view of its backends",
         "cmd_qdisc": "Interface queues: what this box's own egress queues are "
                      "holding and dropping",
         "cmd_socket_states": "TCP socket states",
@@ -16347,6 +16450,13 @@ def fresh():
     # name resolution, so the guard that watches those would not have seen it.
     # Same class as dns_ptr: not a collector, so nothing stubbed it.
     mod.trace_constant_flow = lambda target, **kw: None
+    # A unix-domain connect, which is neither a network connect nor a name
+    # resolution, so the booby trap that guards "the suite sends nothing" would
+    # not see it either. Third thing through that hole; the trap still only
+    # watches connect and resolution.
+    mod.cmd_haproxy_stats = lambda: {"ok": False, "cmd": "show stat",
+                                     "applicable": False,
+                                     "error": "not read in the suite"}
     # ---- healthy baseline for every collector -------------------------
     mod.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr",
                                  "stdout": "2: eth0: <UP>\n    inet 10.0.0.5/24\n"}
@@ -17527,6 +17637,22 @@ def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
                                              "stdout": "", "interfaces": []}
         base = nd.cmd_link_modes
         nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+PROXY_CSV = ("# pxname,svname,qcur,status,chkfail,chkdown,lastchg,downtime,"
+             "check_status\n"
+             "api,FRONTEND,0,OPEN,,,,,\n"
+             "api,web1,0,UP,0,0,86400,0,L7OK\n"
+             "api,web2,7,DOWN,3,2,412,930,L4TOUT\n"
+             "api,web3,0,MAINT,0,0,7200,0,\n"
+             "api,BACKEND,7,UP,,,,,\n")
+
+@scenario("proxy_backend_down")
+def _(nd):
+    """A proxy on this box with one backend it has stopped using."""
+    nd.cmd_haproxy_stats = lambda: {
+        "ok": True, "cmd": "show stat (/var/run/haproxy.sock)",
+        "socket": "/var/run/haproxy.sock", "stdout": "",
+        "servers": nd.parse_proxy_stats(PROXY_CSV)}
 
 @scenario("own_service_not_accepting")
 def _(nd):

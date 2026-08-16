@@ -64,6 +64,7 @@ import os
 import platform
 import re
 import shutil
+import ipaddress
 import socket
 import ssl
 import tempfile
@@ -2541,6 +2542,15 @@ _NFT_TABLE = re.compile(r"^table\s+(\S+)\s+(\S+)\s*\{")
 _NFT_CHAIN = re.compile(r"^\s*chain\s+(\S+)\s*\{")
 _NFT_POLICY = re.compile(r"policy\s+(\w+)")
 _NFT_COUNTER = re.compile(r"counter packets (\d+) bytes (\d+)")
+_NFT_HOOK = re.compile(r"type filter hook (\w+)")
+# Which way traffic was going when a chain saw it. Both spellings, because nft
+# hooks are lowercase and iptables built-ins are not, and only the built-ins
+# are on here: a chain named by hand is reachable from either direction.
+_FACES = {"input": "in", "INPUT": "in", "output": "out", "OUTPUT": "out",
+          "forward": "through", "FORWARD": "through"}
+# A rule that names a port. Both spellings again, and both the single and the
+# multiport forms.
+_RULE_DPORT = re.compile(r"\bdports?\s+([\d,\s:-]+)")
 
 
 def parse_iptables_save(text):
@@ -2567,7 +2577,12 @@ def parse_iptables_save(text):
         rules.append({"table": table, "chain": m.group(4),
                       "packets": int(m.group(1)), "bytes": int(m.group(2)),
                       "verdict": jump.group(1) if jump else None,
-                      "rule": m.group(3).strip()})
+                      "rule": m.group(3).strip(),
+                      # Only the built-in chains say which way traffic was
+                      # going. A rule in a chain somebody named themselves can
+                      # be reached from either, so it gets no direction rather
+                      # than a guessed one.
+                      "faces": _FACES.get(m.group(4).lower())})
     return {"rules": rules, "policies": policies}
 
 
@@ -2579,7 +2594,7 @@ def parse_nft_ruleset(text):
     reader rather than an answer about the box, and it is why iptables-save is
     tried as well rather than instead.
     """
-    rules, policies = [], {}
+    rules, policies, hooks = [], {}, {}
     table, chain = None, None
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
@@ -2595,6 +2610,12 @@ def parse_nft_ruleset(text):
             p = _NFT_POLICY.search(line)
             if p and table and chain:
                 policies["%s/%s" % (table, chain)] = p.group(1)
+            # An nft chain is named by whoever wrote it, so the name says
+            # nothing about direction. The hook does, and it is only on this
+            # line, so it is captured here and carried to the rules below.
+            hooked = _NFT_HOOK.search(line)
+            if hooked and chain:
+                hooks[chain] = hooked.group(1)
             continue
         counter = _NFT_COUNTER.search(line)
         if not counter or not chain:
@@ -2603,7 +2624,8 @@ def parse_nft_ruleset(text):
                        None)
         rules.append({"table": table, "chain": chain,
                       "packets": int(counter.group(1)), "bytes": int(counter.group(2)),
-                      "verdict": verdict, "rule": line})
+                      "verdict": verdict, "rule": line,
+                      "faces": _FACES.get(hooks.get(chain))})
     return {"rules": rules, "policies": policies}
 
 
@@ -2694,6 +2716,51 @@ def rules_that_counted(before, after):
         if gained > 0:
             moved.append(dict(rule, gained=gained))
     return sorted(moved, key=lambda r: -r["gained"])
+
+
+def _ports_named_by(rule):
+    """The destination ports a rule names, if it names any."""
+    found = _RULE_DPORT.search(rule.get("rule") or "")
+    if not found:
+        return set()
+    out = set()
+    for part in found.group(1).replace(" ", "").split(","):
+        for piece in part.replace("-", ":").split(":"):
+            if piece.isdigit():
+                out.add(piece)
+    return out
+
+
+def inbound_drops_on_served_ports(raw):
+    """Rules that dropped traffic arriving for something this box serves.
+
+    Not every inbound drop. An internet-facing box drops scan noise all day and
+    a rule counting is what a firewall looks like working, so reporting any of
+    them would put a warning on every healthy box and teach a reader to skip
+    the section.
+
+    What is not ordinary is dropping traffic addressed to a port this box is
+    listening on. That is the box turning away the thing it exists to answer,
+    and it is the same reader that already names what stopped the probes going
+    out, pointed at the direction that matters more here.
+    """
+    window = (raw or {}).get("firewall") or {}
+    if not window.get("ok"):
+        return []
+    serving = {str(p) for p in
+               ((raw.get("sockets") or {}).get("listen_ports") or [])}
+    serving |= {str(l["port"]) for l in
+                ((raw.get("udp_sockets") or {}).get("listeners") or [])}
+    if not serving:
+        return []
+    out = []
+    for rule in window.get("moved") or []:
+        if rule.get("faces") != "in":
+            continue
+        hit = _ports_named_by(rule) & serving
+        if hit:
+            out.append(dict(rule, ports=sorted(hit)))
+    return out
 
 
 def _dropped_by(raw):
@@ -5944,6 +6011,43 @@ def parse_route_to(text):
             "onlink": not via}
 
 
+# A route whose action is to throw the packet away. Three spellings, and the
+# difference between them is only what the sender is told: nothing at all, an
+# ICMP unreachable, or an ICMP prohibited.
+_DISCARD_ROUTE = re.compile(r"^\s*(blackhole|unreachable|prohibit)\s+(\S+)", re.M)
+
+
+def parse_discard_routes(text):
+    """Routes this box holds that discard traffic instead of forwarding it."""
+    return [{"kind": kind, "prefix": prefix}
+            for kind, prefix in _DISCARD_ROUTE.findall(text or "")]
+
+
+def discards_the_target(routes, target_ip):
+    """The discard route the target falls inside, if one does.
+
+    Only worth saying when it catches the thing being diagnosed. A box holding
+    discard routes is ordinary - they are how a site drops known-bad prefixes
+    and how anti-spoofing is written - and listing them all would be inventory
+    rather than a finding. Catching the target is not ordinary: it means this
+    box throws that traffic away and every symptom past it is a consequence.
+    """
+    if not routes or not target_ip:
+        return None
+    try:
+        address = ipaddress.ip_address(target_ip)
+    except ValueError:
+        return None                 # a name that never resolved; nothing to place
+    for route in routes:
+        try:
+            network = ipaddress.ip_network(route["prefix"], strict=False)
+        except ValueError:
+            continue
+        if address.version == network.version and address in network:
+            return route
+    return None
+
+
 def cmd_route_to(target):
     """Ask the kernel which route it would use to reach the target."""
     if not valid_target(target):
@@ -6959,6 +7063,14 @@ VERDICT_RULES = [
      "check here passes. If it should be carrying traffic over links it opens "
      "itself, those links are gone - check the service is running and can reach "
      "what it registers with."),
+    # Above "nothing is reaching it", because it is the reason nothing is:
+    # a client refused at the firewall never becomes a connection, so the
+    # absence below is this rule's consequence and not a separate fact.
+    ("inbound_filtered_here", "this box's own firewall, possibly by design",
+     "This box is dropping traffic addressed to a port it serves",
+     "Clients refused at the firewall never reach the service, so every check below "
+     "passes while nobody gets served. Read the rule named below and decide whether it "
+     "is meant to be catching this traffic."),
     ("no_clients_connected", "whatever should be sending traffic here",
      "The service is up and nothing is reaching it",
      "Being taken out of a load balancer's pool looks exactly like this from the "
@@ -7018,6 +7130,11 @@ VERDICT_RULES = [
      "Small packets fit and large ones do not, so ping, DNS and handshakes all pass "
      "while transfers stall inside the tunnel. Raise the path MTU, or lower the MTU of "
      "whatever is handed to the tunnel so it stops sending packets that will not fit."),
+    ("target_is_discarded", "this box's own routing table, not the network",
+     "This box throws away traffic to the target instead of sending it",
+     "A blackhole, unreachable or prohibit route on this box catches the address being "
+     "diagnosed. Nothing past here is involved and no reachability result below means "
+     "anything. Remove the route, or aim at something outside it."),
     ("transport_fell_back", "the path between the clients and here, not this box",
      "Clients are reaching this box over TCP because datagrams are not getting through",
      "The fallback works, which is why nothing is failing and nobody will report it. "
@@ -7597,6 +7714,8 @@ FINDING_SIDE.update({
     "close_wait_backlog": "downstream",
     "udp_queue_standing": "downstream",
     "transport_fell_back": "downstream",
+    "inbound_filtered_here": "downstream",
+    "target_is_discarded": "upstream",
     "tunnel_payload_short": "upstream",
     # Context about the path out, same as the fault it is the other half of.
     "tunnel_payload_room": "upstream",
@@ -7730,7 +7849,8 @@ STAGE_RULES = [
       # are how it runs out of room to accept into - both were headlining over
       # a strip with nothing on it.
       "accept_overflow_live", "accept_overflow_historical",
-      "close_wait_backlog", "udp_queue_standing", "transport_fell_back"}),
+      "close_wait_backlog", "udp_queue_standing", "transport_fell_back",
+      "inbound_filtered_here"}),
     # Optics belong to the link stage for the same reason the error counters
     # do: a fibre outside its rated range is the physical link failing, and
     # leaving the strip all-green during an optical alarm is exactly the
@@ -7746,6 +7866,7 @@ STAGE_RULES = [
       "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical",
       "cpu_throttled_historical"}),
     ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict",
+                 "target_is_discarded",
                  "source_address_not_held"},
      {"interfaces_unreadable", "routes_unreadable",
       "neigh_table_full", "neigh_table_near_limit"}),
@@ -7843,6 +7964,8 @@ RAW_STAGE = {
     "path_mtu": "mtu",
     # Which route this box would use for the target: the way out.
     "route_to": "internet",
+    # The address the target resolved to, kept beside the kind it is.
+    "target_ip": "internet",
     "dns_lookup": "dns", "dns_health": "dns",
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
@@ -8410,6 +8533,8 @@ CAUSE_OWNED_BY_BOX = frozenset({
     "own_tls_untrusted",
     "reqq_full_drops",
     "syn_recv_backlog",
+    "inbound_filtered_here",
+    "target_is_discarded",
     "udp_queue_standing",
     "syncookies_historical",
     "syncookies_live",
@@ -9952,6 +10077,72 @@ def _check_route_agrees(raw, findings, hops, target):
               "other one. That is ordinary on a box with policy routing or a tunnel "
               "holding a prefix, and it is worth knowing before acting on anything "
               "further down."),
+    })
+
+
+TELLS_THE_SENDER = {
+    "blackhole": "nothing at all, so the sender waits for a timeout",
+    "unreachable": "an ICMP unreachable, so the sender fails quickly",
+    "prohibit": "an ICMP administratively-prohibited, so the sender fails quickly",
+}
+
+
+def _check_discard_route(raw, findings, target):
+    """The target sitting inside a route this box throws traffic away on.
+
+    Decisive when it happens, and it presents as a dead upstream: nothing
+    arrives, nothing answers, and every check past this one measures a path the
+    packets never got onto. The route is on this box and nobody has to go
+    looking further than it.
+    """
+    routes = (raw or {}).get("routes") or {}
+    if not routes.get("ok"):
+        return
+    caught = discards_the_target(parse_discard_routes(routes.get("stdout") or ""),
+                                 (raw or {}).get("target_ip"))
+    if not caught:
+        return
+    findings.append({
+        "severity": "critical",
+        "layer": 3,
+        "code": "target_is_discarded",
+        "message": (
+            f"This box holds a {caught['kind']} route for {caught['prefix']}, and "
+            f"{target} is inside it. Traffic to that address is thrown away here rather "
+            f"than sent anywhere, and the sender is told "
+            f"{TELLS_THE_SENDER.get(caught['kind'], 'nothing useful')}. Nothing past "
+            f"this box is involved: every reachability result below describes a packet "
+            f"that never left. The route is on this box, so this is the whole of the "
+            f"fault and the place to fix it."),
+    })
+
+
+def _check_inbound_filtering(raw, findings):
+    """This box turning away traffic addressed to its own service.
+
+    The counterpart to what already gets said about the way out, and the more
+    important direction on a box whose job is accepting connections: a client
+    that is refused here never reaches the service, and every check below the
+    firewall passes because the service really is up.
+    """
+    dropped = inbound_drops_on_served_ports(raw)
+    if not dropped:
+        return
+    worst = dropped[0]
+    ports = ", ".join(worst["ports"])
+    findings.append({
+        "severity": "warning",
+        "layer": 4,
+        "code": "inbound_filtered_here",
+        "message": (
+            f"This box's own firewall dropped {worst['gained']} packet(s) addressed to "
+            f"port {ports} while this ran, on a port it is listening on: "
+            f"{worst['chain']}/{worst['verdict']} {worst['rule']}. Traffic refused here "
+            f"never reaches the service, and every check below this one passes because "
+            f"the service itself is fine - it is simply not being given anything to "
+            f"answer. Ordinary inbound noise being dropped is not this: the rule that "
+            f"counted names a port this box serves."
+            + (f" {len(dropped)} rules are doing it." if len(dropped) > 1 else "")),
     })
 
 
@@ -11890,6 +12081,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
     _check_udp_queues(raw, late)
+    _check_inbound_filtering(raw, late)
     _check_forwarding_shape(raw, late)
     _check_transport_fallback(raw, late)
     _check_encapsulation_headroom(raw, late)
@@ -12531,6 +12723,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # route this box would actually use. Everything below reads differently
         # if they are not.
         raw["route_to"] = cmd_route_to(target)
+        _check_discard_route(raw, findings, target)
         _check_route_agrees(raw, findings, hops, target)
         path_insight = annotate_hops(
             hops, gw, target,
@@ -14077,6 +14270,8 @@ FINDING_HINT = {
     "close_wait_backlog": "the app",
     "udp_queue_standing": "the app",
     "transport_fell_back": "firewall",
+    "inbound_filtered_here": "firewall",
+    "target_is_discarded": "this box",
     "tunnel_payload_short": "MTU",
     "syn_recv_backlog": "the app",
     "syncookies_live": "the app",
@@ -14199,6 +14394,12 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     raw["qdisc"] = cmd_qdisc()
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
+    # The resolved address, kept so a route prefix can be matched against it.
+    # A name that never resolved leaves this absent, and the check stays quiet.
+    try:
+        raw["target_ip"] = socket.gethostbyname(target)
+    except (OSError, UnicodeError):
+        raw["target_ip"] = None
     # Kept beside the kind so anything reading raw can name what was aimed at
     # without being handed the report as well.
     raw["target"] = target

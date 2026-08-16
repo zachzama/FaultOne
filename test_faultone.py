@@ -6674,6 +6674,151 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
+    """Two ways a box discards traffic without anything on the network being
+    wrong, found by checking this tool's findings against Batfish's flow
+    dispositions - a closed vocabulary of every way a packet can end.
+
+    Eight of the ten had a finding. `DENIED_IN` and `NULL_ROUTED` did not, and
+    both were observable from data already being collected: the firewall reader
+    was wired to one caller in one direction, and the routing table was read
+    only to find the default gateway.
+    """
+
+    # ---- denied on the way in --------------------------------------------
+
+    IPT = ("*filter\n:INPUT ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n"
+           "[{a}:700] -A INPUT -p tcp --dport 443 -j DROP\n"
+           "[{b}:200] -A INPUT -j DROP\n"
+           "[{c}:100] -A OUTPUT -j DROP\n"
+           "[{d}:400] -A VENDOR_IN -p tcp --dport 443 -j DROP\nCOMMIT\n")
+
+    def dropped(self, before, after, listening=("443",)):
+        window = nd.firewall_window(
+            dict(nd.parse_iptables_save(self.IPT.format(**before)), ok=True),
+            dict(nd.parse_iptables_save(self.IPT.format(**after)), ok=True))
+        return nd.inbound_drops_on_served_ports({
+            "firewall": window,
+            "sockets": {"listen_ports": list(listening)}})
+
+    def test_a_rule_dropping_traffic_to_a_served_port_is_reported(self):
+        got = self.dropped({"a": 4, "b": 9, "c": 1, "d": 2},
+                           {"a": 31, "b": 9, "c": 1, "d": 2})
+        self.assertEqual(len(got), 1)
+        self.assertEqual((got[0]["gained"], got[0]["ports"]), (27, ["443"]))
+
+    def test_ordinary_inbound_noise_is_not_reported(self):
+        """The reason this is not just "any inbound drop". An internet-facing
+        box drops scan traffic all day and a rule counting is what a firewall
+        looks like working. Reporting it would put a warning on every healthy
+        box and teach a reader to skip the section."""
+        self.assertEqual(self.dropped({"a": 4, "b": 9, "c": 1, "d": 2},
+                                      {"a": 4, "b": 900, "c": 1, "d": 2}), [])
+
+    def test_an_outbound_drop_is_not_an_inbound_one(self):
+        self.assertEqual(self.dropped({"a": 4, "b": 9, "c": 1, "d": 2},
+                                      {"a": 4, "b": 9, "c": 90, "d": 2}), [])
+
+    def test_a_hand_named_chain_has_no_direction_and_is_not_guessed(self):
+        """Only the built-in chains say which way traffic was going. A rule in
+        a chain somebody named themselves is reachable from either, and
+        assuming inbound would invent a direction on every vendor ruleset."""
+        self.assertEqual(self.dropped({"a": 4, "b": 9, "c": 1, "d": 2},
+                                      {"a": 4, "b": 9, "c": 1, "d": 80}), [])
+
+    def test_a_port_this_box_does_not_serve_is_not_its_problem(self):
+        self.assertEqual(self.dropped({"a": 4, "b": 9, "c": 1, "d": 2},
+                                      {"a": 31, "b": 9, "c": 1, "d": 2},
+                                      listening=("8080",)), [])
+
+    def test_a_datagram_listener_counts_as_serving_that_port(self):
+        window = nd.firewall_window(
+            dict(nd.parse_iptables_save(self.IPT.format(a=4, b=9, c=1, d=2)), ok=True),
+            dict(nd.parse_iptables_save(self.IPT.format(a=31, b=9, c=1, d=2)), ok=True))
+        got = nd.inbound_drops_on_served_ports({
+            "firewall": window, "sockets": {"listen_ports": []},
+            "udp_sockets": {"listeners": [{"port": "443"}]}})
+        self.assertEqual(len(got), 1)
+
+    def test_nft_names_the_direction_by_its_hook(self):
+        """An nft chain is named by whoever wrote it, so the name says nothing.
+        The hook does, and it is on a different line than the rules."""
+        nft = ("table inet filter {\n\tchain whatever {\n"
+               "\t\ttype filter hook input priority filter; policy accept;\n"
+               "\t\ttcp dport 443 counter packets 9 bytes 700 drop\n\t}\n}\n")
+        rule = nd.parse_nft_ruleset(nft)["rules"][0]
+        self.assertEqual(rule["faces"], "in")
+
+    def test_it_outranks_the_absence_it_explains(self):
+        """A client refused at the firewall never becomes a connection, so
+        "nothing is reaching it" is this rule's consequence rather than a
+        separate fact. Ranked the other way round, the report named the symptom
+        and buried the reason underneath it."""
+        codes = [c for c, _o, _h, _n in nd.VERDICT_RULES]
+        self.assertLess(codes.index("inbound_filtered_here"),
+                        codes.index("no_clients_connected"))
+        mod = fresh()
+        setup, kwargs = S["inbound_filtered_here"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(rep["verdict"]["based_on"][0], "inbound_filtered_here")
+
+    # ---- thrown away by a route ------------------------------------------
+
+    ROUTES = ("default via 10.0.0.1 dev eth0\n"
+              "10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.5\n"
+              "blackhole 192.0.2.0/24\n"
+              "unreachable 198.51.100.0/24\n"
+              "prohibit 203.0.113.128/25\n")
+
+    def test_all_three_kinds_of_discard_route_are_read(self):
+        got = nd.parse_discard_routes(self.ROUTES)
+        self.assertEqual([r["kind"] for r in got],
+                         ["blackhole", "unreachable", "prohibit"])
+
+    def test_an_ordinary_route_is_not_a_discard(self):
+        self.assertEqual(nd.parse_discard_routes(
+            "default via 10.0.0.1 dev eth0\n10.0.0.0/24 dev eth0\n"), [])
+
+    def test_the_target_is_matched_against_the_prefix_not_the_string(self):
+        """A /25 is half the /24 above it, and an address in the other half is
+        not caught. Substring matching would say it was."""
+        routes = nd.parse_discard_routes(self.ROUTES)
+        self.assertIsNotNone(nd.discards_the_target(routes, "203.0.113.200"))
+        self.assertIsNone(nd.discards_the_target(routes, "203.0.113.9"))
+
+    def test_an_address_outside_every_discard_is_not_caught(self):
+        routes = nd.parse_discard_routes(self.ROUTES)
+        self.assertIsNone(nd.discards_the_target(routes, "10.0.0.90"))
+
+    def test_a_name_that_never_resolved_places_nowhere(self):
+        routes = nd.parse_discard_routes(self.ROUTES)
+        for nothing in (None, "", "not-an-address"):
+            with self.subTest(target=nothing):
+                self.assertIsNone(nd.discards_the_target(routes, nothing))
+
+    def test_it_is_critical_and_says_nothing_past_here_is_involved(self):
+        """Decisive when it happens: the packets never left, so every
+        reachability result below describes a path they never got onto."""
+        mod = fresh()
+        setup, kwargs = S["target_is_discarded"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        found = next(f for f in rep["findings"] if f["code"] == "target_is_discarded")
+        self.assertEqual(found["severity"], "critical")
+        self.assertIn("never left", found["message"])
+        self.assertEqual(rep["verdict"]["based_on"][0], "target_is_discarded")
+
+    def test_the_route_is_on_this_box_so_this_box_is_lit(self):
+        mod = fresh()
+        setup, kwargs = S["target_is_discarded"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        by = {z["side"]: z for z in rep["sides"]}
+        self.assertIn(by["local"]["state"], ("warn", "fail"))
+        self.assertIn("target_is_discarded", nd.CAUSE_OWNED_BY_BOX)
+
+
 class TestWhetherTheTraceWentWhereTheTrafficGoes(unittest.TestCase):
     """The routing table was read to find the default gateway and for nothing
     else, which left the most useful question about it unasked: is the path
@@ -12066,9 +12211,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 791),
-            "compressed": (len(gzip.compress(raw, 9)), 239),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 168),
+            "on disk": (len(raw), 859),
+            "compressed": (len(gzip.compress(raw, 9)), 259),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 183),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -17146,6 +17291,24 @@ def two_planes(nd, tunnels, tcp_sessions, pmtu=None, ifaces=None):
                                              "stdout": "", "interfaces": []}
         base = nd.cmd_link_modes
         nd.cmd_link_modes = lambda: dict(base(), interfaces=ifaces)
+
+@scenario("target_is_discarded", target="192.0.2.9")
+def _(nd):
+    """A blackhole route on this box catching the address being diagnosed."""
+    nd.cmd_routes = lambda: {"ok": True, "cmd": "ip route",
+                             "stdout": "default via 10.0.0.1 dev eth0\n"
+                                       "blackhole 192.0.2.0/24\n"}
+
+@scenario("inbound_filtered_here")
+def _(nd):
+    """A rule dropping traffic to a port this box is listening on."""
+    ipt = ("*filter\n:INPUT ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n"
+           "[%d:700] -A INPUT -p tcp --dport 443 -j DROP\nCOMMIT\n")
+    reads = [dict(nd.parse_iptables_save(ipt % n), ok=True) for n in (4, 31)]
+    nd.cmd_firewall_counters = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
+    serving(nd, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                "ESTAB 0 0 10.0.0.5:443 198.51.100.1:52000\n")
 
 @scenario("trace_took_another_route")
 def _(nd):

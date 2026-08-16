@@ -329,6 +329,35 @@ confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
 
+## Settled: two gaps found by checking against somebody else's fault table
+
+Batfish parses configurations, simulates convergence and computes a data plane
+without touching the network. Opposite instrument to this one: it answers what
+*would* happen for every flow, and cannot see a full queue or an unplugged
+cable. What it has that is worth borrowing is a **closed vocabulary** - its flow
+dispositions name every way a packet can end, which is exactly the shape a
+findings table can be audited against.
+
+Eight of the ten had a finding here. Two did not, and both were observable from
+data already collected:
+
+- **`DENIED_IN`** - the firewall reader was wired to one caller, `egress_blocked`,
+  and nothing looked at inbound drops. On a box whose job is accepting
+  connections that is the more important direction.
+- **`NULL_ROUTED`** - blackhole, unreachable and prohibit routes were never
+  parsed, and the routing table was read only to find the default gateway.
+
+**The one that was deliberately not built** is `filterLineReachability`: ACL
+lines that can never match because a broader line shadows them. Batfish proves
+it from the rule structure. The observed version would be "this rule's counter
+is zero", which on any real ruleset is true of most rules and would be a noise
+generator. A proof and an observation are not the same finding, and the weaker
+one is not worth having.
+
+The audit is worth repeating against other tools' vocabularies. It found more in
+an afternoon than reading feature lists did, because a closed enum of outcomes
+is checkable and a feature list is not.
+
 ## Settled: the trace is checked against the route, and only the first hop
 
 Compared against SuzieQ, which computes a path from collected forwarding state

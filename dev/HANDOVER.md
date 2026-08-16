@@ -345,17 +345,38 @@ test behaving differently on somebody else's machine, which is exactly what the
 guard exists to prevent. Widening it to cover `socket.socket` and `sendto`
 would close it properly.
 
-## Open: three renderers were tested by grep, and two of them were wrong
+## Settled: the hop list is run by its tests, not read by them
 
 A test asserting that a string appears in `VIEWER_TEMPLATE` passes against code
-wired to a constant, because the dead branch still contains the string. It has
-happened three times: the privilege badge, the plane tag, and the quiet lane.
+wired to a constant, because the dead branch still contains the string. That
+had happened three times - the privilege badge, the plane tag, the quiet lane -
+and the hop list was the largest fragment still tested that way.
 
-The fix each time was the same and should be the default: pull the fragment out
-as a named function, and have the test run it in node with `escapeHtml`
-alongside. `planeTag`, `planeNote` and `quietLane` are done this way and are
-the pattern to copy. Anything else in that template still tested by substring
-is untested.
+`hopWhy` and `hopList` were const arrows declared inside `renderDiagnosis`, so
+nothing could call them and three tests reached them by slicing the template on
+`const hopWhy`. They are top-level functions now. `hopList` takes the
+reverse-DNS map as an argument rather than closing over it, because that map
+belongs to the report and not to the fragment.
+
+`run_viewer_fn` in the suite is the shared way to do this: it lifts named
+functions and the template's own uppercase constants into node, runs one, and
+returns what it built. It skips where node is missing rather than passing,
+because a check that could not run is not a check that succeeded. The three
+tests that sliced the source now call the function; eleven more cover branches
+nothing reached at all - the site edge, the resolved name, the reason a hop is
+marked, the counts back and their asymmetric case, the baseline line, and both
+escaping paths.
+
+**The mutation that proves the point, and the one to reach for next time this
+comes up.** Change `escapeHtml(names[h.host])` to `escapeHtml(h.host)`: the
+condition `names[h.host] ?` and the class `hname` both survive untouched, so
+every substring test still passes, and the list draws the address where the
+name should be. Running the fragment catches it. Nine cruder mutations were
+caught too, including the site edge wired to a constant.
+
+Still tested by substring, and still worth converting the same way: the hint
+chip on a finding (`f.hint ?`), the zone owns-cause marker (`z.owns_cause`),
+and the section headings. Each is smaller than the hop list was.
 
 ## Open: the proxy stats read is a prototype and a question, not a feature
 

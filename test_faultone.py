@@ -6469,15 +6469,24 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         when the peer answered ICMP, which for internet clients is the
         exception, so hanging this there hid the choice on most reports.
         """
-        src = nd.VIEWER_TEMPLATE
-        i = src.index("const hopWhy")
-        block = src[i:src.index("const hopList", i)]
-        for needed in ("col.target", "col.picked", "col.of", "round trip",
-                       "col.ttl_assumed", "col.ttl_seen"):
+        note = run_viewer_fn(self, "hopWhy", [{
+            "target": "10.60.9.30", "picked": "the busiest of this side",
+            "of": 4, "hops_in": 7, "ttl_seen": 57, "ttl_assumed": 64,
+            "hops": []}])
+        for needed in ("10.60.9.30", "the busiest of this side",
+                       "out of 4 connections", "round trip",
+                       "ttl 57", "assuming it left at 64"):
             with self.subTest(part=needed):
-                self.assertIn(needed, block)
-        self.assertIn('class="hops" title="', src,
-                      "the footnote is not attached to the hop list")
+                self.assertIn(needed, note)
+        # And it is attached where a reader meets the numbers, which is the
+        # list itself - checked by drawing one rather than by finding the
+        # attribute in the source.
+        html = run_viewer_fn(self, "hopList", [{
+            "target": "10.60.9.30", "of": 1, "hops": [
+                {"hop": 1, "host": "10.0.0.1", "ms": 1.2, "state": "ok"}]}, {}],
+            deps=("escapeHtml", "hopWhy", "fanoutLine"))
+        self.assertIn('class="hops" title="', html)
+        self.assertIn("round trip", html)
 
     def test_the_choice_of_peer_is_recoverable_when_the_peer_is_silent(self):
         """The common case on a forward proxy. Nothing about which destination
@@ -6489,10 +6498,16 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         col = traced_side(rep)
         self.assertIsNone(col.get("hops_in"), "this fixture answers no ping")
         self.assertTrue(col.get("picked"), "the choice was not recorded")
-        src = nd.VIEWER_TEMPLATE
-        i = src.index("const hopWhy")
-        self.assertNotIn("hops_in ?", src[i:src.index("col.target", i)],
-                         "the whole footnote is behind the ping having answered")
+        # The footnote has to survive the peer never answering. Run it with
+        # the shape this fixture produces - a choice recorded, no count back -
+        # rather than checking where a condition sits in the source.
+        note = run_viewer_fn(self, "hopWhy", [{
+            "target": col.get("target") or "10.0.0.90",
+            "picked": col["picked"], "of": col.get("of") or 1, "hops": []}])
+        self.assertIn(col["picked"], note,
+                      "the choice vanished with the ping that never answered")
+        self.assertNotIn("assuming it left at", note,
+                         "a count back was described that was never measured")
     def hints(self):
         return nd.FINDING_HINT
 
@@ -9534,17 +9549,25 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         So the timings must not sit under a heading that reads as one
         direction, and the page says which they are where they are drawn.
         """
-        src = nd.VIEWER_TEMPLATE
-        i = src.index("const hopWhy")
-        block = src[i:src.index("const hopList", i)]
-        self.assertIn("round trip", block,
+        note = run_viewer_fn(self, "hopWhy", [{"target": "8.8.8.8", "of": 1,
+                                              "hops": []}])
+        self.assertIn("round trip", note,
                       "the hop timings do not say they are round trips")
         # Under the timings, not above them: it describes what has just been
         # read, and above the list it was a preamble to numbers not yet seen.
-        self.assertLess(src.index('class="hrow'), src.index('class="pboth"'))
-        # And not on the page at all - it is a footnote, not a sentence the
-        # reader has to step over on the way to the numbers.
-        self.assertNotIn("round trip", src[src.index('class="pboth"'):][:400])
+        # Checked on a drawn list, so it is where the block lands rather than
+        # where its source sits.
+        html = run_viewer_fn(self, "hopList", [{
+            "target": "8.8.8.8", "of": 1, "hops_in": 2, "hops": [
+                {"hop": 1, "host": "10.0.0.1", "ms": 1.2, "state": "ok"},
+                {"hop": 2, "host": "8.8.8.8", "ms": 9.9, "state": "ok"}]}, {}],
+            deps=("escapeHtml", "hopWhy", "fanoutLine"))
+        self.assertLess(html.index('class="hrow'), html.index('class="pboth"'))
+        # And not in the visible body at all - it is a footnote in the title,
+        # not a sentence the reader steps over on the way to the numbers.
+        body = html[html.index('class="hops"'):]
+        body = body[body.index(">"):]                 # past the title attribute
+        self.assertNotIn("round trip", body)
 
     def test_a_hop_with_no_timing_says_so_rather_than_printing_null(self):
         """Hops traced to a backend come straight from the parser and carry only
@@ -9909,6 +9932,83 @@ class TestWaitingOnThisBoxRatherThanTheNetwork(unittest.TestCase):
         self.assertIn('"app_limited": sum', src, "it is no longer recorded at all")
         self.assertNotIn('"code": "app_limited', src)
         self.assertNotIn("app_limited", {c for c, *_ in nd.VERDICT_RULES})
+
+
+class TestTheHopListAsDrawn(unittest.TestCase):
+    """Every conditional in the hop list, run rather than read.
+
+    The fragment was a const arrow inside the render, so nothing could call it
+    and the only tests reaching it searched the template for a string. That
+    passes against a branch never taken - the dead branch still contains the
+    string - which is how the privilege badge, the plane tag and the quiet lane
+    were each wrong while green.
+    """
+
+    DEPS = ("escapeHtml", "hopWhy", "fanoutLine")
+
+    def draw(self, hops, names=None, **col):
+        col = dict({"target": "8.8.8.8", "of": 1, "hops": hops}, **col)
+        return run_viewer_fn(self, "hopList", [col, names or {}], deps=self.DEPS)
+
+    def hop(self, **kw):
+        return dict({"hop": 1, "host": "10.0.0.1", "ms": 1.2, "state": "ok"}, **kw)
+
+    def test_the_site_edge_is_drawn_only_on_the_hop_that_carries_it(self):
+        """The most useful single boundary on a path: it answers who to
+        escalate to."""
+        self.assertIn("site edge", self.draw([self.hop(site_edge=True)]))
+        self.assertNotIn("site edge", self.draw([self.hop()]))
+
+    def test_a_resolved_name_appears_only_when_there_is_one(self):
+        with_name = self.draw([self.hop(host="203.0.113.9")],
+                              names={"203.0.113.9": "edge.example-isp.net"})
+        self.assertIn("edge.example-isp.net", with_name)
+        self.assertIn('class="hname"', with_name)
+        self.assertNotIn('class="hname"', self.draw([self.hop(host="203.0.113.9")]))
+
+    def test_a_hop_says_why_it_is_marked_and_stays_quiet_when_it_is_not(self):
+        self.assertIn("32% loss", self.draw([self.hop(state="warn", why="32% loss")]))
+        self.assertNotIn('class="hwhy', self.draw([self.hop()]))
+
+    def test_a_network_handoff_is_named(self):
+        self.assertIn("enters example-isp.net",
+                      self.draw([self.hop(edge="example-isp.net")]))
+
+    def test_a_hop_with_no_timing_says_so_rather_than_drawing_null(self):
+        self.assertIn("no reply", self.draw([self.hop(timed_out=True)]))
+        self.assertIn("no timing", self.draw([self.hop(ms=None)]))
+        self.assertNotIn("null", self.draw([self.hop(ms=None)]))
+
+    def test_the_counts_back_only_appear_when_something_answered(self):
+        """On a forward proxy the peer usually answers no ping, and the list
+        must not imply a measurement that was never taken."""
+        self.assertNotIn('class="pboth"', self.draw([self.hop()]))
+        both = self.draw([self.hop(), self.hop(hop=2)], hops_in=2)
+        self.assertIn("2 out, 2 back", both)
+        self.assertNotIn("asymmetric", both)
+
+    def test_a_path_that_returns_by_a_different_length_says_asymmetric(self):
+        self.assertIn("asymmetric",
+                      self.draw([self.hop(), self.hop(hop=2)], hops_in=5))
+
+    def test_a_baseline_line_is_drawn_only_on_a_run_that_had_one(self):
+        self.assertIn("was 4 hops", self.draw([self.hop()], baseline="was 4 hops"))
+        self.assertNotIn('class="base"', self.draw([self.hop()]))
+
+    def test_a_clean_hop_carries_no_severity_class(self):
+        """`state === 'ok' ? '' : state` - an ok hop must not be tinted, and a
+        marked one must be."""
+        self.assertIn('class="hrow "', self.draw([self.hop()]))
+        self.assertIn('class="hrow crit"', self.draw([self.hop(state="crit")]))
+
+    def test_a_hostile_router_name_cannot_become_markup(self):
+        html = self.draw([self.hop(host="<img src=x onerror=alert(1)>")])
+        self.assertNotIn("<img", html)
+
+    def test_a_hostile_resolved_name_cannot_either(self):
+        html = self.draw([self.hop(host="203.0.113.9")],
+                         names={"203.0.113.9": "<script>alert(1)</script>"})
+        self.assertNotIn("<script>alert(1)", html)
 
 
 class TestTheOtherPlane(unittest.TestCase):
@@ -16859,6 +16959,55 @@ def patch_clock(case, sleep=None, monotonic=None):
         time.sleep = sleep
     if monotonic is not None:
         time.monotonic = monotonic
+
+
+def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
+    """Call one of the viewer's own functions in node and return what it built.
+
+    The alternative - asserting that a string appears in VIEWER_TEMPLATE - has
+    been wrong three times, because a branch that is never taken still contains
+    the string. Anything conditional in that template gets tested by being run.
+
+    Skips rather than passing where node is missing: a check that cannot run is
+    not a check that succeeded.
+    """
+    import json as _json
+    import os as _os
+    import re as _re
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if not node:
+        case.skipTest("node not available to run the viewer's own JS")
+    src = nd.VIEWER_TEMPLATE
+    out = []
+    for const in _re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, _re.M | _re.S):
+        out.append(const.group(0))
+    for fn in tuple(deps) + (name,):
+        i = src.index("function " + fn + "(")
+        depth, j = 0, src.index("{", i)
+        for k in range(j, len(src)):
+            if src[k] == "{":
+                depth += 1
+            elif src[k] == "}":
+                depth -= 1
+                if not depth:
+                    out.append(src[i:k + 1])
+                    break
+    body = "process.stdout.write(String(%s(%s)));" % (
+        name, ", ".join(_json.dumps(a) for a in args))
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write("\n".join(out) + "\n" + body)
+        path = fh.name
+    try:
+        res = subprocess.run([node, path], capture_output=True, text=True,
+                             timeout=30, encoding="utf-8")
+        case.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout
+    finally:
+        _os.unlink(path)
 
 
 def fresh():

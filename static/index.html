@@ -961,6 +961,44 @@ function planeNote(otherPlane){
     + 'any number of peers without the kernel recording one of them.</div>';
 }
 
+// The hop list, and the footnote that says what its numbers assume. Named and
+// declared at the top level rather than built inside the render, because a test
+// that asserts a string appears in this template passes against a branch that is
+// never taken - the dead branch still contains the string. That has happened
+// three times here. Everything conditional below is now reachable by a test that
+// runs it.
+//
+// `names` is passed rather than closed over: it is the reverse-DNS map, which
+// belongs to the report and not to this fragment.
+function hopWhy(col){
+  return [
+    `Traced to ${col.target}` + (col.picked ? `, ${col.picked}` : ''),
+    col.of > 1 ? `out of ${col.of} connections on this side` : '',
+    'each time is a round trip to that hop, out and back together, which a traceroute cannot separate',
+    col.hops_in ? `the ${col.hops_in} back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}` : '',
+  ].filter(Boolean).join(' \u00b7 ') + '.';
+}
+
+function hopList(col, names){
+  names = names || {};
+  return `<div class="hops" title="${escapeHtml(hopWhy(col))}">${col.hops.map(h => `
+      ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
+      <div class="hrow ${h.state === 'ok' ? '' : h.state}">
+        <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
+        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
+        <span class="ht">${h.timed_out ? 'no reply'
+          : h.ms == null ? 'no timing'
+          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+      </div>${fanoutLine(h)}${names[h.host] ? `<div class="hname">${escapeHtml(names[h.host])}</div>` : ''}${
+          h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
+        h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
+      ${col.hops_in ? `<div class="pboth">${
+        col.hops.length} out, ${col.hops_in} back${
+        col.hops_in !== col.hops.length ? ' \u00b7 asymmetric' : ''}</div>` : ''}
+    </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
+}
+
 function renderDiagnosis(data, opts){
   opts = opts || {};
   output.innerHTML = '';
@@ -1089,28 +1127,6 @@ function renderDiagnosis(data, opts){
   // On the list, not on the counts underneath it: those only appear when the
   // peer answered ICMP, so hanging this there hid the choice on every report
   // where it did not.
-  const hopWhy = col => [
-    `Traced to ${col.target}` + (col.picked ? `, ${col.picked}` : ''),
-    col.of > 1 ? `out of ${col.of} connections on this side` : '',
-    'each time is a round trip to that hop, out and back together, which a traceroute cannot separate',
-    col.hops_in ? `the ${col.hops_in} back is from a reply that arrived with ttl ${col.ttl_seen}, assuming it left at ${col.ttl_assumed}` : '',
-  ].filter(Boolean).join(' \u00b7 ') + '.';
-  const hopList = col => `<div class="hops" title="${escapeHtml(hopWhy(col))}">${col.hops.map(h => `
-      ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
-      <div class="hrow ${h.state === 'ok' ? '' : h.state}">
-        <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}</span>
-        <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
-        <span class="ht">${h.timed_out ? 'no reply'
-          : h.ms == null ? 'no timing'
-          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-      </div>${fanoutLine(h)}${NAMES[h.host] ? `<div class="hname">${escapeHtml(NAMES[h.host])}</div>` : ''}${
-          h.why ? `<div class="hwhy ${h.state}">${escapeHtml(h.why)}</div>` : ''}${
-        h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
-      ${col.hops_in ? `<div class="pboth">${
-        col.hops.length} out, ${col.hops_in} back${
-        col.hops_in !== col.hops.length ? ' \u00b7 asymmetric' : ''}</div>` : ''}
-    </div>${col.baseline ? `<div class="base">${escapeHtml(col.baseline)}</div>` : ''}`;
 
   const pp = data.probe_path;
   const probeHtml = pp ? `<div class="pcol ${pp.state}">
@@ -1126,7 +1142,7 @@ function renderDiagnosis(data, opts){
           <span class="pend">${escapeHtml(pp.target)}</span></div>
         <div class="pev">a probe to one address, not the traffic this box carries \u2014 and the only thing that can see a fault at a single hop</div>
       </div>
-      ${hopList(pp)}
+      ${hopList(pp, NAMES)}
     </div>` : '';
   // Drawn when there is either a measured side or a traced path. It used to
   // hang off the measured sides alone, which meant a box with no readable
@@ -1173,7 +1189,7 @@ function renderDiagnosis(data, opts){
     // own, which on a box that relays pointed at the internet twice - once at
     // the connections it opens, once at somewhere it never sends anything.
     const op = side.traced;
-    const traced = op ? hopList(op) : '';
+    const traced = op ? hopList(op, NAMES) : '';
     return `<div class="pcol ${side.state}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}${planeTag(otherPlane)}</span>
           <span class="pfacts"${side.hops_in

@@ -1540,6 +1540,31 @@ class TestArpTable(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertIsNone(entries[2]["mac"])       # (incomplete)
 
+    WINDOWS = ("\nInterface: 192.168.1.10 --- 0xa\n"
+               "  Internet Address      Physical Address      Type\n"
+               "  192.168.1.1           aa-bb-cc-dd-ee-01     dynamic\n"
+               "  192.168.1.50          AA-BB-CC-DD-EE-02     static\n")
+
+    def test_windows_arp_table(self):
+        """Hyphens rather than colons, no "dev" and no "at", so neither of the
+        readers above saw a row - and `arp -a` is what this runs there. The
+        neighbour table, the duplicate-address check and the inventory were all
+        empty on that platform."""
+        entries = nd.parse_arp_table(self.WINDOWS)
+        self.assertEqual([e["ip"] for e in entries], ["192.168.1.1", "192.168.1.50"])
+        self.assertEqual(entries[0]["state"], "dynamic")
+
+    def test_a_windows_mac_gets_the_same_spelling_as_every_other(self):
+        """normalise_mac splits on colons and returns anything else unchanged,
+        so a hyphenated address would have been a second spelling of the same
+        card - and a failover pair sharing one MAC would read as two routers
+        arguing over an address."""
+        entries = nd.parse_arp_table(self.WINDOWS)
+        self.assertEqual(entries[0]["mac"], "aa:bb:cc:dd:ee:01")
+        self.assertEqual(entries[1]["mac"], "aa:bb:cc:dd:ee:02")
+        self.assertIsNotNone(nd.virtual_router_mac(
+            nd.parse_arp_table("  10.0.0.1  00-00-5E-00-01-2A  dynamic\n")[0]["mac"]))
+
     def test_duplicate_ip_detected(self):
         entries = nd.parse_arp_table(
             "10.0.0.5 dev eth0 lladdr aa:bb:cc:dd:ee:01 REACHABLE\n"
@@ -10712,6 +10737,16 @@ class TestTheOtherPlane(unittest.TestCase):
     def test_a_connected_datagram_socket_is_counted_apart(self):
         self.assertEqual(nd.parse_udp_sockets(self.SS)["connected"], 1)
 
+    def test_a_windows_datagram_row_is_three_fields_not_five(self):
+        """`cmd_udp_sockets` runs `netstat -an -p UDP` on Windows, and that
+        prints protocol, local and foreign with no queues. Every row was one
+        field short of the ss layout, so the whole datagram plane - the thing
+        this collection exists to read - came back empty there."""
+        got = nd.parse_udp_sockets("  UDP    0.0.0.0:123            *:*\n"
+                                   "  UDP    0.0.0.0:5353           *:*\n")
+        self.assertEqual(got["listen_ports"], ["123", "5353"])
+        self.assertEqual(got["queued_bytes"], 0)
+
     def test_the_listeners_shown_are_the_low_numbered_ones(self):
         """The finding names four of them, and sorted as text the four it kept
         were 1194, 123, 4500 and 500 - dropping 53, the one that says what this
@@ -13362,6 +13397,40 @@ tcp4       0      0  *.22             *.*               LISTEN
         parsed = nd.parse_socket_states(self.NETSTAT)
         self.assertEqual(parsed["states"].get("ESTABLISHED"), 1)
         self.assertEqual(parsed["states"].get("CLOSE_WAIT"), 1)
+
+    # ---- the platform this branch exists for ------------------------------
+
+    WINDOWS = ("  Proto  Local Address          Foreign Address        State\n"
+               "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING\n"
+               "  TCP    0.0.0.0:445            0.0.0.0:0              LISTENING\n"
+               "  TCP    192.168.1.10:445       203.0.113.9:50210      ESTABLISHED\n"
+               "  TCP    192.168.1.10:49670     198.51.100.1:443       ESTABLISHED\n"
+               "  TCP    192.168.1.10:49999     198.51.100.9:443       SYN_SENT\n")
+
+    def test_windows_spells_two_states_differently(self):
+        """LISTENING and SYN_RECEIVED were in neither the accepted list nor the
+        alias table, so `cmd_socket_states` ran `netstat -an` on Windows and
+        threw away every listener it came back with."""
+        parsed = nd.parse_socket_states(self.WINDOWS)
+        self.assertEqual(parsed["states"].get("LISTEN"), 2)
+        self.assertEqual(parsed["states"].get("ESTABLISHED"), 2)
+        self.assertEqual(parsed["states"].get("SYN_SENT"), 1)
+
+    def test_windows_has_no_queue_columns_to_skip_over(self):
+        """Unix netstat carries Recv-Q and Send-Q between the protocol and the
+        addresses; Windows carries nothing. Counted from a fixed column, the
+        local address came out as the word "LISTENING"."""
+        parsed = nd.parse_socket_states(self.WINDOWS)
+        self.assertEqual(parsed["listen_ports"], ["135", "445"])
+        self.assertEqual(parsed["inbound"], 1)
+        self.assertEqual(parsed["outbound"], 1)
+
+    def test_the_unix_layouts_are_unchanged_by_that(self):
+        ss = nd.parse_socket_states(self.SS)
+        self.assertEqual(ss["states"]["ESTABLISHED"], 2)
+        self.assertEqual(ss["listen_ports"], ["22"])
+        netstat = nd.parse_socket_states(self.NETSTAT)
+        self.assertEqual(netstat["listen_ports"], ["22"])
 
     def test_pending_peers_recorded(self):
         """Naming who isn't answering is the difference between "something is

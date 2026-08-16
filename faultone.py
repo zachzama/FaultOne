@@ -2137,6 +2137,24 @@ def peer_port(addr):
     return m.group(1) if m else None
 
 
+# One spelling per state, because the findings are keyed on one of them. ss
+# says ESTAB and CLOSE-WAIT, unix netstat says ESTABLISHED and CLOSE_WAIT, and
+# Windows says LISTENING and SYN_RECEIVED - neither of which was in the list, so
+# a Windows box reported no listeners at all and every serving finding was
+# drawn from an empty set.
+SOCKET_STATE_ALIASES = {"ESTAB": "ESTABLISHED", "LISTENING": "LISTEN",
+                        "SYN_RECEIVED": "SYN_RECV"}
+TCP_STATES = frozenset((
+    "LISTEN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "TIME_WAIT", "CLOSE_WAIT",
+    "FIN_WAIT_1", "FIN_WAIT_2", "LAST_ACK", "CLOSING", "CLOSED"))
+
+
+def canon_socket_state(raw):
+    """One name for a TCP state, whichever tool on whichever platform said it."""
+    key = (raw or "").strip().upper().replace("-", "_")
+    return SOCKET_STATE_ALIASES.get(key, key)
+
+
 def ports_in_order(ports):
     """Ports sorted as numbers, which they are not stored as.
 
@@ -2195,16 +2213,22 @@ def parse_socket_states(text, own_access=(None, None)):
             state = parts[0]
             peer = parts[4] if len(parts) > 4 else None
         elif parts[0].lower().startswith("tcp"):          # netstat: state last
-            candidate = parts[-1].upper()
-            if candidate.replace("-", "_") in (
-                    "LISTEN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "TIME_WAIT",
-                    "CLOSE_WAIT", "FIN_WAIT_1", "FIN_WAIT_2", "LAST_ACK", "CLOSING", "CLOSED"):
+            candidate = canon_socket_state(parts[-1])
+            if candidate in TCP_STATES:
                 state = candidate
-                peer = parts[-2] if len(parts) >= 2 else None
+                # Unix netstat puts Recv-Q and Send-Q between the protocol and
+                # the addresses and Windows puts nothing there, so a fixed
+                # column lands on the state itself - which is how every
+                # LISTENING row on Windows came out bound to a port named
+                # "LISTENING". The address-shaped fields are taken instead.
+                addrs = [f for f in parts[1:-1] if ":" in f or "." in f]
+                if len(addrs) >= 2:
+                    local, peer = addrs[0], addrs[1]
+                else:
+                    peer = parts[-2] if len(parts) >= 2 else None
         if not state:
             continue
-        key = state.replace("-", "_").upper()
-        key = "ESTABLISHED" if key == "ESTAB" else key
+        key = canon_socket_state(state)
         states[key] = states.get(key, 0) + 1
         if key == "LISTEN" and local and not _is_loopback_socket(local):
             port = peer_port(local)
@@ -2315,13 +2339,23 @@ def parse_udp_sockets(text):
         # its absence is handled rather than assumed.
         buffered = _SKMEM_RB.search(line)
         parts = line.split()
-        if len(parts) < 5 or parts[0].upper() not in ("UNCONN", "ESTAB", "UDP"):
+        if parts[:1] and parts[0].upper() not in ("UNCONN", "ESTAB", "UDP"):
             continue
-        try:
-            recv_q, send_q = int(parts[1]), int(parts[2])
-        except ValueError:
+        if len(parts) >= 5:
+            try:
+                recv_q, send_q = int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+            local, peer = parts[3], parts[4]
+        elif len(parts) == 3:
+            # Windows netstat prints the protocol, the local address and the
+            # foreign one, and no queues at all. Read with ss's five columns in
+            # mind, every datagram row was one field too short and the whole
+            # plane came back empty on the platform this branch exists for.
+            recv_q, send_q = 0, 0
+            local, peer = parts[1], parts[2]
+        else:
             continue
-        local, peer = parts[3], parts[4]
         port = peer_port(local)
         if not port:
             continue
@@ -3398,6 +3432,13 @@ ARP_BSD_RE = re.compile(
 ARP_LINUX_RE = re.compile(
     r"^(\d{1,3}(?:\.\d{1,3}){3})\s+dev\s+(\S+)(?:\s+lladdr\s+([0-9a-fA-F:]{11,17}))?"
     r"(?:.*?\b(REACHABLE|STALE|DELAY|PROBE|FAILED|INCOMPLETE|PERMANENT))?", re.M)
+# Windows: "  192.168.1.1           aa-bb-cc-dd-ee-01     dynamic". Hyphens
+# rather than colons, no "dev" and no "at", so neither reader above sees a
+# single row - and the neighbour table, the duplicate-address check and the
+# inventory were all empty on the platform `arp -a` was being run for.
+ARP_WINDOWS_RE = re.compile(
+    r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})"
+    r"\s+(\w+)", re.M)
 
 
 def normalise_mac(mac):
@@ -3437,6 +3478,15 @@ def parse_arp_table(text):
         entries.append({"ip": m.group(1),
                         "mac": None if incomplete else normalise_mac(mac),
                         "state": "incomplete" if incomplete else None})
+    if entries:
+        return entries
+    for m in ARP_WINDOWS_RE.finditer(text or ""):
+        # Hyphens to colons before normalising: normalise_mac splits on colons
+        # and hands back anything else unchanged, so one address would have had
+        # two spellings and a failover pair would read as an address conflict.
+        entries.append({"ip": m.group(1),
+                        "mac": normalise_mac(m.group(2).replace("-", ":")),
+                        "state": m.group(3).lower()})
     return entries
 
 

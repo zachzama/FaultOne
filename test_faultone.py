@@ -5621,7 +5621,7 @@ class TestZones(unittest.TestCase):
         setup, kwargs = S["path_loss_cosmetic"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        col = traced_side(rep) or rep["probe_path"]
+        col = traced_side(rep) or probe_column(rep)
         self.assertTrue(col["hops"])
         self.assertEqual([h["state"] for h in col["hops"]],
                          ["ok"] * len(col["hops"]))
@@ -6111,7 +6111,7 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
         mod = fresh()
         setup, kwargs = S[code]
         setup(mod)
-        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))["probe_path"]
+        return probe_column(mod.diagnose(quick=False, **scenario_kwargs(kwargs)))
 
     def rows(self, code):
         return {r["hop"]: r for r in self.probe(code)["hops"]}
@@ -6411,7 +6411,7 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         setup, kwargs = S["latency_wall"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        col = rep["probe_path"]
+        col = probe_column(rep)
         edges = [h["hop"] for h in col["hops"] if h["site_edge"]]
         self.assertEqual(edges, [rep["demarc_hop"]],
                          "the column and the report disagree about where the "
@@ -6738,15 +6738,32 @@ class TestBothBoundariesAreAlwaysDrawn(unittest.TestCase):
                          ("this box", "what this box connects out to"))
         self.assertTrue(quiet["title"])
 
-    def test_a_box_with_nothing_on_either_side_draws_no_panel(self):
-        """Two empty columns is not more honest than none. The panel is for
-        showing measurements, and with none on either boundary the three boxes
-        above already say everything there is."""
+    def test_a_box_with_nothing_at_all_draws_no_panel(self):
+        """Two empty columns is not more honest than none. The panel exists to
+        show measurements, and with none on either boundary and no probe to
+        stand in for one, the three boxes above already say everything.
+
+        Quick mode is that box: it skips the trace, so there is no reference
+        probe either, and nothing is left to draw.
+        """
+        mod = fresh()
+        setup, kwargs = S["all_clear"]
+        setup(mod)
+        rep = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+        self.assertIsNone(rep.get("path_legs"))
+
+    def test_but_a_reference_probe_is_reason_enough_to_draw_it(self):
+        """It is something to show on the way-out boundary, so it is a reason
+        to draw the panel rather than an exception to it. Without this the
+        panel stayed absent and the probe rendered alone - one column under
+        three boxes, which is the shape all of this exists to stop."""
         mod = fresh()
         setup, kwargs = S["all_clear"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        self.assertIsNone(rep.get("path_legs"))
+        cols = rep.get("path_legs") or []
+        self.assertEqual(len(cols), 2)
+        self.assertIsNone(rep.get("probe_path"), "and not beside it as well")
 
     def viewer_draws(self, side):
         """Run the lane the browser will run, rather than grepping for it.
@@ -6808,6 +6825,69 @@ class TestBothBoundariesAreAlwaysDrawn(unittest.TestCase):
                                    "quiet_because": "<img src=x onerror=alert(1)>"})
         self.assertNotIn("<img", drawn)
         self.assertNotIn("<b>x</b>", drawn)
+
+
+class TestTheReferenceProbeSitsInTheWayOutColumn(unittest.TestCase):
+    """The probe to `--target` exists for a box that opens no connections of
+    its own: nothing to trace, so the way out is whatever a fixed address can
+    show. It used to get a column of its own, because with no outbound
+    connections there was no way-out column for it to sit in.
+
+    There always is one now, and a third column under three boxes is worse than
+    the problem it solved - the panel's whole claim is that three places have
+    two boundaries between them.
+    """
+
+    def panel(self, code):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        return rep
+
+    def test_no_scenario_draws_a_third_column(self):
+        for code in sorted(S):
+            mod = fresh()
+            setup, kwargs = S[code]
+            setup(mod)
+            try:
+                rep = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+            except Exception:
+                continue
+            if not rep.get("path_legs"):
+                continue
+            with self.subTest(code=code):
+                self.assertIsNone(rep.get("probe_path"),
+                                  "a probe column beside the two boundaries")
+
+    def test_the_probe_becomes_the_way_out_column_s_traced_path(self):
+        """Which is what it always was: on a box that depends on nothing, the
+        reference probe is the only account of the way out there can be."""
+        rep = self.panel("service_address_unserved")
+        out = next(c for c in rep["path_legs"] if c["side"] == "backend")
+        self.assertEqual(len(out["legs"]), 0)
+        self.assertTrue((out.get("traced") or {}).get("hops"))
+
+    def test_and_says_a_reference_probe_is_not_a_dependency(self):
+        """The distinction the whole panel was rebuilt around. A probe to a
+        fixed address says the way out works; it does not say the work is
+        getting through, and a column that did not say so would be the old
+        reachability check wearing the new column's clothes."""
+        out = next(c for c in self.panel("service_address_unserved")["path_legs"]
+                   if c["side"] == "backend")
+        self.assertIn("reference probe", out["quiet_because"])
+        self.assertIn("not that the work is getting through", out["quiet_because"])
+        self.assertNotIn("measure The", out["quiet_because"])
+
+    def test_a_column_with_real_traffic_keeps_its_own_traced_path(self):
+        """The probe must not overwrite a trace to somewhere this box actually
+        talks to. That was the original fault: pointing at the internet twice,
+        once at the connections it opens and once at somewhere it never sends
+        anything."""
+        rep = self.panel("tcp_flow_loss_backends")
+        out = next(c for c in rep["path_legs"] if c["side"] == "backend")
+        self.assertTrue(out["legs"], "this fixture should have real legs")
+        self.assertIsNone(rep.get("probe_path"))
 
 
 class TestSomethingInTheMiddle(unittest.TestCase):
@@ -9169,6 +9249,16 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
                     continue
                 if any(l["state"] in self.LIT for l in side["legs"]):
                     continue
+                # A column with no legs at all is a different thing from one
+                # whose legs disagree with it. It is a boundary nothing was
+                # measured across, drawn so the panel keeps two columns, and
+                # it carries its own sentence saying why it is empty - which
+                # is checked separately rather than here.
+                if not side["legs"]:
+                    with self.subTest(code=code, side=side["side"], quiet=True):
+                        self.assertTrue(side.get("quiet_because"),
+                                        "an empty column with nothing to say")
+                    continue
                 with self.subTest(code=code, side=side["side"]):
                     self.assertIn(top, self.NOT_ON_A_LEG,
                                   "a column is lit and every leg under it reads OK")
@@ -9256,6 +9346,22 @@ class TestTheSideIsNamedForWhatDecidesIt(unittest.TestCase):
         database and an upstream API, and there is no one sentence for it."""
         self.assertEqual(nd._where_that_is("10.0.0.90:5432, 203.0.113.9:443"), "")
         self.assertEqual(nd._where_that_is(""), "")
+
+
+def probe_column(report):
+    """The reference probe, wherever it now lives.
+
+    It used to be a column of its own on the report. It is folded into the
+    way-out column now, because a third column under three boxes contradicts
+    the panel's whole claim that three places have two boundaries. Same object,
+    different home, so the tests that were about the probe stay about it.
+    """
+    if report.get("probe_path"):
+        return report["probe_path"]
+    out = traced_side(report)
+    return out if out and not (
+        next((c for c in report.get("path_legs") or []
+              if c["side"] == "backend"), {}) or {}).get("legs") else None
 
 
 def traced_side(report, side="backend"):
@@ -9572,6 +9678,10 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         self.assertIsNone(rep["probe_path"],
                           "a box that relays is being drawn a reference probe "
                           "as well as its own way out")
+        # And the way-out column is tracing the peer it actually talks to
+        # rather than the reference address, which is the half that would
+        # survive the probe simply being folded in on top of it.
+        self.assertNotEqual((traced_side(rep) or {}).get("target"), "8.8.8.8")
 
     def test_a_box_that_opens_nothing_keeps_the_reference_probe(self):
         """There is no outbound connection to trace, and on one of those the
@@ -9580,8 +9690,12 @@ class TestASideGoneQuietIsAFindingAndNotJustAnArrow(unittest.TestCase):
         setup, kwargs = S["service_address_unserved"]
         setup(mod)
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
-        self.assertIsNone(traced_side(rep))
-        self.assertIsNotNone(rep["probe_path"])
+        # Inside the way-out column now rather than beside it: there is no
+        # outbound connection to trace, so the probe is that column's path.
+        out = next(c for c in rep["path_legs"] if c["side"] == "backend")
+        self.assertEqual(out["legs"], [])
+        self.assertIsNotNone(probe_column(rep))
+        self.assertIs(out["traced"], probe_column(rep))
 
     def test_quick_mode_traces_nothing(self):
         mod = fresh()
@@ -9938,7 +10052,7 @@ class TestTheFanOutIsDrawnWhereItExplainsSomething(unittest.TestCase):
         loop = next((f for f in report["findings"] if f["code"] == "loop"), None)
         self.assertIsNotNone(loop, "the fixture no longer produces a loop")
         self.assertEqual(loop["severity"], "warning", "the loop did not hedge")
-        marked = [r["hop"] for r in report["probe_path"]["hops"] if r.get("fanout")]
+        marked = [r["hop"] for r in probe_column(report)["hops"] if r.get("fanout")]
         self.assertEqual(marked, [3], "the page cannot show why the loop hedged")
 
 
@@ -16042,7 +16156,12 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
                 rep = m.diagnose(quick=False, **scenario_kwargs(kw))
             except Exception:
                 continue
-            for col in (rep.get("out_path"), rep.get("probe_path")):
+            # Every column that carries hops, wherever it lives. The probe
+            # used to be a column of its own and is folded into the way-out
+            # one now, so reading only the old place found nothing at all.
+            cols = [rep.get("out_path"), rep.get("probe_path")]
+            cols += [c.get("traced") for c in rep.get("path_legs") or []]
+            for col in cols:
                 if col:
                     given |= {h["state"] for h in col["hops"]}
         self.assertTrue(given, "no scenario produced a hop state to check")

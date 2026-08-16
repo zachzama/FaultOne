@@ -13035,6 +13035,48 @@ SIDE_TRACE_CODES = {
 }
 
 
+def fold_the_probe_into_the_way_out(report):
+    """Put the reference probe inside the way-out column instead of beside it.
+
+    The probe to `--target` exists for a box that opens no connections of its
+    own: there is nothing it depends on to trace, so the way out is whatever a
+    fixed address can show. It used to get a column of its own, because with no
+    outbound connections there was no way-out column for it to sit in.
+
+    There always is one now, and a third column under three boxes is worse than
+    the problem it solved - the panel's whole claim is that three places have
+    two boundaries between them. So the probe becomes that column's traced
+    path, which is what it always was.
+    """
+    probe = report.get("probe_path")
+    if not probe:
+        return
+    # A probe is itself something to show on the way-out boundary, so it is a
+    # reason to draw the panel rather than an exception to it. Without this the
+    # panel stayed absent and the probe rendered on its own - one column under
+    # three boxes, which is the shape all of this exists to stop.
+    if not report.get("path_legs"):
+        zoned = {z.get("side"): z.get("state") for z in (report.get("sides") or [])}
+        raw = report.get("raw") or {}
+        sock = raw.get("sockets") or {}
+        report["path_legs"] = [
+            _quiet_side("client", zoned.get("downstream"), sock, raw),
+            _quiet_side("backend", zoned.get("upstream"), sock, raw)]
+    for side in report.get("path_legs") or []:
+        if side["side"] != "backend" or side["legs"] or side.get("traced"):
+            continue
+        side["traced"] = probe
+        # The reasons do not end in a full stop, because most of them are read
+        # as a clause. Joined to a second sentence, one has to be added.
+        side["quiet_because"] = (
+            "%s. The hops below are a reference probe to %s rather than to "
+            "anything this box depends on, because it depends on nothing: they "
+            "say the way out works, not that the work is getting through."
+            % (side.get("quiet_because") or "", probe.get("target")))
+        report["probe_path"] = None
+        return
+
+
 def trace_each_side(legs, findings, quick=False):
     """Trace a destination on both sides, and hang each path off its own column.
 
@@ -15360,6 +15402,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # build_path_legs, which reads what has already been collected and does not
     # probe: this is one ping per side and belongs where the other probes are.
     trace_each_side(report.get("path_legs"), findings, quick)
+    fold_the_probe_into_the_way_out(report)
     count_the_hops_in(report.get("path_legs"), quick)
     report["peer_names"] = name_the_addresses(
         addresses_on_the_page(report), raw, quick)

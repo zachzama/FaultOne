@@ -329,6 +329,40 @@ confidence of every verdict down twice for one gap. `equivalence.py` caught it
 on two unrelated scenarios. A pair of reads belongs behind one raw key with the
 difference already taken.
 
+## Settled: the baseline diffs findings, not ten scalars
+
+Surfaced independently by two comparisons - SuzieQ's differentialReachability
+and then Kentik, PRTG and LogicMonitor all treating change over time as first
+class. That repetition was the signal: it is the weakest part of this tool
+relative to everything in its space.
+
+`compare_reports` diffed about ten hand-picked scalars and the verdict
+sentence. Measured before touching it: a box going from `all_clear` to a
+critical loss finding produced **one line** - the headline text is different.
+True, and useless, on the one feature whose whole job is saying what changed.
+
+Findings were the right unit because they are already the unit everything else
+is expressed in: a stable code, a severity that moves in a known direction, and
+a headline written to be read. Nothing new is measured and no finding was added.
+
+Three things it has to get right, all of them found by building it:
+
+- **Only faults.** Context findings arriving and leaving is mostly the box
+  being read slightly differently, and a list of those buries the two lines
+  that matter.
+- **Never itself.** A baseline report carries its own `regression_since_baseline`,
+  so diffing it reports last visit's summary of *its* baseline as a fault that
+  has since cleared, on every third visit.
+- **Not across a change of target.** The pre-existing guard caught this: two
+  visits to different destinations did not measure the same thing, and
+  `--target auto` moves on its own the first time a box gains a client. Only
+  findings that were never about the target survive it.
+
+The verdict line is dropped when a listed fault already carries that sentence,
+because the verdict headline *is* a finding's headline and both lines would
+read as two changes. It is also dropped when the verdict is itself about the
+comparison, which is the section describing itself above the list it describes.
+
 ## Settled: two gaps found by checking against somebody else's fault table
 
 Batfish parses configurations, simulates convergence and computes a data plane

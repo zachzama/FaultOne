@@ -8930,7 +8930,69 @@ def compare_reports(current, baseline):
                      else "neutral")
         changes.append({"what": "verdict", "before": bv.get("headline"),
                         "after": cv.get("headline"), "direction": direction})
+    changes.extend(compare_findings(current, baseline, same_target))
     return changes
+
+
+# Only faults are diffed. A context finding arriving or leaving is usually the
+# box being read slightly differently - a listener that happened to be idle, a
+# trace that took one hop fewer - and a list of those buries the two lines that
+# matter. What is worth saying is which faults are new and which have gone.
+_COMPARED_SEVERITIES = ("warning", "critical")
+# And the two findings that are themselves about the comparison. A baseline
+# report carries its own, so diffing them would report last visit's summary of
+# its own baseline as a fault that has since cleared.
+_ABOUT_THE_COMPARISON = ("regression_since_baseline", "baseline_changes")
+
+
+def compare_findings(current, baseline, same_target=True):
+    """Which faults appeared, cleared, or changed severity since last time.
+
+    The comparison used to diff about ten hand-picked scalars and the verdict
+    sentence, which meant a box going from clean to a critical loss finding
+    reported one line: the headline text is different. True, and useless - it
+    said something changed without saying what, on the one feature whose entire
+    job is saying what.
+
+    Findings are the right unit for it because they are already the unit
+    everything else here is expressed in: each one has a code that is stable
+    across releases, a severity that can move in a known direction, and a
+    headline written to be read. Nothing new has to be measured.
+    """
+    def faults(report):
+        return {f.get("code"): f for f in (report or {}).get("findings") or []
+                if f.get("severity") in _COMPARED_SEVERITIES
+                and f.get("code") and f["code"] not in _ABOUT_THE_COMPARISON}
+
+    was, now = faults(baseline), faults(current)
+    if not same_target:
+        # The same rule the target-dependent scalars already follow: two visits
+        # that measured different destinations did not measure the same thing,
+        # and half the findings differ because the question changed rather than
+        # because the network did. What survives a change of target is what was
+        # never about the target - this box's own link, hardware and limits.
+        #
+        # `--target auto` moves on its own when a box gains its first client,
+        # so this is not a rare case, and reporting a dozen new faults on a box
+        # where nothing happened is how a diff stops being read.
+        was = {c: f for c, f in was.items() if finding_side(c) == "local"}
+        now = {c: f for c, f in now.items() if finding_side(c) == "local"}
+    if not was and not now:
+        return []
+    out = []
+    for code in sorted(set(now) - set(was)):
+        out.append({"what": HEADLINE.get(code) or code, "before": "not present",
+                    "after": now[code]["severity"], "direction": "worse"})
+    for code in sorted(set(was) - set(now)):
+        out.append({"what": HEADLINE.get(code) or code, "before": was[code]["severity"],
+                    "after": "gone", "direction": "better"})
+    for code in sorted(set(was) & set(now)):
+        before, after = was[code]["severity"], now[code]["severity"]
+        if before == after:
+            continue
+        out.append({"what": HEADLINE.get(code) or code, "before": before, "after": after,
+                    "direction": "worse" if after == "critical" else "better"})
+    return out
 
 
 def collection_coverage(raw):
@@ -14564,6 +14626,11 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
                                   # between visits could never be reported.
                                   "version": __version__,
                                   "python": platform.python_version(),
+                                  # Every check has run by here, so the fault
+                                  # list is complete. The verdict has not been
+                                  # built yet and is compared further down,
+                                  # where it exists.
+                                  "findings": findings,
                                   "verdict": None}, baseline) if baseline else []
     # The previous visit's path, kept only as far as it can be drawn: the hop
     # number and how long the round trip to it took. Enough to lay the last
@@ -14614,8 +14681,21 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
             verdict["next_step"] += f" This device is connected to {where}."
             verdict["switch_port"] = where
 
+    # The verdict line, unless the fault behind it is already in the list. The
+    # verdict headline *is* a finding's headline, so on the ordinary change -
+    # one fault appears and becomes the verdict - both lines carry the same
+    # sentence and the second one is read as a second change.
+    #
+    # And not at all when the verdict is itself about the comparison. "The
+    # verdict changed to: something changed since the last visit" is the
+    # section describing itself, printed above the list it is describing.
+    _named = {c["what"] for c in comparison}
+    _top = (verdict.get("based_on") or [None])[0]
+    _behind_it = HEADLINE.get(_top)
     if baseline and (baseline.get("verdict") or {}).get("headline") \
-            and verdict.get("headline") != baseline["verdict"]["headline"]:
+            and verdict.get("headline") != baseline["verdict"]["headline"] \
+            and _behind_it not in _named \
+            and _top not in _ABOUT_THE_COMPARISON:
         rank = SEVERITY_RANK
         comparison.append({
             "what": "verdict",

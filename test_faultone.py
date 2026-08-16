@@ -6674,6 +6674,138 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestWhatChangedSinceTheLastVisit(unittest.TestCase):
+    """`--baseline` diffed about ten hand-picked scalars and the verdict
+    sentence. A box going from clean to a critical loss finding reported one
+    line - the headline text is different - which is true and useless, on the
+    one feature whose whole job is saying what changed.
+
+    Findings are the right unit because they are already the unit everything
+    else is expressed in: a stable code, a severity that moves in a known
+    direction, and a headline written to be read. Nothing new is measured.
+    """
+
+    def visit(self, code, baseline=None):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        kw = dict(scenario_kwargs(kwargs))
+        if baseline is not None:
+            kw["baseline"] = baseline
+        return mod.diagnose(quick=True, **kw)
+
+    def changes(self, before, after):
+        return self.visit(after, baseline=self.visit(before))["comparison"]
+
+    def test_a_fault_that_appeared_is_named_and_counts_as_worse(self):
+        got = self.changes("all_clear", "tcp_flow_loss_backends")
+        appeared = [c for c in got if c["after"] == "critical"]
+        self.assertEqual(len(appeared), 1)
+        self.assertEqual(appeared[0]["direction"], "worse")
+        self.assertIn("loss", appeared[0]["what"])
+
+    def test_a_fault_that_cleared_is_named_and_counts_as_better(self):
+        gone = [c for c in self.changes("tcp_flow_loss_backends", "all_clear")
+                if c["after"] == "gone"]
+        self.assertEqual(len(gone), 1)
+        self.assertEqual(gone[0]["direction"], "better")
+
+    def test_two_identical_visits_report_nothing(self):
+        """The case that decides whether this is usable. A diff that finds
+        changes between a report and itself is a diff nobody will read twice.
+        """
+        self.assertEqual(self.changes("tcp_flow_loss_backends",
+                                      "tcp_flow_loss_backends"), [])
+
+    def test_the_regression_finding_now_names_the_fault(self):
+        """It counted `worse` entries and had almost none to count, so it fired
+        on a gateway address changing and stayed silent when a critical fault
+        appeared."""
+        after = self.visit("tcp_flow_loss_backends", baseline=self.visit("all_clear"))
+        found = next(f for f in after["findings"]
+                     if f["code"] == "regression_since_baseline")
+        self.assertIn("loss", found["message"])
+
+    def test_context_findings_are_not_diffed(self):
+        """A listener that happened to be idle, or a trace one hop shorter,
+        arriving and leaving would bury the two lines that matter."""
+        before = self.visit("all_clear")
+        after = self.visit("all_clear", baseline=before)
+        self.assertEqual(after["comparison"], [])
+
+    def test_the_comparison_never_diffs_itself(self):
+        """A baseline report carries its own regression finding. Diffing that
+        would report last visit's summary of *its* baseline as a fault that has
+        since cleared, on every third visit."""
+        first = self.visit("all_clear")
+        second = self.visit("tcp_flow_loss_backends", baseline=first)
+        third = self.visit("tcp_flow_loss_backends", baseline=second)
+        self.assertNotIn("regression_since_baseline",
+                         [c["what"] for c in third["comparison"]])
+        self.assertEqual(third["comparison"], [], "the third visit changed nothing")
+
+    def test_the_verdict_line_is_dropped_when_the_fault_behind_it_is_listed(self):
+        """The verdict headline *is* a finding's headline. On the ordinary
+        change - one fault appears and becomes the verdict - both lines carry
+        the same sentence, and the second reads as a second change."""
+        got = self.changes("all_clear", "tcp_flow_loss_backends")
+        self.assertNotIn("verdict", [c["what"] for c in got])
+        self.assertEqual(len(got), 1)
+
+    def test_the_verdict_line_survives_when_no_listed_fault_carries_it(self):
+        """The guard drops the verdict line only when a listed fault already
+        says the same sentence, which is the case where a fault *appeared*.
+
+        When a fault clears, the new verdict is about the absence of one and no
+        entry in the list carries that sentence, so the line still has work to
+        do: "gone" says the fault ended, and the verdict says what the box
+        reads as now.
+        """
+        got = self.changes("tcp_flow_loss_backends", "all_clear")
+        self.assertIn("verdict", [c["what"] for c in got])
+        self.assertIn("gone", [c["after"] for c in got])
+
+    def test_the_verdict_line_is_dropped_when_the_verdict_is_about_the_diff(self):
+        """"The verdict changed to: something changed since the last visit" is
+        the section describing itself, printed above the list it describes."""
+        got = self.changes("tcp_flow_loss_backends", "ephemeral_ports_low")
+        self.assertNotIn("verdict", [c["what"] for c in got])
+        self.assertTrue(got, "the faults themselves still have to be listed")
+
+    def test_a_severity_moving_is_reported_in_the_direction_it_moved(self):
+        was = {"findings": [{"code": "tcp_flow_loss_backends", "severity": "warning"}]}
+        now = {"findings": [{"code": "tcp_flow_loss_backends", "severity": "critical"}]}
+        worse = nd.compare_findings(now, was)
+        self.assertEqual([c["direction"] for c in worse], ["worse"])
+        better = nd.compare_findings(was, now)
+        self.assertEqual([c["direction"] for c in better], ["better"])
+
+    def test_a_changed_target_only_diffs_what_was_never_about_it(self):
+        """The rule the target-dependent scalars already follow. Two visits to
+        different destinations did not measure the same thing, and half the
+        findings would differ because the question changed rather than because
+        the network did.
+
+        `--target auto` moves on its own the first time a box gains a client,
+        so this is not rare, and a dozen invented regressions is how a diff
+        stops being read.
+        """
+        upstream = {"findings": [{"code": "tcp_flow_loss_backends",
+                                  "severity": "critical"}]}
+        local = {"findings": [{"code": "link_errors_live", "severity": "critical"}]}
+        self.assertEqual(nd.compare_findings(upstream, {"findings": []},
+                                             same_target=False), [])
+        self.assertEqual(len(nd.compare_findings(local, {"findings": []},
+                                                 same_target=False)), 1,
+                         "a fault about this box survives the target moving")
+        self.assertEqual(len(nd.compare_findings(upstream, {"findings": []},
+                                                 same_target=True)), 1)
+
+    def test_a_report_with_no_findings_key_is_not_a_crash(self):
+        self.assertEqual(nd.compare_findings({}, {}), [])
+        self.assertEqual(nd.compare_findings(None, None), [])
+
+
 class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
     """Two ways a box discards traffic without anything on the network being
     wrong, found by checking this tool's findings against Batfish's flow

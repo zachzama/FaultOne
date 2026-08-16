@@ -10232,6 +10232,100 @@ class TestTheHopListAsDrawn(unittest.TestCase):
         self.assertNotIn("<script>alert(1)", html)
 
 
+class TestEveryAddressAsksForItself(unittest.TestCase):
+    """`--source all`. A box holding a service address beside its own has a
+    path per address, and the ordinary run leaves from whichever the kernel
+    picks - so it can pass while the address the clients use reaches nothing."""
+
+    ADDRS = [{"address": "10.0.0.5", "scope": "global", "interface": "eth0"},
+             {"address": "10.0.0.60", "scope": "global", "interface": "eth0"},
+             {"address": "fe80::1", "scope": "link", "interface": "eth0"},
+             {"address": "127.0.0.1", "scope": "host", "interface": "lo"}]
+
+    def probe(self, cannot=(), addrs=None):
+        mod = fresh()
+
+        def ping(target, count=4, wait=2, source=None):
+            if source in cannot:
+                return {"ok": True, "cmd": "ping", "stdout":
+                        "4 packets transmitted, 0 received, 100% packet loss\n"}
+            return {"ok": True, "cmd": "ping", "stdout":
+                    "4 packets transmitted, 4 received, 0% packet loss\n"
+                    "rtt min/avg/max/mdev = 1.0/12.5/20.0/2.0 ms\n"}
+        mod.cmd_ping = ping
+        return mod.probe_each_source("8.8.8.8",
+                                     self.ADDRS if addrs is None else addrs, 4, 2)
+
+    def test_only_global_scope_addresses_are_asked(self):
+        """A link-local address cannot reach off the segment and a loopback one
+        cannot leave the box, so both would report a failure that is only what
+        they are."""
+        self.assertEqual([r["address"] for r in self.probe()],
+                         ["10.0.0.5", "10.0.0.60"])
+
+    def test_one_address_is_the_ordinary_run(self):
+        """Nothing to compare, and a matrix of one row is a longer way of
+        saying what the run already said."""
+        self.assertEqual(self.probe(addrs=self.ADDRS[:1]), [])
+
+    def test_each_row_carries_what_it_measured(self):
+        row = self.probe()[0]
+        self.assertTrue(row["reached"])
+        self.assertEqual(row["loss_pct"], 0)
+        self.assertEqual(row["avg_ms"], 12.5)
+        self.assertEqual(row["interface"], "eth0")
+
+    def test_an_address_that_reaches_nothing_says_so(self):
+        rows = {r["address"]: r for r in self.probe(cannot=("10.0.0.60",))}
+        self.assertFalse(rows["10.0.0.60"]["reached"])
+        self.assertEqual(rows["10.0.0.60"]["loss_pct"], 100)
+        self.assertTrue(rows["10.0.0.5"]["reached"])
+
+    def test_the_source_is_passed_and_never_set(self):
+        """The probes run together, so a global each of them assigned in turn
+        would be the one shape that cannot be parallel."""
+        mod = fresh()
+        seen = []
+        mod.cmd_ping = lambda t, c=4, w=2, source=None: (
+            seen.append(source) or {"ok": True, "cmd": "ping", "stdout":
+                                    "4 packets transmitted, 4 received, 0% packet loss\n"})
+        mod.probe_each_source("8.8.8.8", self.ADDRS, 4, 2)
+        self.assertEqual(sorted(x for x in seen if x), ["10.0.0.5", "10.0.0.60"])
+        self.assertIsNone(mod.SOURCE_ADDRESS, "the run-wide setting was written to")
+
+    def fired(self, rows, target="8.8.8.8"):
+        out = []
+        nd._check_source_reachability({"source_matrix": rows,
+                                       "probe_target": target}, out)
+        return [f["code"] for f in out]
+
+    def test_it_fires_only_when_one_can_and_another_cannot(self):
+        both = [{"address": "a", "reached": True}, {"address": "b", "reached": False}]
+        self.assertEqual(self.fired(both), ["source_cannot_reach"])
+
+    def test_all_of_them_failing_is_the_target_being_unreachable(self):
+        """Which every other check on the run already says better. Repeating it
+        per address would be one fault reported four times."""
+        none = [{"address": "a", "reached": False}, {"address": "b", "reached": False}]
+        self.assertEqual(self.fired(none), [])
+
+    def test_all_of_them_reaching_says_nothing(self):
+        fine = [{"address": "a", "reached": True}, {"address": "b", "reached": True}]
+        self.assertEqual(self.fired(fine), [])
+
+    def test_a_single_row_is_not_a_comparison(self):
+        self.assertEqual(self.fired([{"address": "a", "reached": False}]), [])
+
+    def test_the_message_names_both_sides_of_the_difference(self):
+        out = []
+        nd._check_source_reachability(
+            {"probe_target": "8.8.8.8",
+             "source_matrix": [{"address": "10.0.0.5", "reached": True},
+                               {"address": "10.0.0.61", "reached": False}]}, out)
+        self.assertIn("10.0.0.61 cannot reach", out[0]["message"])
+        self.assertIn("10.0.0.5 can", out[0]["message"])
+
+
 class TestTheOtherPlane(unittest.TestCase):
     """A box can carry its user traffic over datagrams while its control plane
     is TCP, and every other socket reading here is TCP. Read from the TCP table
@@ -17711,6 +17805,23 @@ def _(nd):
                            timers=(10, 9000, 9000)),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
                            timers=(10, 10, 10)))
+
+@scenario("source_cannot_reach")
+def _(nd):
+    # Three addresses on one box, one of which cannot reach the target. The
+    # ordinary run leaves from whichever the kernel picks and would pass.
+    nd.PROBE_EVERY_SOURCE = True
+    nd.cmd_interfaces = lambda: {"ok": True, "cmd": "ip addr", "stdout":
+        "2: eth0: <UP>\n    inet 10.0.0.5/24 scope global\n"
+        "    inet 10.0.0.60/24 scope global secondary\n"
+        "    inet 10.0.0.61/24 scope global secondary\n"}
+    real = nd.cmd_ping
+    def ping(target, count=4, wait=2, source=None):
+        if source == "10.0.0.61":
+            return {"ok": True, "cmd": "ping", "stdout":
+                    "4 packets transmitted, 0 received, 100% packet loss\n"}
+        return real(target, count, wait)
+    nd.cmd_ping = ping
 
 @scenario("clients_may_be_on_the_datagram_plane")
 def _(nd):

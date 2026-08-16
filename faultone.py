@@ -116,6 +116,9 @@ OS_NAME = platform.system()  # 'Linux', 'Darwin' (macOS), or 'Windows'
 # same reason OS_NAME is one: it is a property of the run, fixed before any
 # check starts, and read in places too far apart to pass it between.
 SOURCE_ADDRESS = None
+# Ask every global-scope address whether it can reach the target, rather
+# than whichever one the kernel picks. Set by `--source all`.
+PROBE_EVERY_SOURCE = False
 
 # platform.system() answers with the kernel's name, so a Mac calls itself
 # "Darwin". That is accurate and means nothing to most people reading a report;
@@ -522,8 +525,14 @@ def run_first_understood(variants, timeout=15):
     return result
 
 
-def _source_flag(tool):
+def _source_flag(tool, source=None):
     """The flag this tool takes for "leave from this address", as a list.
+
+    `source` overrides the global for one call. Asking every address on a box
+    whether it can reach the target means several probes in flight at once, and
+    a global that each of them would have to set in turn is the one shape that
+    cannot be done in parallel. Nothing mutates: the caller says which address
+    it is asking about, and the run-wide setting stays the default.
 
     Three spellings for one idea, and they are not interchangeable. Linux ping
     takes -I, which also accepts an interface name; BSD and macOS ping take -S
@@ -534,19 +543,20 @@ def _source_flag(tool):
     Empty when no source was asked for, so the command built is byte for byte
     the one that was built before this existed.
     """
-    if not SOURCE_ADDRESS:
+    source = source or SOURCE_ADDRESS
+    if not source:
         return []
     if tool == "ping":
         if OS_NAME == "Windows":
             return []
-        return ["-S" if OS_NAME == "Darwin" else "-I", SOURCE_ADDRESS]
-    return ["-s", SOURCE_ADDRESS]
+        return ["-S" if OS_NAME == "Darwin" else "-I", source]
+    return ["-s", source]
 
 
-def cmd_ping(target, count=4, wait=2):
+def cmd_ping(target, count=4, wait=2, source=None):
     if not valid_target(target):
         return bad_target()
-    src = _source_flag("ping")
+    src = _source_flag("ping", source)
     if OS_NAME == "Windows":
         return run(["ping", "-n", str(count), target])
     # -W is seconds on Linux but milliseconds on BSD/macOS - passing "2" there
@@ -6900,6 +6910,11 @@ VERDICT_RULES = [
      "Check the service is running and bound as you think. If this box forwards in "
      "the kernel (IPVS, DNAT, direct return) there is no listener to find and this "
      "is expected."),
+    ("source_cannot_reach", "whatever routes or filters by source address",
+     "One of this box's addresses cannot reach the target while others can",
+     "The box is not the problem - the same routing table serves all of them. Look "
+     "at what treats that source differently: a policy route, a firewall matching "
+     "on source, or an address something upstream still sends elsewhere."),
     ("service_endpoint_idle", "whatever steers clients to that port, or the instance behind it",
      "One listener on this address is serving nobody while another on it is busy",
      "The address works - traffic is arriving on it and going to a different port. "
@@ -7884,6 +7899,7 @@ FINDING_SIDE.update({
     "service_address_unserved": "downstream",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
+    "source_cannot_reach": "upstream",
     "clients_may_be_on_the_datagram_plane": "downstream",
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
@@ -8066,6 +8082,10 @@ STAGE_RULES = [
     # A routing loop means traffic never arrives, so it fails the stage rather
     # than merely warning it.
     ("internet", {"inet_unreachable", "destination_unresponsive", "loop",
+                  # One address failing while its neighbours succeed is a
+                  # failure of this stage for whoever uses that address, even
+                  # though the run's own probe reached the target.
+                  "source_cannot_reach",
                   "conntrack_drops_live"},
      {"inet_partial_loss", "inet_loss_unmeasured", "path_loss", "trace_stalls",
       "latency_wall", "latency_high", "tcp_retransmits", "path_admin_prohibited",
@@ -8163,6 +8183,10 @@ RAW_STAGE = {
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
     "sockets": ("ports", "clients"), "ports": "ports",
+    "source_matrix": "internet",
+    # Which target the matrix asked about, so a row means something on its
+    # own. Same stage as the matrix it labels.
+    "probe_target": "internet",
     # The other plane. Kept for the clients stage, because what it answers
     # is whether an empty TCP table means an empty box.
     "udp_sockets": "clients",
@@ -11530,6 +11554,45 @@ RELAY_MIN_BYTES = 10_000_000
 RELAY_RATIO = 20
 
 
+def _check_source_reachability(raw, findings):
+    """One address on this box cannot reach what its neighbours can.
+
+    The whole reason for asking every address rather than one. A box holding a
+    service address beside its own has a path per address, and they are not the
+    same path - a policy route, a filter matched on source, or an address held
+    by a partner that never gave it up. The ordinary run leaves from whichever
+    address the kernel picks, so it can pass while the address the clients
+    actually use cannot reach anything.
+
+    Silent unless at least one address succeeded. All of them failing is the
+    target being unreachable, which every other check on this run already says
+    better, and repeating it here per address would be one fault reported four
+    times.
+    """
+    rows = raw.get("source_matrix") or []
+    if len(rows) < 2:
+        return
+    reached = [r for r in rows if r.get("reached")]
+    failed = [r for r in rows if not r.get("reached")]
+    if not reached or not failed:
+        return
+    where = ", ".join(r["address"] for r in failed[:4])
+    ok = ", ".join(r["address"] for r in reached[:2])
+    findings.append({
+        "severity": "critical",
+        "layer": 3,
+        "code": "source_cannot_reach",
+        "message": f"{where} cannot reach {raw.get('probe_target') or 'the target'} "
+                   f"while {ok} can, from this same box. Every address here is on "
+                   f"the same interface list and the same routing table, so what "
+                   f"differs is what happens to the traffic after it leaves: a "
+                   f"policy route, a filter matched on source address, or an "
+                   f"address this box holds and something upstream still sends "
+                   f"elsewhere. A client using that address sees an outage that a "
+                   f"run from this box's own address does not.",
+    })
+
+
 def _check_relay_volume(raw, findings):
     """What arrived on one side against what left on the other.
 
@@ -12586,6 +12649,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     # check first, which runs before the socket table is even collected, so
     # it read an empty side and quietly concluded nothing every time.
     _check_relay_volume(raw, late)
+    _check_source_reachability(raw, late)
     findings[slot:slot] = late
 
 
@@ -13162,6 +13226,50 @@ def trace_one_peer(side, findings, quick=False):
         column["picked"] = why
         column["of"] = near.get("connections") or 0
     return column
+
+
+def probe_each_source(target, addresses, count, wait):
+    """Ask every address this box holds whether it can reach the target.
+
+    A box holding a service address beside its own has one path off it per
+    address, and they are not the same path: a service address may be routed by
+    a policy the box's own address is not, or be held by a partner that has not
+    given it up. One probe from whichever address the kernel picks says nothing
+    about the others.
+
+    Only the probe repeats. Everything read *about* the box - counters, socket
+    tables, certificates - is a property of the box rather than of an address,
+    so re-reading it once per address would multiply the run for no answer.
+    The trace is deliberately not here either: it is the expensive half, and
+    tracing twelve identical paths to learn what one trace already said is how
+    a two-second run becomes a thirteen-minute one.
+
+    In parallel, which is only safe because the source is passed rather than
+    set: a global would have to be assigned per probe and they would overwrite
+    each other.
+
+    Global scope only. A link-local address cannot reach off the segment and a
+    loopback one cannot leave the box, so both would report a failure that is
+    simply what they are.
+    """
+    wanted = [a for a in (addresses or [])
+              if a.get("scope") == "global" and a.get("address")]
+    if len(wanted) < 2:
+        return []                      # one address is the ordinary run
+    def probe(entry):
+        res = cmd_ping(target, count, wait, source=entry["address"])
+        sent, lost = parse_ping_counts(res)
+        return {"address": entry["address"], "interface": entry.get("interface"),
+                "family": entry.get("family"),
+                # None rather than 0 where the counts could not be read: a ping
+                # that never ran has not measured no loss.
+                "sent": sent, "lost": lost,
+                "loss_pct": (round(100.0 * lost / sent) if sent else None),
+                "avg_ms": parse_ping_stats(res).get("avg_ms"),
+                "reached": bool(sent) and lost < sent}
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(8, len(wanted))) as pool:
+        return list(pool.map(probe, wanted))
 
 
 def collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles, parallel=True):
@@ -15070,6 +15178,13 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     raw["routes"] = cmd_routes()
 
     _check_addressing(raw, findings)
+    # Only the probe repeats, and only when asked. Everything read before this
+    # is a property of the box rather than of one of its addresses, so it is
+    # read once however many addresses there turn out to be.
+    if PROBE_EVERY_SOURCE:
+        raw["probe_target"] = target
+        raw["source_matrix"] = probe_each_source(target, raw.get("own_addresses"),
+                                                 ping_count, ping_wait)
 
     # Interface error counters. Runs before the reachability checks because if
     # frames are arriving corrupted, that's the answer - everything downstream
@@ -17936,7 +18051,9 @@ def build_parser():
                           "paths off the box, and only this one measures the path a "
                           "client of that address gets. Reported as critical if this box "
                           "does not hold the address, which is what a standby node looks "
-                          "like. Default: whichever address the kernel picks")
+                          "like. Pass 'all' to ask every global-scope address instead, "
+                          "which is one ping each and reports which of them can reach "
+                          "the target. Default: whichever address the kernel picks")
     return ap
 
 
@@ -17989,6 +18106,13 @@ def main():
         if args.target.strip().lower() != "auto" and not valid_target(args.target):
             print(f"Invalid --target: {args.target!r}", file=sys.stderr)
             raise SystemExit(EXIT_UNKNOWN)
+        if args.source and args.source.strip().lower() == "all":
+            # Every address rather than one. Kept on the same flag because it
+            # is the same question - which address does this leave from - and a
+            # second flag would let both be given and disagree.
+            global PROBE_EVERY_SOURCE
+            PROBE_EVERY_SOURCE = True
+            args.source = None
         if args.source:
             # An address, not a hostname and not an interface name. Linux ping
             # would accept an interface for -I and nothing else here would,

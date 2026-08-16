@@ -283,9 +283,56 @@ neighbouring finding implying an answer would undercut it.
 ## Open: the resume card quotes numbers that moved again
 
 `zachzama/zachzama.github.io` carries a FaultOne project card with the finding
-and test counts on it. They are **178 findings and 1,474 tests** as of v1.19.0,
-and the card still says 153 and 965. Nothing checks it, and every release makes
-it staler. Either update it with the release or stop quoting the numbers.
+and test counts on it. The tests are **1,559** as of 2026-08-16 and the card
+still says 965. Nothing checks it, and every release makes it staler. Either
+update it with the release or stop quoting the numbers.
+
+## Settled: every parser was read, and one mistake accounted for most of them
+
+All ~40 parsers were reviewed on 2026-08-16. Nine defects, all reproduced before
+being fixed and all with a test that fails against the code it describes.
+
+**Four of the nine were one mistake**: a value matched by a branch written for a
+*different* value. It is worth naming because it is invisible in review - every
+one of these reads correctly line by line.
+
+- `ethtool -m` prints a module's limits beside its readings and every limit
+  repeats the name of the reading it bounds, so `Laser output power high alarm
+  threshold` was read as the transmit power - and being last in the dump, it
+  won. The flags collide the same way: `Module temperature high alarm` starts
+  with the name of the temperature reading, so the alarm was stored as the
+  temperature and dropped.
+- nft prints a rule's comment inline, and the verdict was read off the whole
+  line, so a rule that accepts under `comment "do not reject this"` was recorded
+  as rejecting.
+- The local port decides whether a connection is outbound; the remote one was
+  tested, so every client of a server counted as a place the box had been.
+- `ifconfig` says `inactive` for a link that is down, and `"active" in` that is
+  true, so a dead link read as up.
+
+**The sweep that follows from it.** Four shapes were searched for across the
+file: prefix-swallowing branch chains, decisive tokens matched inside free text,
+first-match where most-specific decides, and reading one end of a pair where the
+other decides. Only the instances above turned up - the negation-as-substring
+search returned exactly one hit, which was the `ifconfig` one. **A sweep that
+finds nothing is still a result**, so: those four seams are clean as of this
+date, and re-running them costs minutes.
+
+**The other repeated shape was Windows.** Five readers ran a Windows command
+and then handed the output to a reader that could not parse it, so the branch
+cost a process and returned nothing - which reads as a quiet box rather than an
+unread one. Ping counts and ping timings, the socket table (`LISTENING` is not
+`LISTEN`, and there are no queue columns to skip), datagram rows (three fields
+where ss gives five), and `arp -a` (hyphens, no `dev`, no `at`). Everything on
+that platform failed silently and in the safe direction, which is why none of it
+had ever been noticed.
+
+**One fix introduced a second bug, caught by re-running the reproduction rather
+than by the suite.** Making `default` readable in `discards_the_target` made the
+choice among matching routes load-bearing for the first time, and it returned
+the first match where routing is longest-prefix. Re-run the original
+reproduction after a fix, not just the tests.
+
 ## Settled: three of the last four capability gaps were never gaps
 
 Worth recording because the mistake repeated and the shape of it is
@@ -419,8 +466,43 @@ from `f.code` instead of `f.hint`, and drop `&& f.severity !== 'ok'` from the
 lowest-layer mark so an ok finding is marked as the lowest broken layer. Neither
 touches a condition or a class name.
 
-What is left in that template and still read rather than run is CSS and lookup
-tables, which cannot be executed and are checked correctly as text.
+**That last claim used to read "what is left is CSS and lookup tables", and it
+is not true.** Counted on 2026-08-16: 54 positive `assertIn`s against
+`VIEWER_TEMPLATE`, across 29 test methods that never run node, are on
+executable text rather than CSS - JS conditions (`f.hint ?`, `st.because &&`,
+`h.site_edge ?`), calls (`verdictRow(data.verdict)`,
+`getPropertyValue(FAVICON_VAR[state]`), and markup attributes (`role="button"`,
+`aria-expanded="true"`).
+
+The count overstates the exposure and is still the wrong shape: several of
+those fragments are executed by a *different* test, so the assertion is a
+second, weaker check rather than the only one. What is not covered anywhere is
+narrower and worth naming - `setFavicon`, `addPanel` and `renderResult` are
+never mentioned by the suite at all, by name or otherwise.
+
+Left as a backlog rather than burned down, because the pattern to convert them
+is settled and only the work remains. Reproduce the count with:
+
+```bash
+python3 - <<'PY'
+import ast, re
+lines = open("test_faultone.py", encoding="utf-8").read().splitlines()
+tree = ast.parse("\n".join(lines))
+n = 0
+for cls in [x for x in ast.walk(tree) if isinstance(x, ast.ClassDef)]:
+    for fn in [x for x in cls.body if isinstance(x, ast.FunctionDef)]:
+        body = "\n".join(lines[fn.lineno - 1: fn.end_lineno])
+        if not re.search(r"(nd|m)\.VIEWER_TEMPLATE", body): continue
+        if "subprocess.run([node" in body or "_writes(" in body: continue
+        n += len([m for m in re.findall(r"assertIn\(\s*(['\"])(.+?)\1", body)
+                  if not re.match(r"^[.@#-]", m[1])])
+print(n, "substring assertions on template text")
+PY
+```
+
+A count with no name attached is the thing this file warns about elsewhere, so
+treat it as a direction of travel: it should only go down, and the three
+unmentioned functions should go first.
 
 ## Settled: a product's interface is readable where it is documented and chosen
 
@@ -750,16 +832,16 @@ The reason to keep it that way is not tidiness. A test that touches the network
 is a test whose result depends on where it ran, and this suite is the thing
 that decides whether a release goes out.
 
-**The booby-trap has a known blind spot, and it has now been walked into
-twice.** It watches `connect`, `connect_ex` and name resolution. It does not
-watch `sendto`, and it does not watch socket *creation*. `dns_ptr` went through
-that hole with a UDP datagram; `trace_constant_flow` would have gone through it
-with a raw socket and a `sendto`. Both are stubbed in `fresh()` by hand, which
-works and does not generalise.
+**The blind spot this described is closed** - see "the socket guard watches
+every way out" above, which supersedes the paragraph that used to sit here. The
+trap now covers socket creation, `connect`, `connect_ex`, `sendto` and name
+resolution across the whole corpus.
 
-Anything added that sends without connecting has to be stubbed deliberately,
-because nothing will tell you. Widening the trap to cover `socket.socket` for
-`SOCK_RAW` and `sendto` would close it properly and has not been done.
+Checked rather than assumed, on 2026-08-16: each of the five vectors was
+exercised deliberately against the live guard and each was recorded, and a
+loopback connect was not. A guard nobody has tried to get past is a guard whose
+green run means nothing, which is the same rule as [[a green test is not a
+tested rule]] applied to the harness instead of the code.
 
 ## Settled: a green test is not a tested rule
 

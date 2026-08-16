@@ -460,11 +460,25 @@ their own - a heading is a promise that something follows it, and the failure
 to guard is a title standing over an empty section, which is exactly the case a
 substring search cannot see because the words are in the template either way.
 
-Two mutations from that pass are the ones to reach for when this comes up
-again, because both leave every substring assertion passing: draw the hint chip
-from `f.code` instead of `f.hint`, and drop `&& f.severity !== 'ok'` from the
-lowest-layer mark so an ok finding is marked as the lowest broken layer. Neither
-touches a condition or a class name.
+Two mutations from that pass were recorded here as the ones to reach for,
+because both were said to leave every substring assertion passing: draw the
+hint chip from `f.code` instead of `f.hint`, and drop `&& f.severity !== 'ok'`
+from the lowest-layer mark so an ok finding is marked as the lowest broken
+layer.
+
+**Both are caught now** - checked on 2026-08-16 by applying each to a copy and
+running the suite. `test_a_hint_appears_only_when_the_finding_has_one` and
+`test_the_lowest_broken_layer_is_marked_and_an_ok_one_is_not` each name their
+case and run the fragment, so the coverage arrived after this note was written
+and the note outlived it. They are still the right *shape* of mutation to reach
+for; they are no longer examples of anything missing.
+
+One warning from re-running them, which cost a wrong answer the first time. A
+scratch copy holding only `faultone.py` and `test_faultone.py` makes about
+sixteen documentation tests error for want of a README, and those errors read
+as mutation coverage - the first run of this reported nineteen tests catching a
+mutation that two tests catch. Copy the docs into the scratch tree, or count
+only the failures you can name.
 
 **That last claim used to read "what is left is CSS and lookup tables", and it
 is not true.** Counted on 2026-08-16: 54 positive `assertIn`s against

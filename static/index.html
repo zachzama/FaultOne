@@ -279,6 +279,11 @@
   .plane .ptop{display:flex; justify-content:space-between; align-items:baseline;
     gap:10px; font-family:var(--mono); font-size:11px;}
   .plane .pwhat{color:var(--text);}
+  /* A boundary nothing crossed. Drawn, and drawn as obviously empty: a dashed
+     line and a word, so it cannot be mistaken for a measurement that passed. */
+  .plane.quiet .pwhat, .plane.quiet .pverd{color:var(--text-dim);}
+  .plane.quiet .pline{border-top-style:dashed; opacity:.55;}
+  .plane.quiet .pend{opacity:.6;}
   .plane .pverd{color:var(--text-dim); letter-spacing:.06em; white-space:nowrap;}
   .plane.pass .pverd{color:var(--ok);}
   .plane.warn .pverd{color:var(--warn);}
@@ -920,6 +925,23 @@ function boundaryArrow(sides, i, flows){
     + '<span>⇄</span></div>';
 }
 
+function quietLane(side){
+  // A boundary with nothing measured across it is still a boundary, and is
+  // drawn so the panel keeps two columns under three boxes. One column read as
+  // a single path straight through, with the middle box bypassed.
+  //
+  // Empty string rather than a lane when there is something to draw, so the
+  // caller can fall through to the real legs.
+  if((side.legs || []).length) return '';
+  return '<div class="plane quiet"><div class="ptop">'
+    + '<span class="pwhat">nothing measured across here</span>'
+    + '<span class="pverd">QUIET</span></div>'
+    + '<div class="ptrack"><span class="pend">' + escapeHtml(side.left) + '</span>'
+    + '<span class="pline"></span>'
+    + '<span class="pend">' + escapeHtml(side.right) + '</span></div>'
+    + '<div class="pev">' + escapeHtml(side.quiet_because || '') + '</div></div>';
+}
+
 function planeTag(otherPlane){
   // The label on the column's own numbers. Empty on a box with one plane,
   // which is why it is a function rather than a string in the template.
@@ -1123,7 +1145,10 @@ function renderDiagnosis(data, opts){
                    // on the side and never on a leg.
                    side.loss_pct != null ? side.loss_pct + '% loss' : ''
                   ].filter(Boolean).join(' \u00b7 ');
-    const lanes = (side.legs || []).map(leg => {
+    // A boundary with nothing measured across it is still a boundary, and is
+    // drawn so the panel keeps two columns under three boxes. One column read
+    // as a single path straight through with the middle box bypassed.
+    const lanes = quietLane(side) || (side.legs || []).map(leg => {
       // The ends stay put and the arrow turns. Moving both says the same thing
       // twice, and they disagreed: a response going out read "this box <- clients".
       const away = leg.src === side.left;

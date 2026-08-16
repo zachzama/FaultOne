@@ -6675,6 +6675,141 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
         self.assertIn('rel rel-cause', nd.VIEWER_TEMPLATE)
 
 
+class TestBothBoundariesAreAlwaysDrawn(unittest.TestCase):
+    """Three boxes are three places. The two columns under them are the two
+    boundaries between those places, and the count being right is the only
+    thing tying the panel to the picture above it.
+
+    A side with no measurable traffic used to be dropped, which left one column
+    under three boxes - and one column reads as a single path straight through,
+    with the middle box bypassed. The boundary exists whether or not anything
+    crossed it today.
+    """
+
+    def columns(self, code):
+        mod = fresh()
+        setup, kwargs = S[code]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        return rep.get("path_legs") or []
+
+    def test_a_panel_that_exists_has_two_columns(self):
+        """Every scenario that draws the panel at all draws both boundaries.
+        There is no shape of box where one is correct."""
+        drawn = wrong = 0
+        for code in sorted(S):
+            mod = fresh()
+            setup, kwargs = S[code]
+            setup(mod)
+            try:
+                rep = mod.diagnose(quick=True, **scenario_kwargs(kwargs))
+            except Exception:
+                continue
+            cols = rep.get("path_legs") or []
+            if not cols:
+                continue
+            drawn += 1
+            if len(cols) != 2:
+                wrong += 1
+        self.assertTrue(drawn, "no scenario drew the panel at all")
+        self.assertEqual(wrong, 0, "%d scenarios drew a panel without two columns"
+                                   % wrong)
+
+    def test_the_quiet_side_says_nothing_is_connected_there(self):
+        quiet = next(c for c in self.columns("path_jitter_clients") if not c["legs"])
+        self.assertEqual(quiet["side"], "backend")
+        self.assertIn("no outbound connection of its own", quiet["quiet_because"])
+
+    def test_and_says_the_other_thing_when_it_is_the_other_thing(self):
+        """Two different silences. Nothing crosses here is a fact about the
+        box; things cross and could not be measured is a fact about what could
+        be looked at. A blank column that does not say which is worse than no
+        column."""
+        quiet = next(c for c in self.columns("path_jitter_backends") if not c["legs"])
+        self.assertEqual(quiet["side"], "client")
+        self.assertIn("could be measured", quiet["quiet_because"])
+        self.assertRegex(quiet["quiet_because"], r"^\d+ connection")
+
+    def test_a_quiet_column_still_has_the_two_ends_it_joins(self):
+        """It is drawn as a boundary, so it needs both places named or the
+        reader cannot tell which gap it is."""
+        quiet = next(c for c in self.columns("path_jitter_clients") if not c["legs"])
+        self.assertEqual((quiet["left"], quiet["right"]),
+                         ("this box", "what this box connects out to"))
+        self.assertTrue(quiet["title"])
+
+    def test_a_box_with_nothing_on_either_side_draws_no_panel(self):
+        """Two empty columns is not more honest than none. The panel is for
+        showing measurements, and with none on either boundary the three boxes
+        above already say everything there is."""
+        mod = fresh()
+        setup, kwargs = S["all_clear"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertIsNone(rep.get("path_legs"))
+
+    def viewer_draws(self, side):
+        """Run the lane the browser will run, rather than grepping for it.
+
+        Asserting the words appear in the template passes against a lane wired
+        to a constant - the ternary still contains them. That has caught this
+        file out twice, so it executes.
+        """
+        import json as _json
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available to run the viewer's own JS")
+        src, out = nd.VIEWER_TEMPLATE, []
+        for name in ("escapeHtml", "quietLane"):
+            i = src.index("function " + name + "(")
+            depth, j = 0, src.index("{", i)
+            for k in range(j, len(src)):
+                if src[k] == "{":
+                    depth += 1
+                elif src[k] == "}":
+                    depth -= 1
+                    if not depth:
+                        out.append(src[i:k + 1])
+                        break
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write("\n".join(out) + "\nprocess.stdout.write("
+                     "quietLane(JSON.parse(process.argv[2])));")
+            path = fh.name
+        try:
+            res = subprocess.run([node, path, _json.dumps(side)],
+                                 capture_output=True, text=True, timeout=30)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            return res.stdout
+        finally:
+            os.unlink(path)
+
+    def test_the_page_draws_the_quiet_one_rather_than_an_empty_box(self):
+        """Computing it and not drawing it is how the traced peer spent a day
+        being right and invisible."""
+        drawn = self.viewer_draws({"legs": [], "left": "this box",
+                                   "right": "clients",
+                                   "quiet_because": "nothing is connected inbound"})
+        self.assertIn("nothing measured across here", drawn)
+        self.assertIn("nothing is connected inbound", drawn)
+        self.assertIn("this box", drawn)
+        self.assertIn("clients", drawn)
+
+    def test_a_column_with_legs_gets_no_quiet_lane(self):
+        """It has to fall through to the real ones, not draw both."""
+        self.assertEqual(self.viewer_draws({"legs": [{"state": "pass"}],
+                                            "left": "a", "right": "b"}), "")
+
+    def test_a_reason_from_the_wire_cannot_carry_markup_onto_the_page(self):
+        drawn = self.viewer_draws({"legs": [], "left": "<b>x</b>", "right": "b",
+                                   "quiet_because": "<img src=x onerror=alert(1)>"})
+        self.assertNotIn("<img", drawn)
+        self.assertNotIn("<b>x</b>", drawn)
+
+
 class TestSomethingInTheMiddle(unittest.TestCase):
     """Interception was covered in exactly one way: `tls_intercepted` reads the
     issuer of the certificate that came back and matches it against fifteen

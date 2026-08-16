@@ -8563,6 +8563,41 @@ def build_probe_column(hops, target, baseline_path=None):
     }
 
 
+def _quiet_side(name, state, sock, raw):
+    """A boundary with nothing measured across it, drawn rather than dropped.
+
+    Two different silences, and telling them apart is the whole value of
+    showing it: nothing is connected on this side, which is a fact about the
+    box, or something is and the per-connection statistics could not be read,
+    which is a fact about what could be looked at. A blank column that does not
+    say which is worse than no column at all.
+    """
+    far = ("what this box connects out to" if name == "backend" else "clients")
+    connected = (sock.get("inbound") if name == "client"
+                 else sock.get("outbound")) or 0
+    flows = (raw or {}).get("tcp_flows") or {}
+    if connected:
+        why = ("%d connection(s) cross here and none of them could be measured: %s"
+               % (connected, flows.get("error")
+                  or "the per-connection statistics were not readable"))
+    elif name == "client":
+        why = "nothing is connected inbound, so no traffic is arriving to measure"
+    else:
+        why = ("this box holds no outbound connection of its own, so nothing is "
+               "leaving it to measure")
+    return {"side": name, "state": state or "skip",
+            "title": ("this box and what it connects out to" if name == "backend"
+                      else "clients and this box"),
+            "peer": None, "connections": connected, "via": None,
+            "rtt_ms": None, "loss_pct": None,
+            # Same convention the measured column uses: this box on the
+            # inside of the boundary, the far side on the outside. Both ends
+            # named, or the reader cannot tell which gap the column is.
+            "left": "this box" if name == "backend" else far,
+            "right": far if name == "backend" else "this box",
+            "legs": [], "quiet_because": why}
+
+
 def build_path_legs(raw=None, sides=None):
     """The path as four legs: out and back, on each side of this box.
 
@@ -8587,9 +8622,16 @@ def build_path_legs(raw=None, sides=None):
     zone = {"client": "downstream", "backend": "upstream"}
     zoned = {z.get("side"): z.get("state") for z in (sides or [])}
     out = []
+    # Both sides, always. Three boxes are three places and the two columns are
+    # the two boundaries between them, so dropping the side with nothing on it
+    # left one column under three boxes - which reads as a single path straight
+    # through with the middle box bypassed. The boundary exists whether or not
+    # anything crossed it today.
+    sock = (raw or {}).get("sockets") or {}
     for name, near, out_first in (("client", by_side.get("client"), False),
                                   ("backend", by_side.get("backend"), True)):
         if not near:
+            out.append(_quiet_side(name, zoned.get(zone[name]), sock, raw))
             continue
         total = near.get("connections") or 0
         stalled = bool(near.get("return_stalled"))
@@ -8686,7 +8728,9 @@ def build_path_legs(raw=None, sides=None):
             "right": far if name == "backend" else this,
             "legs": legs,
         })
-    return out or None
+    # Only when neither boundary has anything to say. One column has never been
+    # a shape this panel should draw.
+    return out if any(side["legs"] for side in out) else None
 
 
 # The headline per finding, for the zone that has to say which finding it owns
@@ -15617,6 +15661,11 @@ VIEWER_TEMPLATE = r"""<!doctype html>
   .plane .ptop{display:flex; justify-content:space-between; align-items:baseline;
     gap:10px; font-family:var(--mono); font-size:11px;}
   .plane .pwhat{color:var(--text);}
+  /* A boundary nothing crossed. Drawn, and drawn as obviously empty: a dashed
+     line and a word, so it cannot be mistaken for a measurement that passed. */
+  .plane.quiet .pwhat, .plane.quiet .pverd{color:var(--text-dim);}
+  .plane.quiet .pline{border-top-style:dashed; opacity:.55;}
+  .plane.quiet .pend{opacity:.6;}
   .plane .pverd{color:var(--text-dim); letter-spacing:.06em; white-space:nowrap;}
   .plane.pass .pverd{color:var(--ok);}
   .plane.warn .pverd{color:var(--warn);}
@@ -16258,6 +16307,23 @@ function boundaryArrow(sides, i, flows){
     + '<span>⇄</span></div>';
 }
 
+function quietLane(side){
+  // A boundary with nothing measured across it is still a boundary, and is
+  // drawn so the panel keeps two columns under three boxes. One column read as
+  // a single path straight through, with the middle box bypassed.
+  //
+  // Empty string rather than a lane when there is something to draw, so the
+  // caller can fall through to the real legs.
+  if((side.legs || []).length) return '';
+  return '<div class="plane quiet"><div class="ptop">'
+    + '<span class="pwhat">nothing measured across here</span>'
+    + '<span class="pverd">QUIET</span></div>'
+    + '<div class="ptrack"><span class="pend">' + escapeHtml(side.left) + '</span>'
+    + '<span class="pline"></span>'
+    + '<span class="pend">' + escapeHtml(side.right) + '</span></div>'
+    + '<div class="pev">' + escapeHtml(side.quiet_because || '') + '</div></div>';
+}
+
 function planeTag(otherPlane){
   // The label on the column's own numbers. Empty on a box with one plane,
   // which is why it is a function rather than a string in the template.
@@ -16461,7 +16527,10 @@ function renderDiagnosis(data, opts){
                    // on the side and never on a leg.
                    side.loss_pct != null ? side.loss_pct + '% loss' : ''
                   ].filter(Boolean).join(' \u00b7 ');
-    const lanes = (side.legs || []).map(leg => {
+    // A boundary with nothing measured across it is still a boundary, and is
+    // drawn so the panel keeps two columns under three boxes. One column read
+    // as a single path straight through with the middle box bypassed.
+    const lanes = quietLane(side) || (side.legs || []).map(leg => {
       // The ends stay put and the arrow turns. Moving both says the same thing
       // twice, and they disagreed: a response going out read "this box <- clients".
       const away = leg.src === side.left;

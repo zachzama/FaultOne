@@ -16657,6 +16657,134 @@ WRITES.push(verdictRow({headline:%s, owner:'o', next_step:'n',
                       "so these tests are not exercising the path they claim to")
 
 
+class TestTheFragmentsThatWriteRatherThanReturn(unittest.TestCase):
+    """Three of the viewer's functions were not mentioned anywhere in this
+    suite - not by name, not by a fixture, not at all.
+
+    They were missed because they do not return their markup the way the rest
+    do, so `run_viewer_fn` could not reach them: one prepends a panel, one sets
+    an attribute on a link, one fills an element it is handed. Everything known
+    about them was that some string appears somewhere in the template, which is
+    the check this file has been wrong about three times.
+    """
+
+    PAYLOAD = "<img src=x onerror=alert(1)>"
+
+    # ---- setFavicon --------------------------------------------------------
+
+    def test_the_colour_survives_being_put_in_a_uri(self):
+        """A CSS colour is a '#' and the '#' of a data URI starts a fragment,
+        so an unencoded one truncates the image to nothing. The template says
+        so in a comment; nothing checked it."""
+        did = run_viewer_dom(self, ("setFavicon",), 'setFavicon("critical");',
+                             cssvars={"--crit": "#ff0000"})
+        href = did["props"].get("href", "")
+        self.assertTrue(href.startswith("data:image/svg+xml,"), href[:40])
+        self.assertIn("%23ff0000", href)
+        self.assertNotIn("#", href, "the '#' truncates the URI at the fragment")
+
+    def test_each_verdict_gets_its_own_colour(self):
+        seen = {}
+        for state, var in (("clear", "--ok"), ("warning", "--warn"),
+                           ("critical", "--crit")):
+            did = run_viewer_dom(self, ("setFavicon",),
+                                 'setFavicon(%s);' % json.dumps(state),
+                                 cssvars={var: "#0%s0000" % len(state)})
+            seen[state] = did["props"].get("href")
+        self.assertEqual(len(set(seen.values())), 3,
+                         "two verdicts drew the same tab dot: %r" % (seen,))
+
+    def test_a_state_with_no_colour_of_its_own_falls_back_to_the_dim_one(self):
+        """There are two fallbacks on that line - the variable name and a
+        literal hex - and the first written version of this test used the same
+        colour for both, so deleting the variable fallback changed nothing and
+        the test passed on the literal. The dim colour is deliberately not
+        #6b7785 here for that reason."""
+        did = run_viewer_dom(self, ("setFavicon",), 'setFavicon("something-new");',
+                             cssvars={"--text-dim": "#123456"})
+        self.assertIn("%23123456", did["props"].get("href", ""))
+
+    def test_an_unknown_state_with_no_dim_colour_either_still_draws(self):
+        """Both fallbacks gone, and the tab still gets a dot rather than a
+        broken image."""
+        did = run_viewer_dom(self, ("setFavicon",), 'setFavicon("something-new");')
+        self.assertIn("%236b7785", did["props"].get("href", ""))
+
+    # ---- addPanel ----------------------------------------------------------
+
+    def test_a_panel_escapes_the_command_it_shows(self):
+        """The command text carries a target the user typed."""
+        did = run_viewer_dom(self, ("addPanel",),
+                             'addPanel("label", %s, null);' % json.dumps(self.PAYLOAD))
+        html = "".join(did["html"])
+        self.assertNotIn("<img src=x", html)
+        self.assertIn("&lt;img", html)
+
+    def test_a_panel_with_no_description_gets_no_description_block(self):
+        """`help && help.desc` is a branch, and the markup it guards is in the
+        template whether it is taken or not."""
+        without = "".join(run_viewer_dom(
+            self, ("addPanel",), 'addPanel("label", "cmd", null);')["html"])
+        self.assertNotIn("panel-desc", without)
+        with_desc = "".join(run_viewer_dom(
+            self, ("addPanel",),
+            'addPanel("label", "cmd", {desc: "what it does", layer: 3});')["html"])
+        self.assertIn("panel-desc", with_desc)
+        self.assertIn("what it does", with_desc)
+        self.assertIn("L3", with_desc)
+
+    def test_a_description_with_no_layer_gets_no_layer_chip(self):
+        html = "".join(run_viewer_dom(
+            self, ("addPanel",),
+            'addPanel("label", "cmd", {desc: "what it does"});')["html"])
+        self.assertIn("what it does", html)
+        self.assertNotIn('<span class="layer">', html)
+
+    def test_a_panel_can_be_opened_from_the_keyboard(self):
+        """Asserted three times as substrings of the template, which says only
+        that the attributes exist somewhere in the file."""
+        html = "".join(run_viewer_dom(
+            self, ("addPanel",), 'addPanel("label", "cmd", null);')["html"])
+        for attr in ('role="button"', 'tabindex="0"', "onkeydown"):
+            self.assertIn(attr, html)
+
+    # ---- renderResult ------------------------------------------------------
+
+    def test_a_missing_result_says_so_rather_than_drawing_nothing(self):
+        did = run_viewer_dom(self, ("renderResult",),
+                             "renderResult(document.createElement('div'), null);")
+        self.assertIn("no response", "".join(did["html"]))
+
+    def test_an_error_is_escaped_on_its_way_into_the_panel(self):
+        did = run_viewer_dom(
+            self, ("renderResult",),
+            "renderResult(document.createElement('div'), {error: %s});"
+            % json.dumps(self.PAYLOAD))
+        html = "".join(did["html"])
+        self.assertNotIn("<img src=x", html)
+        self.assertIn("&lt;img", html)
+
+    def test_command_output_is_escaped_on_both_streams(self):
+        """Both are bytes off whatever answered, and both land in the page."""
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream):
+                did = run_viewer_dom(
+                    self, ("renderResult",),
+                    "renderResult(document.createElement('div'), {%s: %s});"
+                    % (stream, json.dumps(self.PAYLOAD)))
+                html = "".join(did["html"])
+                self.assertNotIn("<img src=x", html)
+                self.assertIn("&lt;img", html)
+
+    def test_a_command_that_printed_nothing_says_that(self):
+        """Whitespace is not output. Without the trim an empty run drew an
+        empty <pre> and read as a command that answered."""
+        did = run_viewer_dom(self, ("renderResult",),
+                             "renderResult(document.createElement('div'),"
+                             " {stdout: '   \\n  ', stderr: ''});")
+        self.assertIn("(no output)", "".join(did["html"]))
+
+
 class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
     """What survives of the hop chain's guards, now that it is a column.
 
@@ -17764,25 +17892,14 @@ def patch_clock(case, sleep=None, monotonic=None):
         time.monotonic = monotonic
 
 
-def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
-    """Call one of the viewer's own functions in node and return what it built.
+def viewer_prelude(case, names):
+    """The viewer's own constants and the named functions, as runnable JS.
 
-    The alternative - asserting that a string appears in VIEWER_TEMPLATE - has
-    been wrong three times, because a branch that is never taken still contains
-    the string. Anything conditional in that template gets tested by being run.
-
-    Skips rather than passing where node is missing: a check that cannot run is
-    not a check that succeeded.
+    Shared by the two runners below rather than written twice: which functions a
+    fragment reaches for is a property of the template, and two copies of that
+    knowledge drift apart exactly when somebody adds a helper.
     """
-    import json as _json
-    import os as _os
     import re as _re
-    import shutil
-    import subprocess
-    import tempfile
-    node = shutil.which("node")
-    if not node:
-        case.skipTest("node not available to run the viewer's own JS")
     src = nd.VIEWER_TEMPLATE
     out = []
     for const in _re.finditer(r"^const [A-Z][A-Z0-9_]* = .*?;$", src, _re.M | _re.S):
@@ -17792,7 +17909,7 @@ def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
     # remember them would fail with "not defined" the first time a fragment
     # started escaping something, which is the wrong signal entirely.
     wanted, seen = [], set()
-    for fn in ("escapeHtml", "cls") + tuple(deps) + (name,):
+    for fn in ("escapeHtml", "cls") + tuple(names):
         if fn not in seen and ("function %s(" % fn) in src:
             seen.add(fn)
             wanted.append(fn)
@@ -17807,17 +17924,98 @@ def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
                 if not depth:
                     out.append(src[i:k + 1])
                     break
+    return "\n".join(out)
+
+
+# A DOM thin enough to run a fragment against and honest about what was done to
+# it. The functions that build markup return it and are checked by their return
+# value; these three do not - they write into the document, set an attribute, or
+# hand back an element they just made - so what they did has to be recorded.
+VIEWER_DOM_STUB = """
+const DID = {html: [], text: [], attrs: {}, props: {}, prepended: 0};
+let panelSeq = 0;
+function mkEl(tag){
+  const node = {
+    tagName: tag, className: '', id: '', children: [],
+    style: {}, classList: {add(){}, remove(){}, toggle(){}},
+    set innerHTML(v){ DID.html.push(v); this._html = v; },
+    get innerHTML(){ return this._html || ''; },
+    set textContent(v){ DID.text.push(v); },
+    set href(v){ DID.props.href = v; },
+    setAttribute(k, v){ DID.attrs[k] = v; },
+    removeAttribute(k){ delete DID.attrs[k]; },
+    appendChild(c){ this.children.push(c); },
+    prepend(c){ DID.prepended++; this.children.push(c); },
+    remove(){},
+    querySelector(sel){ return mkEl(sel); },
+    addEventListener(){}
+  };
+  return node;
+}
+const FAVICON_LINK = mkEl('link');
+const document = {
+  documentElement: mkEl('html'),
+  getElementById(id){ return id === 'favicon' ? FAVICON_LINK : mkEl('div'); },
+  createElement: mkEl, querySelector: () => null, querySelectorAll: () => [],
+  body: mkEl('body'), addEventListener(){}
+};
+const output = mkEl('div');
+const window = {matchMedia: () => ({matches: false, addEventListener(){}})};
+const getComputedStyle = () => ({getPropertyValue: name => CSSVARS[name] || ''});
+function clearEmptyState(){}
+"""
+
+
+def run_viewer_dom(case, names, body, cssvars=None):
+    """Run a fragment that writes into the document, and report what it wrote.
+
+    `run_viewer_fn` covers the fragments that return their markup. These are the
+    ones that do not - they prepend a panel, set a favicon href, or fill an
+    element handed to them - and until now nothing ran them at all, so they were
+    covered only by assertions that a string appears somewhere in the template.
+    """
+    import json as _json
+    stub = ("const CSSVARS = %s;\n" % _json.dumps(cssvars or {})) + VIEWER_DOM_STUB
+    return _run_viewer_js(
+        case, stub + "\n" + viewer_prelude(case, names) + "\n" + body
+        + "\nprocess.stdout.write(JSON.stringify(DID));", as_json=True)
+
+
+def run_viewer_fn(case, name, args, deps=("escapeHtml",)):
+    """Call one of the viewer's own functions in node and return what it built.
+
+    The alternative - asserting that a string appears in VIEWER_TEMPLATE - has
+    been wrong three times, because a branch that is never taken still contains
+    the string. Anything conditional in that template gets tested by being run.
+
+    Skips rather than passing where node is missing: a check that cannot run is
+    not a check that succeeded.
+    """
+    import json as _json
     body = "process.stdout.write(String(%s(%s)));" % (
         name, ", ".join(_json.dumps(a) for a in args))
+    return _run_viewer_js(
+        case, viewer_prelude(case, tuple(deps) + (name,)) + "\n" + body)
+
+
+def _run_viewer_js(case, script, as_json=False):
+    import json as _json
+    import os as _os
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if not node:
+        case.skipTest("node not available to run the viewer's own JS")
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                      encoding="utf-8") as fh:
-        fh.write("\n".join(out) + "\n" + body)
+        fh.write(script)
         path = fh.name
     try:
         res = subprocess.run([node, path], capture_output=True, text=True,
                              timeout=30, encoding="utf-8")
         case.assertEqual(res.returncode, 0, res.stderr)
-        return res.stdout
+        return _json.loads(res.stdout) if as_json else res.stdout
     finally:
         _os.unlink(path)
 

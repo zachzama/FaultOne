@@ -17676,11 +17676,79 @@ class DiagnoseHarness(unittest.TestCase):
         return lambda *a, **k: {"ok": False, "cmd": name, "applicable": False,
                                 "error": "not stubbed by this harness"}
 
+    def _seal(self):
+        """Close the process boundary, and record anything that tries to cross.
+
+        Deriving the collector list was not enough. A collector is where a read
+        is *supposed* to happen, and stubbing every one of them still left
+        eleven functions reaching the host from inside `diagnose()` by another
+        route. Three ran on every single call: `dns_ptr` sent a real PTR query
+        twice and `trace_constant_flow` opened a real socket, from a harness
+        whose docstring says no packet is sent.
+
+        That is the original bug again, so a longer list of names is not the
+        answer - it is the thing that went stale the first time. The boundary
+        is closed at the boundary. Anything leaving the process fails the way
+        it fails on a box where nothing is available, which is a state the tool
+        already handles and the same state on every machine, and the attempt is
+        recorded so tearDown can name the door. Otherwise a leak shows up as a
+        finding appearing in a test somewhere below, one run in six.
+        """
+        import builtins
+        self.breaches = []
+        self._sealed = []
+
+        def refuse(where, kind):
+            def stop(*a, **k):
+                self.breaches.append("%s - %s" % (where, kind))
+                raise OSError("the harness does not reach the host")
+            return stop
+
+        def block(module, attr, kind):
+            if not hasattr(module, attr):
+                return
+            self._sealed.append((module, attr, getattr(module, attr)))
+            setattr(module, attr, refuse(attr, kind))
+
+        for attr in ("socket", "create_connection", "gethostbyname",
+                     "gethostbyaddr", "getaddrinfo", "getfqdn"):
+            block(nd.socket, attr, "sends a packet")
+        for attr in ("run", "Popen", "check_output", "call"):
+            block(nd.subprocess, attr, "runs a command")
+        block(nd.os, "getloadavg", "reads this machine")
+
+        # These three are not blocked outright. `open` reads and writes reports,
+        # and the harness itself needs a filesystem; only the trees that
+        # describe *this* machine are refused, because those are the ones whose
+        # answers differ between two runs on two boxes.
+        host = ("/proc", "/sys", "/etc")
+
+        def guard(owner, attr):
+            original = getattr(owner, attr)
+
+            def checked(path, *a, **k):
+                if isinstance(path, str) and path.startswith(host):
+                    self.breaches.append("%s(%s) - reads this machine"
+                                         % (attr, path))
+                    raise OSError("the harness does not read the host")
+                return original(path, *a, **k)
+            return original, checked
+
+        for owner, attr in ((builtins, "open"), (nd.os, "listdir"),
+                            (nd.os, "readlink")):
+            original, checked = guard(owner, attr)
+            self._sealed.append((owner, attr, original))
+            setattr(owner, attr, checked)
+
     def setUp(self):
-        names = self.collectors() + ["which"]
+        names = self.collectors() + ["which", "dns_ptr", "trace_constant_flow",
+                                      "kernel_source_address",
+                                      "source_address_is_held",
+                                      "SOURCE_ADDRESS"]
         self._saved = {name: getattr(nd, name) for name in names}
         self._saved["sleep"] = nd.time.sleep
         nd.time.sleep = lambda s: None
+        self._seal()
         # Nothing reaches the machine unless a test below says what it returns.
         # A reader that finds nothing returns nothing; a command that cannot run
         # says so. Both are states the tool already handles, and neither is the
@@ -17730,14 +17798,46 @@ class DiagnoseHarness(unittest.TestCase):
         nd.cmd_lldp = lambda: None
         nd.cmd_optics = lambda iface: None
         nd._read_tcp_counters = lambda: {"OutSegs": 100000, "RetransSegs": 100}
+        # The three doors that are not collectors, and so were never stubbed.
+        # All three ran on every call. They are answered here rather than left
+        # to the seal to refuse, because "no reverse name" and "no
+        # constant-flow trace" are what the tool sees on a box without them,
+        # while a refusal is a different scenario and would be pinning one
+        # nobody chose.
+        nd.dns_ptr = lambda server, ip, timeout=1.0: None
+        nd.trace_constant_flow = lambda target, *a, **k: None
+        nd.socket.gethostbyname = self._fixed_resolution
+        # Both ask the kernel about *this* box - which source address it would
+        # leave from, and whether it holds a given one. Answered from the same
+        # eth0 the interface fixture above describes, so the box the harness
+        # draws is one box rather than a fixture with the tester's laptop
+        # showing through it.
+        nd.kernel_source_address = lambda: "10.0.0.5"
+        nd.source_address_is_held = lambda address: address == "10.0.0.5"
         self.set_counters(errors=0, crc=0)
 
+    @staticmethod
+    def _fixed_resolution(name):
+        """A resolver that answers the same on every machine and every run."""
+        try:
+            nd.ipaddress.ip_address(name)
+            return name              # already an address; the tool's own case
+        except ValueError:
+            return "192.0.2.1"       # TEST-NET-1, and never a real host
+
     def tearDown(self):
+        # Unsealed first and in reverse, so the machinery that reports a breach
+        # is not itself running against a blocked `open`.
+        for owner, attr, original in reversed(self._sealed):
+            setattr(owner, attr, original)
         for name, value in self._saved.items():
             if name == "sleep":
                 nd.time.sleep = value
             else:
                 setattr(nd, name, value)
+        self.assertEqual(
+            sorted(set(self.breaches)), [],
+            "this reached the host from inside a harness that says it does not")
 
     def set_counters(self, errors=0, crc=0, growing=0):
         first = dict(rx_packets=5_000_000, tx_packets=5_000_000, rx_bytes=0, tx_bytes=0,
@@ -17789,6 +17889,28 @@ class DiagnoseHarness(unittest.TestCase):
         self.assertEqual(self.stages(r)["dns"], "pass")
         self.assertIsNotNone(r["call_quality"])
         self.assertEqual(r["path_source"], "traceroute")
+
+    def test_source_address_this_box_does_not_hold(self):
+        """The case `_check_source_address` says outranks the whole run, and
+        the one nothing exercised end to end. On a redundant pair the backup
+        node holds its own address, reaches everything from it, and reports a
+        healthy box that is serving nothing - so the danger is not that this
+        looks broken, it is that everything below it looks fine."""
+        nd.SOURCE_ADDRESS = "10.0.0.9"          # the pair's address, held by the peer
+        r = self.run_diagnose()
+        self.assertIn("source_address_not_held", self.codes(r))
+        self.assertEqual(r["verdict"]["severity"], "critical")
+        self.assertIs(r["raw"]["source_address_held"], False)
+
+    def test_source_address_this_box_does_hold(self):
+        """The same run on the node that actually holds it. Every measurement
+        below is then about the path a client of that address gets, which is
+        the only reason the flag exists."""
+        nd.SOURCE_ADDRESS = "10.0.0.5"          # the address the fixture's eth0 has
+        r = self.run_diagnose()
+        self.assertIn("bound_to_source_address", self.codes(r))
+        self.assertNotIn("source_address_not_held", self.codes(r))
+        self.assertIs(r["raw"]["source_address_held"], True)
 
     def test_failing_cable(self):
         self.set_counters(errors=1200, crc=1150, growing=14)

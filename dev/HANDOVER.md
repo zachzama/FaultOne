@@ -38,28 +38,45 @@ you are grepping for either.
 The parser review that filled most of that day is recorded under "every parser
 was read" below. Nothing from it is outstanding.
 
-## Open: a flaky test, diagnosed by mechanism rather than caught
+## Closed: the flaky test, and the half of it the first fix missed
 
 `DiagnoseHarness.test_healthy_device` failed roughly one run in six. It passed
-300 times in isolation, which is the signature of something leaking between
-tests rather than something wrong in the test.
+300 times in isolation, which is the signature of something leaking in from
+outside rather than something wrong in the test.
 
-The harness claimed in its own docstring that every collector was stubbed. It
-named seventeen in a tuple; the tool had grown to thirty-eight. Twenty-two ran
-for real, including `cmd_tls_check`, which opens a live TLS handshake, from a
-suite that promises it sends no packets. Others read the host: socket states,
-server limits, orphan counts. `test_healthy_device` asserts the only finding is
-`all_clear`, so anything the machine happened to be doing could add one.
+The first round found the harness naming seventeen collectors in a tuple while
+the tool had grown to thirty-eight, so twenty-two ran for real - including
+`cmd_tls_check`, a live TLS handshake, from a suite that promises it sends no
+packets. Deriving the list off the module fixed those, and the failure did not
+recur in nine full runs. That was recorded here as evidence and not proof, and
+it was right not to call it proof, because it was not the whole cause.
 
-The list is derived from the module now and the failure has not recurred: nine
-consecutive full runs, where about one and a half failures would have been
-expected. That is good evidence and not proof: at a one-in-six rate there is
-roughly a nineteen per cent chance of nine clean runs by luck.
+Stubbing collectors was never going to be enough. A collector is where a read
+is *supposed* to happen, and the leak does not have to use one. Walking the
+call graph out of `diagnose()` and stopping at every stub found **eleven
+functions still reaching the host**, and three of them ran on every single
+call: `dns_ptr` sent a real DNS PTR query twice, `trace_constant_flow` opened a
+real socket, and `kernel_source_address` asked the kernel about this machine.
+Ten of the twelve tests in the class were reaching the network.
 
-**If it comes back, capture which finding joined `all_clear`.** That names the
-collector immediately. The failing assertion was never captured the first time,
-so the diagnosis above is inference from mechanism and rate, and a second round
-of inference would not be worth much.
+A longer list of names is the fix that went stale the first time, so the
+boundary is closed at the boundary instead. `setUp` now seals the process -
+`socket`, `subprocess`, and reads under `/proc`, `/sys` and `/etc` - so
+anything crossing it fails the way it fails on a box where nothing is
+available, which is a state the tool handles and the same state on every
+machine. The attempt is recorded and `tearDown` names the door. Five doors were
+re-opened one at a time to confirm the seal catches each; all five were caught,
+and the class now runs in 0.1s.
+
+Two scenarios came out of it. `source_address_is_held` survived its mutation at
+first, which said no test passed `--source`, so the case
+`_check_source_address` calls the one that outranks the whole run - a backup
+node holding its own address and reporting a healthy box that serves nothing -
+had no end-to-end coverage at all. It has two now.
+
+**If a flake appears anywhere else, the mechanism to reach for is the call
+graph, not the name prefix.** `dev/` has no script for it; it was a throwaway
+AST walk from `diagnose()` treating `cmd_*`, `_read_*` and `which` as stops.
 
 ## Open: four things that are waiting on the repo being public
 

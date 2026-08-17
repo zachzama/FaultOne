@@ -9477,6 +9477,68 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
+    """Asymmetric routing, which the page has drawn and never concluded from.
+
+    The two hop counts have sat beside each other with the word "asymmetric"
+    between them for releases. It was a label: nothing ranked it, nothing owned
+    it, and it never reached the verdict - on a reading this tool has that no
+    other check here can make, which its own comment says.
+    """
+
+    def _legs(self, out, back):
+        return [{"side": "backend", "peer": "10.0.0.90", "hops_in": back,
+                 "traced": {"hops": [{"hop": i} for i in range(out)]}}]
+
+    def test_a_route_out_and_a_different_one_back_is_reported(self):
+        found = []
+        nd._check_asymmetric_path(self._legs(5, 2), found)
+        self.assertEqual([f["code"] for f in found], ["path_asymmetric"])
+        self.assertIn("5 hop(s) on the way out and 2 on the way back", found[0]["message"])
+
+    def test_an_off_by_one_is_not_a_different_route(self):
+        """The two numbers are not measured the same way - one is walked, the
+        other inferred from a TTL against an assumed starting value - so a gap
+        of one falls out of the method rather than out of the network."""
+        found = []
+        nd._check_asymmetric_path(self._legs(5, 4), found)
+        self.assertEqual(found, [])
+
+    def test_it_fires_at_the_documented_gap(self):
+        for gap, expect in ((nd.ASYMMETRIC_HOP_GAP - 1, False),
+                            (nd.ASYMMETRIC_HOP_GAP, True)):
+            found = []
+            nd._check_asymmetric_path(self._legs(5, 5 - gap), found)
+            with self.subTest(gap=gap):
+                self.assertEqual(bool(found), expect)
+
+    def test_a_side_with_no_reply_to_count_says_nothing(self):
+        """Most clients behind a firewall never answer ICMP, so a missing
+        inbound count is the ordinary case and must not read as zero hops."""
+        found = []
+        nd._check_asymmetric_path(self._legs(5, None), found)
+        self.assertEqual(found, [])
+
+    def test_it_is_context_because_it_cannot_be_anything_else(self):
+        """Derived from the per-side traces, which run after build_verdict and
+        build_stages have both already decided. It can neither be the cause nor
+        colour a stage, and grading it would put a severity on the page that
+        nothing downstream honours. Asserted so the constraint is visible
+        rather than rediscovered."""
+        found = []
+        nd._check_asymmetric_path(self._legs(5, 2), found)
+        self.assertEqual(found[0]["severity"], "ok")
+        self.assertIn("path_asymmetric", nd.VERDICT_EXEMPT)
+        src = inspect.getsource(nd.diagnose)
+        self.assertLess(src.index("build_verdict("), src.index("trace_each_side("),
+                        "the traces now run before the verdict, so this can be graded")
+
+    def test_the_message_says_which_number_to_trust(self):
+        found = []
+        nd._check_asymmetric_path(self._legs(5, 2), found)
+        self.assertIn("weaker of the two", found[0]["message"])
+
+
 class TestWhoOwnsEachHop(unittest.TestCase):
     """The AS a hop belongs to, which is the escalation question.
 
@@ -9528,9 +9590,14 @@ class TestWhoOwnsEachHop(unittest.TestCase):
         rendered column, and the page prints it beside the hop."""
         col = nd.build_probe_column(
             [{"hop": 1, "host": "10.0.0.1", "display": "10.0.0.1", "asn": "AS64512",
-              "times_ms": [1.0], "timed_out": False, "flags": None}], "8.8.8.8")
+              "pmtu": 1400, "times_ms": [1.0], "timed_out": False, "flags": None}],
+            "8.8.8.8")
         self.assertEqual(col["hops"][0]["asn"], "AS64512")
         self.assertIn("h.asn", nd.VIEWER_TEMPLATE)
+        # The per-hop MTU travels the same way and was dropped one layer after
+        # being parsed, which nothing noticed: "the path MTU is 1400" is a
+        # number, "it drops to 1400 at hop 3" is somewhere to go.
+        self.assertEqual(col["hops"][0]["pmtu"], 1400)
 
 
 class TestTheFallbackThatNeverWorked(unittest.TestCase):
@@ -10298,6 +10365,10 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         "tcp_flow_loss_clients", "tcp_flow_loss_backends",
         "path_jitter_clients", "path_jitter_backends",
         "queuing_delay_clients", "queuing_delay_backends",
+        # A route that leaves one way and returns another is a property of the
+        # pair of paths, not of either leg. Both legs can read OK while it is
+        # true, which is the whole reason it is worth reporting.
+        "path_asymmetric",
     }
 
     LIT = ("warn", "fail")
@@ -20486,6 +20557,36 @@ def _(nd):
     rows += ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i, i) for i in range(1, 6)]
     rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.0.0.90:8080" % i for i in range(6)]
     serving(nd, "\n".join(rows) + "\n")
+
+@scenario("path_asymmetric")
+def _(nd):
+    """Traffic leaving by one route and coming back by another: five hops out,
+    two on the way back off the reply's TTL."""
+    rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
+    rows += ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i, i) for i in range(1, 6)]
+    rows += ["ESTAB 0 0 10.0.0.5:51%03d 10.0.0.90:5432" % (100 + i) for i in range(4)]
+    serving(nd, "\n".join(rows) + "\n")
+    sided_flows(nd,
+        *[sided_sock("198.51.100.%d" % i, "443", sent=40_000_000, retrans=0)
+          for i in range(1, 6)],
+        *[sided_sock("10.0.0.90", "51%03d" % (100 + i), sent=60_000_000, retrans=0)
+          for i in range(4)])
+    # One private hop and then public ones. Two private hops in series is a
+    # double NAT, which outranks this and made the first version of this
+    # scenario a page about NAT instead.
+    trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+              " 2  203.0.113.1 (203.0.113.1)  5.0 ms\n"
+              " 3  203.0.113.5 (203.0.113.5)  7.0 ms\n"
+              " 4  203.0.113.9 (203.0.113.9)  9.0 ms\n"
+              " 5  203.0.113.13 (203.0.113.13)  11.0 ms\n")
+    # A reply that left at 64 and arrived with 62 is two hops away, against the
+    # five the trace walked.
+    nd.cmd_ping = lambda t, c=4, w=2: {
+        "ok": True, "cmd": "ping %s" % t,
+        "stdout": "64 bytes from %s: icmp_seq=1 ttl=62 time=9.0 ms\n"
+                  "4 packets transmitted, 4 received, 0%% packet loss\n"
+                  "rtt min/avg/max/mdev = 1.0/9.0/12.0/0.5 ms\n" % t}
 
 @scenario("log_egress_plaintext")
 def _(nd): shipping_logs(nd, "514")

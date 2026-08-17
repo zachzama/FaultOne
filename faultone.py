@@ -8047,6 +8047,14 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # working. It is reported so a 4xx in the evidence is not
                   # read as an error, and never ranked as one.
                   "own_service_demands_auth",
+                  # Reported, and not a candidate for the verdict, because it
+                  # cannot be one: the per-side traces it is derived from run
+                  # after build_verdict has already chosen. Ranking it would
+                  # put a rule in the list that never wins, which reads as a
+                  # decision somebody made rather than a constraint nobody
+                  # worked around. The reader still gets it, on the strip and
+                  # in the findings.
+                  "path_asymmetric",
                   "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
@@ -8332,6 +8340,9 @@ FINDING_SIDE.update({
     # The box's own interface queue: it delays everything leaving, whoever
     # the traffic belongs to.
     "queue_standing_here": "local",
+    # Named per side by its scope; the finding itself is about a route
+    # that leaves one way and comes back another, which faces both.
+    "path_asymmetric": "local",
     "forwards_inside_tunnels": "upstream",
     # The collector is off this box, whichever direction the users are.
     "log_egress_stalled": "upstream",
@@ -8779,6 +8790,67 @@ HOP_LOSS_CRIT_PCT = 20
 HOP_LOSS_WARN_PCT = 5
 
 
+#: How far the hop count out and the hop count back have to differ before the
+#: path is called asymmetric. One is ordinary - the two counts are measured
+#: differently, one by walking and one from a TTL against an assumed start, and
+#: an off-by-one falls out of that without anything being wrong. Two is a
+#: different route.
+ASYMMETRIC_HOP_GAP = 2
+
+
+def _check_asymmetric_path(legs, findings):
+    """Traffic leaving by one route and coming back by another.
+
+    The page has drawn the word "asymmetric" beside these two numbers for a
+    while and nothing concluded from it. It was a label, so it was never
+    ranked, never owned, and never reached the verdict - on the one reading
+    this tool has that no other check here can make, which its own comment
+    says.
+
+    It matters more on this box than on most. A stateful firewall on the return
+    path sees a reply for a flow it never watched open and drops it, so the
+    connection dies with both directions individually healthy and every check
+    below passing. That is the shape of report this exists to stop producing.
+
+    The counts are not equally trustworthy and the message says so: the way out
+    was walked, the way back is inferred from a TTL against an assumed starting
+    value. A difference of one is not a finding for that reason.
+    """
+    for side in (legs or []):
+        out = len(side.get("traced", {}).get("hops") or [])
+        back = side.get("hops_in")
+        # Written as the condition for firing, so the bar reads the way it is
+        # documented and can be checked against this line.
+        differs = out and back and abs(out - back) >= ASYMMETRIC_HOP_GAP
+        if not differs:
+            continue
+        where = ("the clients" if side.get("side") == "client"
+                 else "what this box connects out to")
+        findings.append({
+            # Context rather than a graded fault, and not by choice. This is
+            # derived from the per-side traces, which run after both
+            # build_verdict and build_stages have already decided - so it can
+            # neither be the cause nor colour a stage, and grading it "warning"
+            # would put a severity on the page that nothing downstream honours.
+            # What it can do is be there, in the reader's own words, next to
+            # the two hop counts it is drawn from.
+            "severity": "ok",
+            "layer": 3,
+            "code": "path_asymmetric",
+            "scope": side.get("side"),
+            "message": (
+                f"Traffic to {where} crosses {out} hop(s) on the way out and "
+                f"{back} on the way back, so it is not returning by the route it "
+                f"left by. The way out was walked hop by hop; the way back is "
+                f"counted from the TTL of one reply against an assumed starting "
+                f"value, so treat it as the weaker of the two numbers. Worth "
+                f"knowing because a stateful device on the return path sees a "
+                f"reply for a flow it never watched open and drops it - the "
+                f"connection dies while both directions look healthy measured on "
+                f"their own, which is most of what is below this line."),
+        })
+
+
 def count_the_hops_in(legs, quick=False):
     """How many hops away each side is, off the TTL of a reply from it.
 
@@ -8919,6 +8991,11 @@ def build_probe_column(hops, target, baseline_path=None):
             # the path is somebody else's, and the AS says whose - which is who
             # the ticket goes to.
             "asn": hop.get("asn"),
+            # Where the path narrows, for the tools that report it per hop.
+            # Parsed a release ago and dropped one layer later, which is the
+            # same half-use this file keeps finding: "the path MTU is 1400" is
+            # a number, "it drops to 1400 at hop 3" is somewhere to go.
+            "pmtu": hop.get("pmtu"),
             "ms": round(avg, 1) if avg is not None else None,
             "delta_ms": round(delta, 1) if delta >= 1 else None,
             "timed_out": bool(hop.get("timed_out")),
@@ -16415,6 +16492,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     trace_each_side(report.get("path_legs"), findings, quick)
     fold_the_probe_into_the_way_out(report)
     count_the_hops_in(report.get("path_legs"), quick)
+    _check_asymmetric_path(report.get("path_legs"), findings)
     report["peer_names"] = name_the_addresses(
         addresses_on_the_page(report), raw, quick)
     return report

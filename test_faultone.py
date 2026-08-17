@@ -7105,12 +7105,39 @@ class TestBothBoundariesAreAlwaysDrawn(unittest.TestCase):
         """Computing it and not drawing it is how the traced peer spent a day
         being right and invisible."""
         drawn = self.viewer_draws({"legs": [], "left": "this box",
-                                   "right": "clients",
+                                   "right": "clients", "quiet_kind": "none",
                                    "quiet_because": "nothing is connected inbound"})
-        self.assertIn("nothing measured across here", drawn)
+        self.assertIn("nothing is connected across here", drawn)
         self.assertIn("nothing is connected inbound", drawn)
         self.assertIn("this box", drawn)
         self.assertIn("clients", drawn)
+
+    def test_the_two_silences_are_told_apart_on_the_page(self):
+        """One label for both read as a single state and it is two. Nothing is
+        connected across this boundary, or something is and this run could not
+        measure it - the first is usually correct and the second is a gap, and
+        a reader deciding whether to look further needs to know which."""
+        none = self.viewer_draws({"legs": [], "left": "a", "right": "b",
+                                  "quiet_kind": "none", "quiet_because": "x"})
+        unmeasured = self.viewer_draws({"legs": [], "left": "a", "right": "b",
+                                        "quiet_kind": "unmeasured",
+                                        "quiet_because": "y"})
+        self.assertIn("NONE CONNECTED", none)
+        self.assertNotIn("NOT MEASURED", none)
+        self.assertIn("NOT MEASURED", unmeasured)
+        self.assertNotIn("NONE CONNECTED", unmeasured)
+
+    def test_a_side_says_which_silence_it_is(self):
+        """The page can only tell them apart if the report does. Both are
+        derived from the connection count, not written down twice."""
+        empty = {"ok": True, "inbound": 0, "outbound": 0, "listen_ports": []}
+        self.assertEqual(nd._quiet_side("client", None, empty, {})["quiet_kind"], "none")
+        # And the other branch, which is the one that matters: connections are
+        # here and the per-connection statistics were not readable. Asserting
+        # only the empty case let both collapse to "none" with nothing failing.
+        busy = {"ok": True, "inbound": 4, "outbound": 0, "listen_ports": ["443"]}
+        self.assertEqual(nd._quiet_side("client", None, busy, {})["quiet_kind"],
+                         "unmeasured")
 
     def test_a_column_with_legs_gets_no_quiet_lane(self):
         """It has to fall through to the real ones, not draw both."""

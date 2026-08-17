@@ -9009,6 +9009,12 @@ def _quiet_side(name, state, sock, raw):
             # named, or the reader cannot tell which gap the column is.
             "left": "this box" if name == "backend" else far,
             "right": far if name == "backend" else "this box",
+            # Which of the two silences this is. One label for both read as a
+            # single state and it is two, wanting two different things: there
+            # is nothing here to measure, or there is something here and it
+            # could not be measured. The first is a fact about the network and
+            # is often correct; the second is a gap in this run.
+            "quiet_kind": "unmeasured" if connected else "none",
             "legs": [], "quiet_because": why}
 
 
@@ -17353,9 +17359,17 @@ function quietLane(side){
   // Empty string rather than a lane when there is something to draw, so the
   // caller can fall through to the real legs.
   if((side.legs || []).length) return '';
+  // Two silences, two labels. "QUIET" was one word for both, and they are not
+  // the same thing: nothing is connected across this boundary, or something is
+  // and this run could not measure it. The first is usually correct and the
+  // second is a gap, and a reader deciding whether to look further needs to
+  // know which they are looking at.
+  var none = side.quiet_kind !== 'unmeasured';
   return '<div class="plane quiet"><div class="ptop">'
-    + '<span class="pwhat">nothing measured across here</span>'
-    + '<span class="pverd">QUIET</span></div>'
+    + '<span class="pwhat">' + (none ? 'nothing is connected across here'
+                                     : 'connected, and not measurable here') + '</span>'
+    + '<span class="pverd">' + (none ? 'NONE CONNECTED' : 'NOT MEASURED')
+    + '</span></div>'
     + '<div class="ptrack"><span class="pend">' + escapeHtml(side.left) + '</span>'
     + '<span class="pline"></span>'
     + '<span class="pend">' + escapeHtml(side.right) + '</span></div>'

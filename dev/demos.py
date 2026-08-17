@@ -370,6 +370,59 @@ def on_a_vpc(mod):
 # What a reply from each of these arrives with, so the hop count differs by
 # destination the way it would on a real network: a database two hops inside the
 # rack, clients seven hops out across the internet.
+# Which network each hop belongs to. mtr prints this when it is asked and DNS
+# answers, and a page without it reads as the tool not having the reading
+# rather than the fixture not carrying one - the same reason the TTLs and the
+# reverse names below are injected. It shipped tested and invisible on forty
+# demo pages before this was noticed.
+#
+# 64512-65534 is the private AS range, which is what a site uses for its own
+# equipment. The transit hops get a number outside it, because the point of
+# drawing this is the moment the path stops being yours.
+# Whatever the pages are aimed at, for working out how far away it is. The
+# scenarios all use the same default target.
+TARGET_FOR_TTL = "8.8.8.8"
+
+AS_BY_PREFIX = (
+    ("10.", "AS64512"),                 # this site's own equipment
+    ("192.168.", "AS64512"),
+    ("100.64.", "AS64513"),             # the carrier's access layer
+    ("203.0.113.", "AS64501"),          # the transit provider
+    ("198.51.100.", "AS64502"),         # where the clients come from
+    ("8.8.8.8", "AS15169"),
+)
+
+
+def whose_hop(address):
+    for prefix, asn in AS_BY_PREFIX:
+        if address.startswith(prefix):
+            return asn
+    return None
+
+
+def with_as_numbers(mod):
+    """Annotate the trace the way a tool that was asked for AS numbers does.
+
+    Wrapped rather than rewritten per scenario, so every page gets it and no
+    page has to remember to. It only adds a bracket after an address that
+    already parsed, so it cannot change which hops are found or what any
+    finding concludes - except the one finding that reads it, which is the
+    point.
+    """
+    original = mod.cmd_traceroute
+
+    def annotated(target, _o=original):
+        got = _o(target)
+        out = got.get("stdout") or ""
+        if not out or "[AS" in out:
+            return got
+        def mark(m):
+            asn = whose_hop(m.group(1))
+            return m.group(0) + (" [%s]" % asn if asn else "")
+        return dict(got, stdout=re.sub(r"\((\d{1,3}(?:\.\d{1,3}){3})\)", mark, out))
+    mod.cmd_traceroute = annotated
+
+
 TTL_SEEN = {"10.0.0.90": 62, "10.0.2.40": 62, "8.8.8.8": 57,
             "10.0.0.1": 64, "10.0.1.1": 64}
 
@@ -428,6 +481,15 @@ def main():
         # prints only the summary lines, because no finding depends on a TTL.
         # And reverse names, so an address on the page reads as the thing it is
         # - the resolver here answers nothing, being a fixture.
+        # The TTL has to agree with the trace. These were fixed numbers chosen
+        # before anything compared the two directions, and they did not: a page
+        # whose trace walked two hops replied with a TTL saying seven, which is
+        # a different route back. path_asymmetric is new and correct and said
+        # so on every page at once, which is the fixture being wrong rather
+        # than the finding.
+        _walked = len(mod.parse_traceroute_hops(
+            (mod.cmd_traceroute(TARGET_FOR_TTL) or {}).get("stdout") or "")) or None
+
         _ping = mod.cmd_ping
 
         def _with_ttl(t, c=4, w=2, _p=_ping):
@@ -442,9 +504,10 @@ def main():
             if "ttl=" in out:
                 return got
             return dict(got, stdout="64 bytes from %s: icmp_seq=1 ttl=%d time=12.4 ms\n%s"
-                                    % (t, TTL_SEEN.get(t, 57), out))
+                                    % (t, (64 - _walked) if _walked else TTL_SEEN.get(t, 57), out))
         mod.cmd_ping = _with_ttl
         mod.dns_ptr = lambda server, ip, timeout=1.0: PTR_NAMES.get(ip)
+        with_as_numbers(mod)
         on_a_vpc(mod)
         report = mod.diagnose(quick=False, **T.scenario_kwargs(kwargs))
         # An all-clear verdict lists every finding in based_on, so based_on[0]
@@ -462,6 +525,17 @@ def main():
                  report["verdict"]["headline"][:44]))
         if named != code:
             wrong.append("%s: verdict named %s" % (slug, named))
+        # And that the readings a page is supposed to carry actually arrived.
+        # The verdict check has caught a page saying the wrong thing since this
+        # file was written; nothing checked that a page still *showed* what the
+        # tool had learned, so the AS numbers shipped tested and invisible on
+        # forty pages for a week. Cheap, and it is the same argument.
+        hops = list((report.get("probe_path") or {}).get("hops") or [])
+        for leg in report.get("path_legs") or []:
+            hops += (leg.get("traced") or {}).get("hops") or []
+        if hops and not any(h.get("asn") for h in hops):
+            wrong.append("%s: not one hop carries an AS, so the page cannot show one"
+                         % slug)
     if wrong:
         print("\n" + "\n".join(wrong))
         return 1

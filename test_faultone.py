@@ -9450,6 +9450,98 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestSayingWhyItIsSlowAndNotOnlyThatItIs(unittest.TestCase):
+    """Latency had fifteen findings and fourteen could only ever be a symptom.
+
+    So the report said traffic was being held up and which direction it was
+    going, and then named the delay itself as the answer - a description of
+    the problem presented as its cause, with the owner pointing at whatever
+    was buffering on the path. On five of the seven scenarios there was
+    genuinely nothing else in the report to name, which is not the tool being
+    cautious: the one cause it could have measured was read and never turned
+    into a finding.
+    """
+
+    SYMPTOMS = ("queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
+                "path_jitter_backends", "path_jitter_clients",
+                "latency_high", "latency_wall")
+
+    def test_a_queue_on_this_box_is_the_cause_of_the_delay_above_it(self):
+        """Every latency symptom, with a standing queue on this box's own
+        interface underneath it. The queue has to win and the symptom has to be
+        named as its consequence, or the reader is told the path is slow when
+        the delay is being added here."""
+        for scen in self.SYMPTOMS:
+            setup, kw = S[scen]
+            # The queue alone, not the whole scenario: that one carries its own
+            # flows, which would replace the sided ones these symptoms need.
+            m = fresh(); setup(m); deep_local_queue(m)
+            v = m.diagnose(quick=False, **scenario_kwargs(kw))["verdict"]
+            with self.subTest(symptom=scen):
+                self.assertEqual(v["based_on"][0], "queue_standing_here")
+                self.assertIn(scen, v.get("explains") or [],
+                              "the cause won and did not account for the symptom")
+
+    def test_the_owner_moves_to_this_box(self):
+        """The part that changes what someone does next. These verdicts used to
+        own to the path or the provider, which is a carrier ticket for a queue
+        on your own interface."""
+        setup, kw = S["queuing_delay_backends"]
+        m = fresh(); setup(m); deep_local_queue(m)
+        v = m.diagnose(quick=False, **scenario_kwargs(kw))["verdict"]
+        self.assertIn("this box", v["owner"])
+
+    def test_it_outranks_every_symptom_it_can_explain(self):
+        """Ranked below them it never gets the chance. Four of the seven were
+        exactly that on the first attempt - the sided queuing and jitter
+        findings sit above where it was inserted, so the symptom kept winning
+        and the cause explained nothing."""
+        order = [c for c, *_ in nd.VERDICT_RULES]
+        here = order.index("queue_standing_here")
+        for scen in self.SYMPTOMS:
+            with self.subTest(symptom=scen):
+                self.assertGreater(order.index(scen), here)
+
+    def test_a_shallow_queue_is_a_queue_working(self):
+        """It is meant to hold a burst. Firing on any backlog at all would
+        report every busy interface on the estate as a fault."""
+        raw = {"qdisc": {"queues": [
+            {"iface": "eth0", "kind": "fq_codel", "backlog_pkts": 4,
+             "backlog_bytes": 6000, "dropped": 0}]}}
+        out = []
+        nd._check_local_queue(raw, out)
+        self.assertEqual(out, [])
+
+    def test_it_fires_at_the_documented_value(self):
+        for pkts, expect in ((nd.LOCAL_QUEUE_STANDING_PKTS - 1, False),
+                             (nd.LOCAL_QUEUE_STANDING_PKTS, True)):
+            raw = {"qdisc": {"queues": [
+                {"iface": "eth0", "kind": "fq_codel", "backlog_pkts": pkts,
+                 "backlog_bytes": pkts * 1500, "dropped": 0}]}}
+            out = []
+            nd._check_local_queue(raw, out)
+            with self.subTest(backlog=pkts):
+                self.assertEqual(bool(out), expect)
+
+    def test_loopback_is_never_the_answer(self):
+        """A queue by the kernel's reckoning and never where traffic leaving
+        this box is held up."""
+        raw = {"qdisc": {"queues": [
+            {"iface": "lo", "kind": "noqueue", "backlog_pkts": 9000,
+             "backlog_bytes": 9000000, "dropped": 0}]}}
+        out = []
+        nd._check_local_queue(raw, out)
+        self.assertEqual(out, [])
+
+    def test_an_empty_queue_still_rules_this_box_out(self):
+        """The half that already worked has to keep working: the sentence that
+        eliminates this box when its queues are clean."""
+        raw = {"qdisc": {"queues": [
+            {"iface": "eth0", "kind": "fq_codel", "backlog_pkts": 0,
+             "backlog_bytes": 0, "dropped": 0}]}}
+        self.assertIn("not happening here", nd._queues_here_say(raw))
+
+
 class TestBeingAllowedThroughIsNotBeingAbleToConnect(unittest.TestCase):
     """Authentication, which had no finding at all.
 
@@ -20065,6 +20157,33 @@ def shipping_logs(nd, port, n=6, stalled=0, process="rsyslogd"):
         "ok": True, "cmd": "ss -tanp",
         "owners": [{"process": process, "pid": 812, "state": "ESTAB",
                     "local_port": "53000", "peer": "10.90.4.20:%s" % port}]}
+
+def deep_local_queue(nd):
+    """A standing backlog on this box's own egress interface."""
+    nd.cmd_qdisc = lambda: {
+        "ok": True, "cmd": "tc -s qdisc",
+        "queues": nd.parse_qdisc(
+            "qdisc noqueue 0: dev lo root refcnt 2\n"
+            " Sent 4021 bytes 44 pkt (dropped 0, overlimits 0 requeues 0)\n"
+            " backlog 0b 0p requeues 0\n"
+            "qdisc fq_codel 8003: dev eth0 root refcnt 2 limit 10240p flows 1024\n"
+            " Sent 91882361042 bytes 71204418 pkt (dropped 9143, overlimits 0 requeues 118)\n"
+            " backlog 2841260b 1904p requeues 118\n")}
+
+@scenario("queue_standing_here")
+def _(nd):
+    """This box's own egress queue holding traffic, and the delay it is causing
+    on the connections above it.
+
+    Both, deliberately. Every other scenario here is a single fault, which is
+    right for asking "does this finding fire" and wrong for the only thing this
+    finding is for: a latency symptom is what a reader sees, and the point is
+    that the report names the queue underneath it instead. With the queue alone
+    the capability exists and no report ever shows it."""
+    deep_local_queue(nd)
+    flows(nd, ss_flow("203.0.113.9", sent=40_000_000, retrans=1000)
+              .replace("rtt:12.4/3.1", "rtt:340.0/3.1")
+              .replace("minrtt:11.9", "minrtt:41.0"))
 
 @scenario("log_egress_plaintext")
 def _(nd): shipping_logs(nd, "514")

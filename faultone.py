@@ -3158,6 +3158,61 @@ def worst_local_queue(raw):
     return worst
 
 
+#: How many packets have to be sitting in this box's own egress queue before
+#: the queue is the story rather than ordinary bursting. A queue exists to hold
+#: a burst, so a handful waiting is it working; a standing backlog is traffic
+#: being delayed here for long enough that the connections above it can see it.
+#: Set where an fq_codel default (limit 10240) is plainly not coping rather
+#: than where it is merely busy.
+LOCAL_QUEUE_STANDING_PKTS = 64
+
+
+def _check_local_queue(raw, findings):
+    """This box holding traffic on the way out, said as a cause.
+
+    The reading was already here and only half used. A deep queue on this box's
+    own interface produced one sentence inside somebody else's message - and
+    only ever to rule the box *out* when the queue was empty. When it was full,
+    nothing in the report could be the cause of it.
+
+    That is the shape of the whole latency problem. Fifteen findings describe
+    something slow and fourteen of them can only ever be a symptom, so the
+    report says traffic is being held up and which direction it is going, and
+    then names the delay itself as the answer. This is the delay's cause, on
+    the one box the report is being written from, and it was measured all
+    along.
+
+    Layer 2 because it is the interface's own queue, which puts it under every
+    latency and queuing finding and lets it explain them rather than sit beside
+    them as a second opinion.
+    """
+    worst = worst_local_queue(raw)
+    # Written as the condition for firing rather than as a guard against it, so
+    # the bar reads the way it is documented: a queue holding exactly this many
+    # is standing, and the threshold table can be checked against this line.
+    standing = worst and worst["backlog_pkts"] >= LOCAL_QUEUE_STANDING_PKTS
+    if not standing:
+        return
+    dropped = worst["dropped"]
+    findings.append({
+        "severity": "warning",
+        "layer": 2,
+        "code": "queue_standing_here",
+        "scope": worst["iface"],
+        "message": (
+            f"{worst['backlog_pkts']} packet(s) are waiting in this box's own "
+            f"{worst['kind']} queue on {worst['iface']} right now"
+            + (f", and {dropped:,} have been dropped from it since boot"
+               if dropped else "")
+            + ". Traffic is being held here before it leaves, so every round trip "
+              "measured from this box carries that wait and reads as a slow path. "
+              "A queue is meant to hold a burst; one this deep and still standing "
+              "means more is being sent than the interface is getting away, which "
+              "is the line rate, the shaper on it, or whatever is filling it - and "
+              "not the network beyond."),
+    })
+
+
 def _queues_here_say(raw):
     """Whether this box's own egress queues are part of the delay, or are not.
 
@@ -7324,6 +7379,12 @@ VERDICT_RULES = [
     # Which side of a proxy the loss is on, ranked above every direction-blind
     # loss verdict below. Without these a lossy database on an internal segment
     # came out as "the provider or upstream".
+    ("queue_standing_here", "this box's own egress queue, not the path beyond it",
+     "Traffic is waiting in this box's own interface queue before it leaves",
+     "Every round trip measured from here carries that wait and reads as a slow "
+     "path. A queue is meant to hold a burst; one this deep and still standing "
+     "means more is being sent than the interface is getting away. Look at the "
+     "line rate, the shaper on it, and what is filling it."),
     ("queuing_delay_backends", "whatever is buffering between here and that backend",
      "The delay to the backend is queue, not distance",
      "The same connections have been far faster, so this is not how far away the "
@@ -8184,6 +8245,9 @@ FINDING_SIDE.update({
     # Context about the path out, same as the fault it is the other half of.
     "tunnel_payload_room": "upstream",
     # About the way out, and specifically about what it does not cover.
+    # The box's own interface queue: it delays everything leaving, whoever
+    # the traffic belongs to.
+    "queue_standing_here": "local",
     "forwards_inside_tunnels": "upstream",
     # The collector is off this box, whichever direction the users are.
     "log_egress_stalled": "upstream",
@@ -8339,7 +8403,7 @@ STAGE_RULES = [
       "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
       "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical",
-      "cpu_throttled_historical"}),
+      "cpu_throttled_historical", "queue_standing_here"}),
     ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict",
                  "target_is_discarded",
                  "source_address_not_held"},
@@ -15741,6 +15805,11 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # What this box's own egress queues are doing, for the three findings that
     # otherwise offer three candidates and can eliminate none of them.
     raw["qdisc"] = cmd_qdisc()
+    # And whether they are the reason anything above them is slow. Read here
+    # rather than with the late checks so it lands below the layer-3 findings
+    # it explains, which is what makes it the cause of them rather than a
+    # second opinion beside them.
+    _check_local_queue(raw, findings)
     # PROTOTYPE: what the proxy on this box believes about its own backends,
     # if there is one and it is willing to say. Absent on almost every box.
     raw["proxy_stats"] = cmd_haproxy_stats()

@@ -211,3 +211,27 @@ Its checks were verified by breaking each rule in turn and confirming it
 noticed: a consequence facing the wrong way, a finding in both the explained and
 unrelated lists, a cause explaining something below it, and the hardware marking
 drifting from its set.
+
+## mutate.py
+
+Breaks a rule on purpose and reports whether the suite objects. A green
+test proves nothing until breaking the thing it tests makes it fail, and
+that was being done by hand - a throwaway script per change, written from
+memory each time. One of those copied four files instead of the tree, so
+sixteen documentation tests failed on every mutant and on the control
+alike, which read as three rules being well covered when nothing had been
+proved.
+
+Two things are therefore not left to the caller. The whole tree is copied,
+because tests read the README, the reference, the viewer and `dev/`. And an
+unchanged control runs first with no flag to skip it, because a suite that
+fails before anything is mutated makes every result behind it noise.
+
+```bash
+python3 dev/mutate.py mutations.json    # a set, as JSON
+python3 dev/mutate.py --self-test       # two mutations with known answers
+```
+
+An anchor that does not appear exactly once is reported as a bad mutation
+rather than run: one that edits nothing survives every time and reads as a
+hole in the tests.

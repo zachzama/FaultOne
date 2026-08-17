@@ -9477,6 +9477,89 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestOneRouterBothSidesDependOn(unittest.TestCase):
+    """The two columns have never been compared with each other.
+
+    Each says which direction stopped. Neither asks whether they stop in the
+    same place, so one degraded router that both paths run through produced two
+    findings facing opposite ways and nothing to say they were the same fault -
+    the report named one and offered the other as a separate problem, which is
+    the answer this tool exists to avoid giving.
+    """
+
+    def _legs(self, client, backend):
+        return [{"side": "client", "traced": {"hops": client}},
+                {"side": "backend", "traced": {"hops": backend}}]
+
+    def _hop(self, n, host, state="ok", delta=None, asn=None):
+        return {"hop": n, "host": host, "state": state,
+                "delta_ms": delta, "asn": asn}
+
+    def test_a_hop_failing_on_both_paths_is_one_fault(self):
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(1, "10.0.0.1"), self._hop(2, "203.0.113.1", "warn", 39)],
+            [self._hop(1, "10.0.0.1"), self._hop(2, "203.0.113.1", "warn", 39)]), found)
+        self.assertEqual([f["code"] for f in found], ["shared_hop_degraded"])
+        self.assertIn("203.0.113.1", found[0]["message"])
+
+    def test_a_healthy_shared_gateway_is_not_a_finding(self):
+        """The whole difficulty. Almost every box reaches everything through
+        one router, so the first hop is common to both sides on a healthy
+        network - firing on shared alone would fire on every box there is."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(1, "10.0.0.1"), self._hop(2, "203.0.113.1")],
+            [self._hop(1, "10.0.0.1"), self._hop(2, "10.0.0.90")]), found)
+        self.assertEqual(found, [])
+
+    def test_a_hop_failing_on_one_side_only_is_not_shared(self):
+        """That is the ordinary case the two columns already describe, and
+        claiming one owner for it would be wrong."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(1, "10.0.0.1"), self._hop(2, "203.0.113.1", "crit", 90)],
+            [self._hop(1, "10.0.0.1"), self._hop(2, "203.0.113.1")]), found)
+        self.assertEqual(found, [])
+
+    def test_a_timed_out_hop_is_not_a_shared_router(self):
+        """"*" is every unanswered hop on every path. Treating it as a host
+        would make every pair of silent traces agree on a router that is not
+        there."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(1, "*", "crit"), self._hop(2, "*", "crit")],
+            [self._hop(1, "*", "crit"), self._hop(2, "*", "crit")]), found)
+        self.assertEqual(found, [])
+
+    def test_it_names_one_router_and_not_a_list(self):
+        """Two shared failing hops is still one sentence, about the worse."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(2, "203.0.113.1", "warn", 10), self._hop(3, "203.0.113.9", "crit", 90)],
+            [self._hop(2, "203.0.113.1", "warn", 10), self._hop(3, "203.0.113.9", "crit", 90)]),
+            found)
+        self.assertEqual(len(found), 1)
+        self.assertIn("203.0.113.9", found[0]["message"])
+        self.assertEqual(found[0]["severity"], "critical")
+
+    def test_it_fires_in_its_scenario_and_nowhere_else(self):
+        """A finding that claims one owner for both sides has to be sure. It
+        reaches the verdict, so a false one sends someone to the wrong place
+        with more confidence than the two separate findings would have."""
+        hits = []
+        for scen in sorted(S):
+            setup, kw = S[scen]
+            m = fresh(); setup(m)
+            try:
+                r = m.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            if any(f["code"] == "shared_hop_degraded" for f in r["findings"]):
+                hits.append(scen)
+        self.assertEqual(hits, ["shared_hop_degraded"])
+
+
 class TestNamingWhoseNetworkTheDelayIsIn(unittest.TestCase):
     """The site edge says the delay is not yours. The AS says whose it is.
 
@@ -20625,6 +20708,26 @@ def _(nd):
     rows += ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i, i) for i in range(1, 6)]
     rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.0.0.90:8080" % i for i in range(6)]
     serving(nd, "\n".join(rows) + "\n")
+
+@scenario("shared_hop_degraded")
+def _(nd):
+    """One router on the path to the clients and to the backends, losing on
+    both. Each side is traced to its own peer and both traces run through it."""
+    rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
+    rows += ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i, i) for i in range(1, 6)]
+    rows += ["ESTAB 0 0 10.0.0.5:51%03d 10.0.0.90:5432" % (100 + i) for i in range(4)]
+    serving(nd, "\n".join(rows) + "\n")
+    sided_flows(nd,
+        *[sided_sock("198.51.100.%d" % i, "443", sent=40_000_000, retrans=0)
+          for i in range(1, 6)],
+        *[sided_sock("10.0.0.90", "51%03d" % (100 + i), sent=60_000_000, retrans=0)
+          for i in range(4)])
+    # Hop 2 answers a third of its probes on every path through it. Both side
+    # traces get the same output, which is what a shared router looks like.
+    trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms  1.1 ms  1.2 ms\n"
+              " 2  203.0.113.1 (203.0.113.1)  40.0 ms  * *\n"
+              " 3  203.0.113.9 (203.0.113.9)  44.0 ms  44.2 ms  44.4 ms\n")
 
 @scenario("path_asymmetric")
 def _(nd):

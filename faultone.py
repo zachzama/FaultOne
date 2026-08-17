@@ -7461,6 +7461,11 @@ VERDICT_RULES = [
     # Which side of a proxy the loss is on, ranked above every direction-blind
     # loss verdict below. Without these a lossy database on an internal segment
     # came out as "the provider or upstream".
+    ("shared_hop_degraded", "whoever owns that hop - it is on both paths, so it is one owner",
+     "One hop that both sides depend on is failing on both",
+     "Two unhealthy sides usually means two faults with different owners. This "
+     "is the case where it does not: a single router both directions run "
+     "through. Fixing it is expected to move both."),
     ("queue_standing_here", "this box's own egress queue, not the path beyond it",
      "Traffic is waiting in this box's own interface queue before it leaves",
      "Every round trip measured from here carries that wait and reads as a slow "
@@ -8341,6 +8346,9 @@ FINDING_SIDE.update({
     # About the way out, and specifically about what it does not cover.
     # The box's own interface queue: it delays everything leaving, whoever
     # the traffic belongs to.
+    # On both paths, so it faces both ways - which is what "local" means
+    # here, and is why it can explain findings on either side.
+    "shared_hop_degraded": "local",
     "queue_standing_here": "local",
     # Named per side by its scope; the finding itself is about a route
     # that leaves one way and comes back another, which faces both.
@@ -8550,7 +8558,7 @@ STAGE_RULES = [
       # its own, and both change what the way out can do.
       "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
       "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path",
-      "broker_leg_in_the_clear", "path_asymmetric"}),
+      "broker_leg_in_the_clear", "path_asymmetric", "shared_hop_degraded"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -8844,6 +8852,59 @@ def _check_asymmetric_path(legs, findings):
                 f"connection dies while both directions look healthy measured on "
                 f"their own, which is most of what is below this line."),
         })
+
+
+def _check_shared_hop(legs, findings):
+    """One hop that both sides cross, and that is failing on both.
+
+    The two columns have been analysed independently since they existed. Each
+    says which direction stopped, neither ever asked whether they stop in the
+    same place - so a single degraded router that both the clients' path and
+    the backends' path run through produced two findings facing opposite ways,
+    with nothing to say they were the same fault. The report named one and
+    offered the other as a separate problem, which is the shape of answer this
+    tool exists to avoid.
+
+    Shared alone is not a finding, and this is the whole difficulty. Almost
+    every box reaches everything through one gateway, so the first hop is
+    common to both sides on a healthy network and firing there would fire
+    everywhere. What is worth saying is a hop that is shared *and* degraded on
+    both, because that is a router both directions depend on and both
+    directions are suffering at.
+    """
+    lit = {}
+    for side in (legs or []):
+        for hop in ((side.get("traced") or {}).get("hops") or []):
+            host = hop.get("host")
+            if host and host != "*" and hop.get("state") in ("warn", "crit"):
+                lit.setdefault(host, {})[side.get("side")] = hop
+    both = {h: seen for h, seen in lit.items() if len(seen) > 1}
+    if not both:
+        return
+    # The worst of them, by the worse of its two states, then by how much delay
+    # it adds. One sentence about one router, not a list.
+    def rank(item):
+        seen = item[1]
+        return (sum(1 for h in seen.values() if h.get("state") == "crit"),
+                max((h.get("delta_ms") or 0) for h in seen.values()))
+    host, seen = max(both.items(), key=rank)
+    worst = max(seen.values(), key=lambda h: (h.get("state") == "crit",
+                                              h.get("delta_ms") or 0))
+    findings.append({
+        "severity": "critical" if worst.get("state") == "crit" else "warning",
+        "layer": 3,
+        "code": "shared_hop_degraded",
+        "message": (
+            f"Hop {worst.get('hop')} ({host}) is on the path to both the clients and "
+            f"what this box connects out to, and is failing on both"
+            + (f", adding {worst['delta_ms']:.0f}ms" if worst.get("delta_ms") else "")
+            + (f" in {worst['asn']}" if worst.get("asn") else "")
+            + ". Both sides being unhealthy usually means two faults facing opposite "
+              "ways with different owners, and this is the case where it does not: "
+              "one router that both directions run through. Fixing it is expected to "
+              "move both, which nothing else on this report would tell you - the two "
+              "columns are measured apart and have never been compared."),
+    })
 
 
 def count_the_hops_in(legs, quick=False):
@@ -16345,6 +16406,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     trace_each_side(_legs, findings, quick)
     count_the_hops_in(_legs, quick)
     _check_asymmetric_path(_legs, findings)
+    _check_shared_hop(_legs, findings)
     # Built again, because the walk above can add findings and the sides are a
     # summary of them. The first pass exists only to decide which peer each
     # side should be traced to, which needs the sides and cannot need their

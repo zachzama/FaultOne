@@ -9450,6 +9450,79 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestWhatLeavesOnTheOnwardLeg(unittest.TestCase):
+    """The leg this box chooses, and whether what it re-sends is protected.
+
+    The inbound half is encrypted by construction - that is what the client
+    dialled - and every certificate check here is about that half or about
+    somewhere further out. Nothing asked what happened on the way back out,
+    which is the one leg this box decides.
+    """
+
+    def _box(self, clients=5, onward=(), listen="443"):
+        rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+                "LISTEN 0 128 10.0.0.5:%s 0.0.0.0:*" % listen]
+        rows += ["ESTAB 0 0 10.0.0.5:%s 198.51.100.%d:52%03d" % (listen, i, i)
+                 for i in range(1, clients + 1)]
+        rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.0.0.90:%s" % (i, p)
+                 for i, p in enumerate(onward)]
+        return {"sockets": dict(nd.parse_socket_states("\n".join(rows) + "\n"), ok=True)}
+
+    def test_brokering_onward_over_plain_http_is_reported(self):
+        seen = nd.brokered_in_the_clear(self._box(onward=["8080"] * 6))
+        self.assertEqual(seen["sessions"], 6)
+        self.assertEqual(seen["ports"], ["8080"])
+
+    def test_a_box_serving_nobody_is_not_brokering_anything(self):
+        """The gate. A box working for itself that talks to something over
+        plain HTTP is making a choice about its own traffic, and saying
+        "brokered in the clear" about it would be wrong as well as noisy."""
+        self.assertIsNone(nd.brokered_in_the_clear(self._box(clients=0, onward=["8080"] * 6)))
+
+    def test_its_own_database_is_not_somebody_elses_traffic(self):
+        """The line that cost the first attempt. PostgreSQL is as much in the
+        clear as HTTP is, and a connection to it is this box's own dependency
+        rather than traffic it is carrying onward - firing there reported
+        "brokered in the clear" on every serving box in the corpus."""
+        self.assertIsNone(nd.brokered_in_the_clear(self._box(onward=["5432"] * 4)))
+
+    def test_an_unrecognised_port_is_not_called_an_exposure(self):
+        """A tunnel on an unregistered port is encrypted and unreadable from
+        here. Treating everything that is not a known TLS port as cleartext
+        would report every custom connector on the estate."""
+        self.assertIsNone(nd.brokered_in_the_clear(self._box(onward=["19999"] * 6)))
+
+    def test_a_leg_on_a_tls_port_says_nothing(self):
+        self.assertIsNone(nd.brokered_in_the_clear(self._box(onward=["8443"] * 6)))
+
+    def test_the_log_leg_can_never_be_counted_as_brokered_traffic(self):
+        """Shipping logs is this box talking about itself and has its own
+        finding. This was a filter inside the reading until a mutation showed
+        it could not fire - no log port is in the cleartext list, so the clause
+        was decoration and would not have noticed if that stopped being true.
+        The invariant is the thing worth holding, so it is held directly."""
+        overlap = set(nd.CLEARTEXT_PROTOCOL_PORTS) & set(nd.LOG_EGRESS_PORTS)
+        self.assertEqual(overlap, set(),
+                         "a log port is being read as brokered traffic too")
+        self.assertIsNone(nd.brokered_in_the_clear(self._box(onward=["514"] * 6)))
+
+    def test_it_never_headlines_over_a_live_fault(self):
+        """A leg that works and is readable is a liability, not the cause of
+        anything anyone is reporting."""
+        self.assertIn("broker_leg_in_the_clear", nd.LATENT)
+        bare = {"code": "broker_leg_in_the_clear", "severity": "warning", "layer": 4,
+                "message": "onward in the clear"}
+        below = {"code": "dns_fail", "severity": "critical", "layer": 7,
+                 "message": "no name resolves"}
+        order = [c for c, *_ in nd.VERDICT_RULES]
+        self.assertLess(order.index("broker_leg_in_the_clear"), order.index("dns_fail"),
+                        "this only means something while the liability ranks higher")
+        self.assertEqual(nd.build_verdict([bare], raw={})["based_on"][0],
+                         "broker_leg_in_the_clear")
+        self.assertEqual(nd.build_verdict([bare, below], raw={})["based_on"][0],
+                         "dns_fail")
+
+
 class TestSayingWhyItIsSlowAndNotOnlyThatItIs(unittest.TestCase):
     """Latency had fifteen findings and fourteen could only ever be a symptom.
 
@@ -20184,6 +20257,16 @@ def _(nd):
     flows(nd, ss_flow("203.0.113.9", sent=40_000_000, retrans=1000)
               .replace("rtt:12.4/3.1", "rtt:340.0/3.1")
               .replace("minrtt:11.9", "minrtt:41.0"))
+
+@scenario("broker_leg_in_the_clear")
+def _(nd):
+    """A box terminating client tunnels and brokering them onward over plain
+    HTTP: the traffic arrived encrypted and leaves readable."""
+    rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
+    rows += ["ESTAB 0 0 10.0.0.5:443 198.51.100.%d:52%03d" % (i, i) for i in range(1, 6)]
+    rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.0.0.90:8080" % i for i in range(6)]
+    serving(nd, "\n".join(rows) + "\n")
 
 @scenario("log_egress_plaintext")
 def _(nd): shipping_logs(nd, "514")

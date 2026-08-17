@@ -7524,6 +7524,12 @@ VERDICT_RULES = [
      "report will show it: shipping logs is not on the path anyone's traffic "
      "takes. Check the collector is up and that whatever filters this box's "
      "own egress still permits it."),
+    ("broker_leg_in_the_clear", "whoever configured the onward leg, or the segment it crosses",
+     "Traffic this box carries for other people leaves it unencrypted",
+     "It arrived over a tunnel, a policy was applied to it here, and it left "
+     "readable by anything on the way to the far end. The connections work, which "
+     "is why nothing else here shows it. Give the onward leg TLS if the far side "
+     "takes it, or treat the segment it crosses as the control."),
     ("log_egress_plaintext", "whoever configured the log shipper",
      "This box is sending its logs across the network unencrypted",
      "Everything it writes about the traffic it carries is readable by "
@@ -8033,7 +8039,7 @@ LATENT = {
     # The log leg. Nothing a user is reporting is caused by these, so neither
     # may stand over a live fault - but both are the answer on a box where
     # nothing else is wrong, which is exactly when anyone would act on them.
-    "log_egress_stalled", "log_egress_plaintext",
+    "log_egress_stalled", "log_egress_plaintext", "broker_leg_in_the_clear",
     # It throttled earlier and is not throttling now.
     "cpu_throttled_historical",
 }
@@ -8252,6 +8258,8 @@ FINDING_SIDE.update({
     # The collector is off this box, whichever direction the users are.
     "log_egress_stalled": "upstream",
     "log_egress_plaintext": "upstream",
+    # The leg this box opens onward, which is the way out by definition.
+    "broker_leg_in_the_clear": "upstream",
     "log_egress_encrypted": "upstream",
     "trace_took_another_route": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
@@ -8450,7 +8458,8 @@ STAGE_RULES = [
       # What sits between this site and the internet. Neither is a fault on
       # its own, and both change what the way out can do.
       "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
-      "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path"}),
+      "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path",
+      "broker_leg_in_the_clear"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -11157,6 +11166,82 @@ def _check_forwarding_shape(raw, findings):
     })
 
 
+#: Ports that carry brokered traffic onward in the clear. Deliberately only the
+#: HTTP family, and not every cleartext protocol there is.
+#:
+#: Two lines were drawn and both matter. Not "ports that are not TLS", because a
+#: tunnel on an unregistered port is encrypted and unrecognisable from here, and
+#: guessing would report every custom connector as an exposure. And not the
+#: databases and mail protocols either, though they are just as much in the
+#: clear: a connection to PostgreSQL is this box's own dependency, not somebody
+#: else's traffic being carried onward, and firing there would have said
+#: "brokered in the clear" about every serving box in the corpus - which it did,
+#: on the first attempt.
+CLEARTEXT_PROTOCOL_PORTS = {
+    "80": "HTTP", "8080": "HTTP", "8000": "HTTP", "3128": "HTTP proxy",
+}
+
+
+def brokered_in_the_clear(raw):
+    """Traffic this box carries for other people, leaving on a cleartext
+    protocol, or None.
+
+    Only asked of a box that is actually serving clients. On a box working for
+    itself this is a different and much weaker statement - plenty of things
+    talk to their own database in the clear inside one subnet, and saying so on
+    every one of them would be noise. On a box that terminates somebody's
+    tunnel, decides whether to carry it and brokers it onward, it is the whole
+    point: traffic arrived encrypted, a policy was applied to it, and it left
+    readable.
+
+    The log leg is not in here and cannot be: no port in that set is in this
+    one, which a test holds. Filtering for it at run time only looked like
+    caution - the clause could not fire, so nothing would have noticed if the
+    two lists ever did overlap. Shipping logs in the clear is a finding of its
+    own and says the same thing better.
+    """
+    if not _serves_traffic(raw):
+        return None
+    sock = (raw or {}).get("sockets") or {}
+    live = sock.get("outbound_by_port") or {}
+    bare = {str(p): n for p, n in live.items()
+            if str(p) in CLEARTEXT_PROTOCOL_PORTS}
+    if not bare:
+        return None
+    return {"sessions": sum(bare.values()), "ports": sorted(bare),
+            "what": sorted({CLEARTEXT_PROTOCOL_PORTS[p] for p in bare})}
+
+
+def _check_broker_leg(raw, findings):
+    """The onward leg, and whether what this box re-sends is protected.
+
+    A box that intercepts a client's tunnel, evaluates it against policy and
+    brokers it onward is the reason this check exists. The inbound half is
+    encrypted by construction - that is what the client dialled - and every
+    certificate check here is about that half or about somewhere further out.
+    Nothing asked what happened on the way back out, which is the one leg this
+    box chose.
+    """
+    bare = brokered_in_the_clear(raw)
+    if not bare:
+        return
+    findings.append({
+        "severity": "warning",
+        "layer": 4,
+        "code": "broker_leg_in_the_clear",
+        "message": (
+            f"{bare['sessions']} of the connection(s) this box opens onward are on "
+            f"{', '.join(bare['ports'])} ({', '.join(bare['what'])}), which carry "
+            f"nothing to protect what is on them. This box is serving clients, so "
+            f"that is other people's traffic: it arrived over a tunnel, was decided "
+            f"about here, and left readable by anything between here and the far "
+            f"end. Nothing on this report will show it as a fault - the connections "
+            f"work, which is the difficulty. If the far side is a connector that can "
+            f"take TLS, this is a configuration choice on one side or the other; if "
+            f"it cannot, the segment it crosses is the control."),
+    })
+
+
 def _check_log_egress(raw, findings):
     """The leg that carries this box's own record of what it did.
 
@@ -13220,6 +13305,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     _check_inbound_filtering(raw, late)
     _check_forwarding_shape(raw, late)
     _check_log_egress(raw, late)
+    _check_broker_leg(raw, late)
     _check_transport_fallback(raw, late)
     _check_encapsulation_headroom(raw, late)
     # After the flows, because it reads them. Wired in beside the sessions

@@ -1305,7 +1305,12 @@ also, unrelated: The certificate on 8.8.8.8:443 expired 40 day(s) ago
 ```
 
 Confidence counts corroboration only from a *different check* at the same layer
-or below. Four closed ports are four results from one check, not four
+or below. "Different check" is decided by the finding's family, which is its
+name with a hand-kept list of exceptions - so it catches two readings that are
+named alike and misses two that are not. One finding is not a reading at all:
+`fault_on_every_interface` is a statement about the other findings, and the
+code it counted was allowed to confirm the count. A finding built out of other
+findings now names them, and its own inputs cannot corroborate it. Four closed ports are four results from one check, not four
 independent signals - counting them as agreement once let a speculative sweep of
 a DNS server read as a high-confidence root cause on a healthy device.
 
@@ -1370,7 +1375,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **179** | Distinct conclusions it can reach and state in plain language. 148 are faults; 31 are context, like which switch port you're on. |
 | **Ranked causes** | **148** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1590 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1594 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 179 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2167,7 +2172,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1590 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1594 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3688,7 +3693,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1590 tests, no dependencies, no network, a few seconds, so they run
+1594 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

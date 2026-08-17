@@ -9488,6 +9488,96 @@ class TestASeverityIsNeverMilderThanWhatItRestsOn(unittest.TestCase):
         self.assertTrue(v["corroborated_by"] or v["explains"],
                         "a second layer-3 fault vanished from both lists")
 
+    def test_what_a_finding_was_counted_from_is_not_evidence_for_it(self):
+        """`fault_on_every_interface` is not a measurement. It is a statement
+        about the other findings: this code appeared on every active interface.
+        The code it counted was then allowed to corroborate the count, so one
+        reading of link_stats produced a fault, a summary of that fault, and
+        the agreement between them - and the verdict read high confidence."""
+        findings = [{"code": "link_errors_live", "severity": "critical", "layer": 1,
+                     "scope": "eth0", "message": "errors on eth0"},
+                    {"code": "fault_on_every_interface", "severity": "critical",
+                     "layer": 2, "derived_from": ["link_errors_live"],
+                     "message": "every interface reports link_errors_live"}]
+        v = nd.build_verdict(findings, raw={})
+        self.assertEqual(v["based_on"][0], "fault_on_every_interface")
+        self.assertNotIn("link_errors_live", v["corroborated_by"])
+        self.assertEqual(v["confidence"], "medium")
+
+    def test_the_real_finding_names_the_code_it_counted(self):
+        """The test above builds its own findings, so it pins the rule and not
+        the place the rule has to hold. Blanking `derived_from` at the emit
+        site left every test passing - the scenario is the only thing that
+        reaches it."""
+        setup, kw = S["fault_on_every_interface"]
+        m = fresh(); setup(m)
+        r = m.diagnose(quick=True, **scenario_kwargs(kw))
+        summary = [f for f in r["findings"]
+                   if f.get("code") == "fault_on_every_interface"]
+        self.assertTrue(summary, "the scenario stopped producing the finding")
+        counted = summary[0].get("derived_from") or []
+        self.assertTrue(counted, "it did not say what it was counted from")
+        v = r["verdict"]
+        self.assertEqual(v["based_on"][0], "fault_on_every_interface")
+        for code in counted:
+            self.assertNotIn(code, v["corroborated_by"],
+                             "confirmed by what it was counted from")
+        self.assertEqual(v["confidence"], "medium")
+
+    def test_something_it_was_not_counted_from_still_corroborates(self):
+        """The exclusion is the named inputs, not everything below it."""
+        findings = [{"code": "link_errors_live", "severity": "critical", "layer": 1,
+                     "scope": "eth0", "message": "errors on eth0"},
+                    {"code": "fault_on_every_interface", "severity": "critical",
+                     "layer": 2, "derived_from": ["collisions"],
+                     "message": "every interface reports collisions"}]
+        v = nd.build_verdict(findings, raw={})
+        self.assertIn("link_errors_live", v["corroborated_by"])
+        self.assertEqual(v["confidence"], "high")
+
+    def test_a_finding_built_from_findings_says_what_it_was_built_from(self):
+        """The part that stops this coming back. A finding synthesised from
+        other findings has to declare them, or it can be corroborated by its
+        own inputs again and nothing will notice - the suite passed either way
+        until this was written."""
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        # Read findings for a reason other than summarising them, so nothing
+        # they emit is built out of what they read.
+        NOT_A_SUMMARY = {
+            "_all_clear",        # says there were none; exempt from the verdict
+            "_check_internet",   # checks what already fired, then measures
+            "diagnose",          # baseline diff, against a file not the findings
+        }
+        offenders = []
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            if fn.name in NOT_A_SUMMARY:
+                continue
+            iterates = any(
+                isinstance(it, ast.Name) and it.id == "findings"
+                for n in ast.walk(fn)
+                for it in ([n.iter] if isinstance(n, (ast.For, ast.comprehension)) else []))
+            if not iterates:
+                continue
+            # The emit site itself - findings.append({...}) - rather than any
+            # dict carrying a "code". A hop mark and an entry in the verdict's
+            # "unrelated" list both look like one and neither is a finding.
+            for n in ast.walk(fn):
+                if not (isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "append"
+                        and isinstance(n.func.value, ast.Name)
+                        and n.func.value.id == "findings"
+                        and n.args and isinstance(n.args[0], ast.Dict)):
+                    continue
+                keys = {k.value for k in n.args[0].keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                if "code" in keys and "derived_from" not in keys:
+                    offenders.append(fn.name)
+        self.assertEqual(sorted(set(offenders)), [],
+                         "summarises other findings without naming its inputs")
+
     def test_a_critical_the_verdict_rests_on_lifts_the_verdict(self):
         findings = [{"code": "inet_partial_loss", "severity": "warning", "layer": 3},
                     {"code": "call_quality_bad", "severity": "critical", "layer": 3}]

@@ -9677,11 +9677,15 @@ def build_verdict(findings, quick=False, raw=None):
                           and (f.get("layer") or 9) == layer
                           and _finding_family(f.get("code")) != family
                           and _sides_can_agree(side, finding_side(f.get("code")))}
+        # A finding that is a statement about the other findings names what it
+        # was counted from. Those are inputs, not a second opinion.
+        derived_from = set(matches[0].get("derived_from") or [])
         corroborating = [f.get("code") for f in findings
                          if _finding_family(f.get("code")) != family
                          and f["severity"] != "ok"
                          and f.get("code") not in WEAK_EVIDENCE
                          and f.get("code") not in level_symptoms
+                         and f.get("code") not in derived_from
                          and (f.get("layer") or 9) <= layer
                          # A fault facing the other way is not agreement. A
                          # local one faces both, so it corroborates either.
@@ -14028,6 +14032,13 @@ def _check_every_interface(findings, raw):
             "severity": "critical",
             "layer": 2,
             "code": "fault_on_every_interface",
+            # What this was built out of. This finding is not a measurement -
+            # it is a statement about the other findings, so the code it counted
+            # is an input to it and cannot also be independent evidence for it.
+            # Without saying so, errors on every interface were confirmed by the
+            # errors they were counted from, and the verdict read high
+            # confidence off a single reading of link_stats.
+            "derived_from": [code],
             "message": f"Every active interface on this device is reporting the same "
                        f"problem - {code} on all {len(scopes)} of them "
                        f"({', '.join(sorted(scopes))}). Whatever they have in common is "

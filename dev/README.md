@@ -235,3 +235,24 @@ python3 dev/mutate.py --self-test       # two mutations with known answers
 An anchor that does not appear exactly once is reported as a bad mutation
 rather than run: one that edits nothing survives every time and reads as a
 hole in the tests.
+
+## counts.py
+
+Puts the numbers the documents quote back in line with the code: findings,
+of which faults, ranked causes, tests, and three file sizes, across README.md,
+REFERENCE.md and the sizes pinned in the suite. `TestDocsMatchReality` fails
+when they drift, which is right and is half the job - the other half was being
+done by hand on nearly every commit, and a red suite became the normal way to
+find out a release was one finding further along.
+
+```bash
+python3 dev/counts.py            # rewrite them
+python3 dev/counts.py --check    # say what is stale, change nothing
+python3 dev/counts.py --self-test
+```
+
+It rewrites the pins inside `test_faultone.py` as well as the prose, because
+moving one without the other leaves the red suite this exists to prevent. That
+makes it the one harness here that edits the thing which would otherwise catch
+it, so it self-tests: `--check` must write nothing against a document that is
+genuinely stale, and a rewrite must settle in one pass.

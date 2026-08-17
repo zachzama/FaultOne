@@ -15047,9 +15047,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 933),
-            "compressed": (len(gzip.compress(raw, 9)), 282),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 198),
+            "on disk": (len(raw), 964),
+            "compressed": (len(gzip.compress(raw, 9)), 291),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 204),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -21125,6 +21125,61 @@ class TestEveryFindingFires(unittest.TestCase):
             emitted = set(re.findall(r'"code": "(\w+)"', fh.read()))
         missing = sorted(emitted - set(S))
         self.assertFalse(missing, f"no scenario exercises: {missing}")
+
+    #: Ranked findings that cannot headline their own scenario, and the cause
+    #: that takes it instead. Each is a symptom whose cause is present in the
+    #: same scenario and correctly wins - which is the tool working, not a gap.
+    #:
+    #: The cause is named rather than the entry being a bare allowlist, so an
+    #: exemption that stops describing anything fails instead of quietly
+    #: excusing a finding nobody can reach.
+    OUTRANKED_IN_ITS_OWN_SCENARIO = {
+        "tunnel_payload_short": "pmtu_blackhole",
+        "call_quality_bad": "inet_partial_loss",
+        "call_quality_degraded": "inet_partial_loss",
+    }
+
+    def test_every_ranked_finding_can_be_the_answer_somewhere(self):
+        """Firing is not the same as being reachable, and only one of them can
+        be shown to anyone.
+
+        A finding that fires but never wins its own scenario has no page: the
+        demo harnesses build a page from a scenario whose verdict names the
+        code, and check that it does. Three capabilities have shipped correct,
+        tested, and invisible on every page, each found by hand afterwards.
+        This is that check, made once and kept.
+
+        The exceptions are symptoms outranked by their own cause, which is the
+        answer being right rather than a finding being unreachable - and each
+        names the cause, so the entry fails when it stops being true.
+        """
+        stale, unreachable = [], []
+        for code in [c for c, *_ in nd.VERDICT_RULES]:
+            if code not in S:
+                unreachable.append((code, "no scenario"))
+                continue
+            setup, kw = S[code]
+            m = fresh(); setup(m)
+            try:
+                v = m.diagnose(quick=False, **scenario_kwargs(kw))["verdict"]
+            except Exception as exc:                       # pragma: no cover
+                unreachable.append((code, "raised %s" % type(exc).__name__))
+                continue
+            won = (v.get("based_on") or [None])[0] if v.get("severity") != "ok" else None
+            expected = self.OUTRANKED_IN_ITS_OWN_SCENARIO.get(code)
+            if won == code:
+                if expected:
+                    stale.append("%s now headlines, so its exemption is stale" % code)
+            elif expected:
+                if won != expected:
+                    stale.append("%s is exempted as outranked by %s, and %s took it"
+                                 % (code, expected, won))
+            else:
+                unreachable.append((code, "outranked by %s" % won))
+        self.assertEqual(
+            unreachable, [],
+            "these can never be the answer, so no page can show them")
+        self.assertEqual(stale, [], "; ".join(stale))
 
     def test_every_finding_fires_in_its_scenario(self):
         for code in sorted(S):

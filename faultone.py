@@ -592,8 +592,14 @@ def cmd_traceroute(target):
     # the whole path with it while tracepath sat unread. tracepath has no
     # source option, so a bound run falls back to an unbound hop list rather
     # than to no hop list, which is the better of the two.
+    # busybox last, and only because it is the case where the two above do not
+    # exist at all. A stripped appliance often has one multi-call binary and no
+    # separate traceroute, and its applet takes none of the flags above - it is
+    # asked for a plain walk and its output parses like any other.
     res = run_first_usable([["traceroute", "-m", "20", "-w", "2"] + src + [target],
-                            ["tracepath", target]], timeout=60)
+                            ["tracepath", target],
+                            ["busybox", "traceroute", "-m", "20", "-w", "2", target]],
+                           timeout=60)
     if not res.get("ok") and "is installed" in (res.get("error") or ""):
         return {"ok": False, "error": "no traceroute/tracepath utility found on this system"}
     return res
@@ -13708,6 +13714,38 @@ def _check_ports(raw, findings, target, check_ports, quick, speculative=False):
     return port_results
 
 
+def first_hop_from_route(target):
+    """The first hop of the path, from the kernel's own routing table.
+
+    Not a trace and never presented as one. It runs no probe, needs no
+    privilege and cannot be filtered, because nothing leaves the box to get it -
+    the kernel is asked which way it would send a packet and it answers from
+    the table it would use.
+
+    This exists because the alternative is nothing at all. Every walker above
+    it can fail on the same box at once: mtr and traceroute may not be
+    installed, tracepath with them, the raw socket the constant-flow walk needs
+    may be refused, and a network that drops the probes drops all of them
+    equally. The report then draws no path whatsoever, on a question where the
+    hops in and out are the most useful thing it has. One hop is not a path. It
+    is the difference between "the way out starts at this router" and silence.
+
+    A route with no `via` is on-link - the destination is on a segment this box
+    is already on, and there is no first hop to name because there is nothing
+    in between. That is an answer too, and not this function's to give.
+    """
+    res = cmd_route_to(target)
+    if not res or not res.get("ok"):
+        return None
+    route = parse_route_to(res.get("stdout", "")) or {}
+    via = route.get("via")
+    if not via or not valid_target(via):
+        return None
+    return {"res": res, "route": route,
+            "hops": [{"hop": 1, "host": via, "display": via, "times_ms": [],
+                      "timed_out": False, "flags": None}]}
+
+
 def collect_trace(target, mtr_cycles):
     """Run the trace and parse it. Separated from the interpretation so it can
     be started alongside the pings - it is the single slowest thing here, and
@@ -13731,6 +13769,16 @@ def collect_trace(target, mtr_cycles):
                 "hops": walked["hops"], "source": "constant-flow", "mtr": None}
     res = cmd_traceroute(target)
     hops = parse_traceroute_hops(res.get("stdout", "")) if res.get("ok") else []
+    if hops:
+        return {"raw": res, "hops": hops, "source": "traceroute", "mtr": None}
+    # Every walker above can fail on one box at once - none of the tools
+    # installed, the raw socket refused, and a network that drops one kind of
+    # probe usually drops the rest. The kernel still knows where it would send
+    # the first packet, and it answers without sending one.
+    floor = first_hop_from_route(target)
+    if floor:
+        return {"raw": floor["res"], "hops": floor["hops"],
+                "source": "route table", "mtr": None}
     return {"raw": res, "hops": hops, "source": "traceroute", "mtr": None}
 
 
@@ -14011,7 +14059,12 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             if tcp_res and trace_reached(tcp_res["hops"], target):
                 raw["path_trace_icmp"] = raw["path_trace"]
                 raw["path_trace"] = tcp_res
-                stalled_at = hops[-1]["hop"] if hops else "the first hop"
+                # "stopped at hop 1" would be a lie on a box where the
+                # only hop came from the routing table and nothing was
+                # ever walked.
+                stalled_at = ("the first hop" if not hops
+                              or path_source == "route table"
+                              else hops[-1]["hop"])
                 hops = tcp_res["hops"]
                 path_source = f"{tcp_res['tool']} (TCP/{tcp_res['port']})"
                 findings.append({

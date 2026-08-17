@@ -1382,7 +1382,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **186** | Distinct conclusions it can reach and state in plain language. 153 are faults; 33 are context, like which switch port you're on. |
 | **Ranked causes** | **153** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1628 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1634 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 186 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -1697,6 +1697,10 @@ nothing stays the foreign commands rather than becoming the fallback.
 Rendered into the format the richest command prints, so the same parsers and
 the same ranked rules produce the verdict. A box with no userland is diagnosed
 by the rules everything else is, not by a second thinner set.
+
+The hop list has the same shape of ladder, and a floor under it. `mtr` first for per-hop loss over many cycles, then the constant-flow walk where a raw socket is available, then `traceroute`, `tracepath` behind it, and `busybox traceroute` behind that for an appliance carrying one multi-call binary and no separate tools. Where the probes are filtered rather than missing, a TCP trace to a port that is actually open is tried instead - `tcptraceroute`, `traceroute -T`, `mtr --tcp`.
+
+All of those can fail on one box at once, and a network that drops one kind of probe usually drops the rest. Under them is the routing table: the kernel is asked which way it would send a packet, and answers without sending one. It cannot be filtered and needs no privilege, because nothing leaves. One hop is not a path, and it is the difference between "the way out starts at this router" and silence. It carries no timings, because nothing was measured, and `path_source` says `route table` so no page can read it as a walk.
 
 The address read is the narrow one. It answers "this box has an address and a
 route off itself", which is what the missing-address finding asks, and it
@@ -2179,7 +2183,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1628 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1634 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3701,7 +3705,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1628 tests, no dependencies, no network, a few seconds, so they run
+1634 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

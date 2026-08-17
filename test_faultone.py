@@ -9450,6 +9450,67 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestAFloorUnderTheHopList(unittest.TestCase):
+    """What the report can still say about the path when nothing can walk it.
+
+    Every walker can fail on one box at once: none of the tools installed, the
+    raw socket refused, and a network that drops one kind of probe usually
+    drops the rest. The report then drew no path at all, on the question the
+    hops in and out are the most useful answer to.
+    """
+
+    def _blind(self, route="8.8.8.8 via 10.0.0.1 dev eth0 src 10.0.0.5"):
+        m = fresh()
+        m.cmd_mtr = lambda t, c=10: None
+        m.trace_constant_flow = lambda t, *a, **k: None
+        m.cmd_traceroute = lambda t: {"ok": False,
+                                      "error": "no traceroute/tracepath utility found"}
+        m.cmd_route_to = lambda t: ({"ok": True, "cmd": "ip route get", "stdout": route}
+                                    if route else {"ok": False, "error": "no ip"})
+        return m
+
+    def test_the_kernel_still_knows_the_first_hop(self):
+        got = self._blind().collect_trace("8.8.8.8", 10)
+        self.assertEqual(got["source"], "route table")
+        self.assertEqual([h["host"] for h in got["hops"]], ["10.0.0.1"])
+
+    def test_it_is_never_presented_as_a_measurement(self):
+        """No probe was sent, so there are no times. A hop carrying invented
+        timings would be the report claiming a measurement it never made."""
+        got = self._blind().collect_trace("8.8.8.8", 10)
+        self.assertEqual(got["hops"][0]["times_ms"], [])
+        self.assertNotEqual(got["source"], "traceroute")
+
+    def test_an_on_link_destination_has_no_first_hop_to_name(self):
+        """Nothing is in between, so there is no hop. Naming the interface
+        would invent a router that does not exist."""
+        got = self._blind(route="10.0.0.9 dev eth0 src 10.0.0.5").collect_trace("10.0.0.9", 10)
+        self.assertEqual(got["hops"], [])
+
+    def test_a_box_that_cannot_even_read_its_route_says_nothing(self):
+        got = self._blind(route=None).collect_trace("8.8.8.8", 10)
+        self.assertEqual(got["hops"], [])
+
+    def test_a_real_trace_is_always_preferred(self):
+        """The floor is the last thing tried, not the first. A box with a
+        working traceroute must never be reduced to one hop."""
+        m = self._blind()
+        m.cmd_traceroute = lambda t: {"ok": True, "cmd": "traceroute", "stdout":
+                                      " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                                      " 2  8.8.8.8 (8.8.8.8)  20.0 ms\n"}
+        got = m.collect_trace("8.8.8.8", 10)
+        self.assertEqual(got["source"], "traceroute")
+        self.assertEqual(len(got["hops"]), 2)
+
+    def test_busybox_is_tried_when_the_usual_names_are_absent(self):
+        """A stripped appliance often has one multi-call binary and no separate
+        traceroute or tracepath."""
+        src = inspect.getsource(nd.cmd_traceroute)
+        self.assertIn('"busybox", "traceroute"', src)
+        self.assertLess(src.index("tracepath"), src.index("busybox"),
+                        "busybox should be behind the real tools, not in front")
+
+
 class TestWhatLeavesOnTheOnwardLeg(unittest.TestCase):
     """The leg this box chooses, and whether what it re-sends is protected.
 

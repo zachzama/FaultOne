@@ -9504,6 +9504,29 @@ class TestASeverityIsNeverMilderThanWhatItRestsOn(unittest.TestCase):
         self.assertNotIn("link_errors_live", v["corroborated_by"])
         self.assertEqual(v["confidence"], "medium")
 
+    #: Faults that make "nothing is connected" true. Each reads the socket
+    #: table, and so does the silence, which is why it was counted as a second
+    #: opinion on all four.
+    SILENCE_IS_THE_SYMPTOM = ("service_address_unserved", "service_address_idle",
+                              "syn_recv_backlog", "inbound_filtered_here")
+
+    def test_nothing_arriving_does_not_confirm_the_reason_nothing_arrives(self):
+        """A firewall dropping inbound traffic, no listener on the service
+        address, or handshakes stalling in SYN_RECV all end with no connection
+        open. The silence was corroborating each of them, so one reading of the
+        socket table was the fault and the second opinion on it."""
+        for cause in self.SILENCE_IS_THE_SYMPTOM:
+            setup, kw = S[cause]
+            m = fresh(); setup(m)
+            r = m.diagnose(quick=True, **scenario_kwargs(kw))
+            v = r["verdict"]
+            with self.subTest(cause=cause):
+                self.assertEqual(v["based_on"][0], cause)
+                self.assertNotIn("no_clients_connected", v["corroborated_by"])
+                self.assertIn("no_clients_connected", v["explains"],
+                              "dropped from evidence without being named a result")
+                self.assertEqual(v["confidence"], "medium")
+
     def test_the_real_finding_names_the_code_it_counted(self):
         """The test above builds its own findings, so it pins the rule and not
         the place the rule has to hold. Blanking `derived_from` at the emit

@@ -7987,6 +7987,12 @@ TRANSPORT_SYMPTOMS = {
     "dns_resolver_slow", "dns_fail", "tls_handshake_slow", "port_timeout",
     "fragments_lost", "udp_datagrams_corrupt",
     "own_service_silent",
+    # The same statement about somebody else's clients: this box is listening
+    # and nothing is arriving. It reads the socket table, and so does most of
+    # what would explain it - a firewall dropping inbound, no listener on the
+    # service address, handshakes stalling in SYN_RECV - so it was confirming
+    # the very faults that produce it, four of them, each at high confidence.
+    "no_clients_connected",
 }
 
 

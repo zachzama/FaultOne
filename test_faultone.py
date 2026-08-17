@@ -9477,6 +9477,62 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestWhoOwnsEachHop(unittest.TestCase):
+    """The AS a hop belongs to, which is the escalation question.
+
+    The site edge already says where this network ends. Past it the path is
+    somebody else's, and the AS says whose - a path that leaves your network
+    and degrades two hops later has left your problem behind, and the ticket
+    goes somewhere specific.
+    """
+
+    def test_traceroute_prints_it_and_it_is_kept(self):
+        hops = nd.parse_traceroute_hops(
+            " 1  10.0.0.1 (10.0.0.1) [AS64512]  1.0 ms\n"
+            " 2  core.example.net (203.0.113.9) [AS15169]  9.0 ms\n")
+        self.assertEqual([h["asn"] for h in hops], ["AS64512", "AS15169"])
+
+    def test_a_router_with_no_as_known_is_not_given_one(self):
+        """"[*]" is the tool answering that it does not know, which is a
+        different thing from not having been asked, and neither is an AS."""
+        hops = nd.parse_traceroute_hops(" 3  edge (198.51.100.7) [*]  20.0 ms\n")
+        self.assertIsNone(hops[0]["asn"])
+
+    def test_mtr_is_asked_for_it(self):
+        """Asked of mtr rather than traceroute on purpose. Both look it up over
+        DNS; mtr's run is already bounded by its cycle count, where -A on
+        traceroute puts an unbounded lookup inside the one command whose
+        timeout is the whole path budget - on a box with no DNS egress that
+        trades hops for AS numbers and gets neither."""
+        src = inspect.getsource(nd.cmd_mtr)
+        self.assertIn('"-z"', src)
+        self.assertNotIn("-A", inspect.getsource(nd.cmd_traceroute))
+
+    def test_mtr_gives_it_up_rather_than_lose_the_trace(self):
+        """Older builds reject the option. The variants are tried in turn, so a
+        box whose mtr will not take -z still gets its hops."""
+        src = inspect.getsource(nd.cmd_mtr)
+        self.assertIn('(["-b", "-z"], ["-b"], [])', src)
+
+    def test_mtrs_own_unknowns_are_not_recorded_as_an_answer(self):
+        import json as _json
+        doc = {"report": {"hubs": [
+            {"count": 1, "host": "gw (10.0.0.1)", "ASN": "AS64512", "Avg": 1.0},
+            {"count": 2, "host": "???", "ASN": "AS???", "Avg": 0.0}]}}
+        hops = nd.parse_mtr_json(_json.dumps(doc))
+        self.assertEqual(hops[0]["asn"], "AS64512")
+        self.assertIsNone(hops[1]["asn"])
+
+    def test_it_reaches_the_column_and_the_page(self):
+        """A field nothing draws is a field nobody has. It travels into the
+        rendered column, and the page prints it beside the hop."""
+        col = nd.build_probe_column(
+            [{"hop": 1, "host": "10.0.0.1", "display": "10.0.0.1", "asn": "AS64512",
+              "times_ms": [1.0], "timed_out": False, "flags": None}], "8.8.8.8")
+        self.assertEqual(col["hops"][0]["asn"], "AS64512")
+        self.assertIn("h.asn", nd.VIEWER_TEMPLATE)
+
+
 class TestTheFallbackThatNeverWorked(unittest.TestCase):
     """tracepath has been the documented fallback behind traceroute since it
     was written - the one thing a box with no traceroute would reach - and it

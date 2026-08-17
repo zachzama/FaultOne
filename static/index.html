@@ -1017,7 +1017,8 @@ function hopList(col, names){
       ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
       <div class="hrow ${cls(h.state === 'ok' ? '' : h.state)}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hh">${escapeHtml(h.host)}${
+          h.asn ? ` <span class="hasn">${escapeHtml(h.asn)}</span>` : ''}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'

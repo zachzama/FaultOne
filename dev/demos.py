@@ -429,14 +429,29 @@ def main():
         # And reverse names, so an address on the page reads as the thing it is
         # - the resolver here answers nothing, being a fixture.
         _ping = mod.cmd_ping
-        mod.cmd_ping = lambda t, c=4, w=2, _p=_ping: dict(
-            _p(t, c, w),
-            stdout="64 bytes from %s: icmp_seq=1 ttl=%d time=12.4 ms\n%s"
-                   % (t, TTL_SEEN.get(t, 57), _p(t, c, w).get("stdout", "")))
+
+        def _with_ttl(t, c=4, w=2, _p=_ping):
+            got = _p(t, c, w)
+            out = got.get("stdout", "")
+            # Only where the scenario has not written one itself.
+            # answered_closer_than_the_path reads the reply's TTL to decide
+            # whether something answered from nearer than the path goes, so
+            # overwriting it turns an interception page into a page about
+            # carrier NAT. None of the nine pages below trips it today, which
+            # is luck rather than design.
+            if "ttl=" in out:
+                return got
+            return dict(got, stdout="64 bytes from %s: icmp_seq=1 ttl=%d time=12.4 ms\n%s"
+                                    % (t, TTL_SEEN.get(t, 57), out))
+        mod.cmd_ping = _with_ttl
         mod.dns_ptr = lambda server, ip, timeout=1.0: PTR_NAMES.get(ip)
         on_a_vpc(mod)
         report = mod.diagnose(quick=False, **T.scenario_kwargs(kwargs))
-        named = (report["verdict"].get("based_on") or ["-"])[0]
+        # An all-clear verdict lists every finding in based_on, so based_on[0]
+        # can match the scenario name while the page reads "No fault found".
+        # Two pages in the proxy set passed that way before this was here.
+        named = ((report["verdict"].get("based_on") or ["-"])[0]
+                 if report["verdict"].get("severity") != "ok" else "-")
         path = os.path.join(out_dir, "faultone-demo-%s.html" % slug)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(mod.render_report_html(report))

@@ -838,10 +838,17 @@ def parse_mtr_json(text):
         # carry the real statistics alongside.
         if isinstance(avg, (int, float)) and avg > 0:
             times = [float(avg)]
+        # mtr -z puts it here; without -z the key is absent, which is a
+        # different thing from a hop whose AS is unknown and is left as None
+        # either way.
+        asn = hub.get("ASN") or None
+        if asn in ("???", "AS???", "*"):
+            asn = None
         hops.append({
             "hop": hub.get("count"),
             "host": host,
             "display": display or "*",
+            "asn": asn,
             "times_ms": times,
             "timed_out": bool(loss is not None and float(loss) >= 100),
             "loss_pct": round(float(loss), 1) if isinstance(loss, (int, float)) else None,
@@ -857,9 +864,18 @@ def cmd_mtr(target, cycles=10):
     """Per-hop loss over many cycles. Returns None when mtr isn't available."""
     if not valid_target(target) or not which("mtr"):
         return None
-    # -b keeps both hostname and address so hops stay classifiable; a few older
-    # builds reject it, so fall back to plain output.
-    for args in (["-b"], []):
+    # -b keeps both hostname and address so hops stay classifiable; -z asks for
+    # the AS each hop belongs to, which is the escalation question - a path that
+    # leaves your network and degrades two hops later has left your problem
+    # behind. A few older builds reject either, so both are given up in turn
+    # rather than losing the trace over an option.
+    #
+    # Asked of mtr and not of traceroute deliberately. Both look the AS up over
+    # DNS; mtr's run is already bounded by its cycle count, where adding -A to
+    # traceroute puts an unbounded lookup inside the one command whose timeout
+    # is the whole path budget - on a box with no DNS egress, exactly the box
+    # this tool is for, that trades hops for AS numbers and gets neither.
+    for args in (["-b", "-z"], ["-b"], []):
         cmd = ["mtr", "--json", "-c", str(int(cycles))] + args + [target]
         # cycles are ~1s apart, so allow the full window plus setup slack.
         res = run(cmd, timeout=int(cycles) + 20)
@@ -6646,6 +6662,12 @@ def parse_traceroute_hops(output):
         host = ip_match.group(0) if ip_match else None
         pmtu_m = re.search(r"\bpmtu\s+(\d{3,5})\b", line)
         pmtu = int(pmtu_m.group(1)) if pmtu_m else None
+        # Who owns this hop, where the tool that walked the path said so.
+        # traceroute -A and mtr -z both print it in square brackets, and "[*]"
+        # is the router answering with no AS known - a different thing from the
+        # tool not having been asked, so it is not recorded as an answer.
+        asn_m = re.search(r"\[(AS\d{1,10})[^\]]*\]", line)
+        asn = asn_m.group(1) if asn_m else None
         display = host or "*"
         if ip_match:
             # traceroute puts the address in round brackets after the name and
@@ -6692,6 +6714,8 @@ def parse_traceroute_hops(output):
                     last["also"].append(display)
             if pmtu and not last.get("pmtu"):
                 last["pmtu"] = pmtu
+            if asn and not last.get("asn"):
+                last["asn"] = asn
             continue
         # "no reply" is tracepath's "*".
         timed_out = not times and ("*" in line or "no reply" in line)
@@ -6711,6 +6735,11 @@ def parse_traceroute_hops(output):
             # traceroute does not, so a box that has fallen back to it gets
             # something the richer tool would not have given.
             "pmtu": pmtu,
+            # The network this hop belongs to. It is the escalation question -
+            # a path that leaves your AS and degrades two hops later has left
+            # your problem behind - and it costs nothing to keep when the trace
+            # already printed it.
+            "asn": asn,
         })
     return hops
 
@@ -8885,6 +8914,11 @@ def build_probe_column(hops, target, baseline_path=None):
         rows.append({
             "hop": hop.get("hop"),
             "host": hop.get("display") or hop.get("host") or "*",
+            # Whose network this hop is, where the trace knew. It answers the
+            # question the site edge answers one hop at a time: past the edge
+            # the path is somebody else's, and the AS says whose - which is who
+            # the ticket goes to.
+            "asn": hop.get("asn"),
             "ms": round(avg, 1) if avg is not None else None,
             "delta_ms": round(delta, 1) if delta >= 1 else None,
             "timed_out": bool(hop.get("timed_out")),
@@ -17419,7 +17453,8 @@ function hopList(col, names){
       ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
       <div class="hrow ${cls(h.state === 'ok' ? '' : h.state)}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}</span>
+        <span class="hh">${escapeHtml(h.host)}${
+          h.asn ? ` <span class="hasn">${escapeHtml(h.asn)}</span>` : ''}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'

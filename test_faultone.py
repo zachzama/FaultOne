@@ -9519,19 +9519,35 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         nd._check_asymmetric_path(self._legs(5, None), found)
         self.assertEqual(found, [])
 
-    def test_it_is_context_because_it_cannot_be_anything_else(self):
-        """Derived from the per-side traces, which run after build_verdict and
-        build_stages have both already decided. It can neither be the cause nor
-        colour a stage, and grading it would put a severity on the page that
-        nothing downstream honours. Asserted so the constraint is visible
-        rather than rediscovered."""
+    def test_it_is_graded_because_the_walk_now_happens_first(self):
+        """This shipped as ungraded context for one commit, and not by choice:
+        the per-side traces ran after build_verdict and build_stages had both
+        already decided, so nothing walked on either side could be a cause or
+        colour a stage however plainly it was the fault. The test written then
+        asserted that ordering so the constraint would be visible rather than
+        rediscovered, and it is what failed when the traces moved - which is
+        the whole reason to write a guard around a limitation.
+
+        The order is asserted the other way round now. Anything derived from
+        the walk can be the answer, and this one is."""
         found = []
         nd._check_asymmetric_path(self._legs(5, 2), found)
-        self.assertEqual(found[0]["severity"], "ok")
-        self.assertIn("path_asymmetric", nd.VERDICT_EXEMPT)
+        self.assertEqual(found[0]["severity"], "warning")
+        self.assertNotIn("path_asymmetric", nd.VERDICT_EXEMPT)
+        self.assertIn("path_asymmetric", [c for c, *_ in nd.VERDICT_RULES])
         src = inspect.getsource(nd.diagnose)
-        self.assertLess(src.index("build_verdict("), src.index("trace_each_side("),
-                        "the traces now run before the verdict, so this can be graded")
+        self.assertLess(src.index("trace_each_side("), src.index("build_verdict("),
+                        "the walk is back behind the verdict and cannot be a cause")
+
+    def test_the_sides_are_rebuilt_after_the_walk(self):
+        """The sides summarise the findings, and the walk adds some. Built once
+        only, the panel showed nothing lit under a verdict this finding had
+        just won - which three coherence tests caught immediately."""
+        src = inspect.getsource(nd.diagnose)
+        first = src.index("build_sides(")
+        self.assertGreater(src.rindex("build_sides("), first,
+                           "the sides are built once and cannot reflect the walk")
+        self.assertLess(src.index("trace_each_side("), src.rindex("build_sides("))
 
     def test_the_message_says_which_number_to_trust(self):
         found = []

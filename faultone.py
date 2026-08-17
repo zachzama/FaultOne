@@ -7463,6 +7463,12 @@ VERDICT_RULES = [
      "path. A queue is meant to hold a burst; one this deep and still standing "
      "means more is being sent than the interface is getting away. Look at the "
      "line rate, the shaper on it, and what is filling it."),
+    ("path_asymmetric", "whoever routes the way back, which is not always who routes the way out",
+     "Traffic is not returning by the route it left by",
+     "Both directions can look healthy measured on their own while connections "
+     "still die: a stateful device on the return path sees a reply for a flow it "
+     "never watched open and drops it. Check the return route, and any firewall "
+     "or load balancer that only sees one direction."),
     ("queuing_delay_backends", "whatever is buffering between here and that backend",
      "The delay to the backend is queue, not distance",
      "The same connections have been far faster, so this is not how far away the "
@@ -8047,14 +8053,6 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # working. It is reported so a 4xx in the evidence is not
                   # read as an error, and never ranked as one.
                   "own_service_demands_auth",
-                  # Reported, and not a candidate for the verdict, because it
-                  # cannot be one: the per-side traces it is derived from run
-                  # after build_verdict has already chosen. Ranking it would
-                  # put a rule in the list that never wins, which reads as a
-                  # decision somebody made rather than a constraint nobody
-                  # worked around. The reader still gets it, on the strip and
-                  # in the findings.
-                  "path_asymmetric",
                   "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
@@ -8548,7 +8546,7 @@ STAGE_RULES = [
       # its own, and both change what the way out can do.
       "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
       "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path",
-      "broker_leg_in_the_clear"}),
+      "broker_leg_in_the_clear", "path_asymmetric"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -8827,14 +8825,7 @@ def _check_asymmetric_path(legs, findings):
         where = ("the clients" if side.get("side") == "client"
                  else "what this box connects out to")
         findings.append({
-            # Context rather than a graded fault, and not by choice. This is
-            # derived from the per-side traces, which run after both
-            # build_verdict and build_stages have already decided - so it can
-            # neither be the cause nor colour a stage, and grading it "warning"
-            # would put a severity on the page that nothing downstream honours.
-            # What it can do is be there, in the reader's own words, next to
-            # the two hop counts it is drawn from.
-            "severity": "ok",
+            "severity": "warning",
             "layer": 3,
             "code": "path_asymmetric",
             "scope": side.get("side"),
@@ -16333,6 +16324,23 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
 
     _check_every_interface(findings, raw)
 
+    # The sides and their legs, built and walked before the verdict rather than
+    # after it. They used to be assembled inside the report literal, which put
+    # every per-side trace after build_verdict and build_stages had already
+    # decided - so nothing walked on either side could ever be a cause or
+    # colour a stage, however plainly it was the fault. build_path_legs reads
+    # what has already been collected and needs only these two, so there was
+    # nothing holding it down there.
+    _sides = build_sides(findings, raw)
+    _legs = build_path_legs(raw, _sides)
+    trace_each_side(_legs, findings, quick)
+    count_the_hops_in(_legs, quick)
+    _check_asymmetric_path(_legs, findings)
+    # Built again, because the walk above can add findings and the sides are a
+    # summary of them. The first pass exists only to decide which peer each
+    # side should be traced to, which needs the sides and cannot need their
+    # result. Cheap: it reads the findings list and probes nothing.
+    _sides = build_sides(findings, raw)
     verdict = build_verdict(findings, quick=quick, raw=raw)
     for f in findings:
         relation = finding_relation(f.get("code"), verdict)
@@ -16404,7 +16412,6 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     findings.sort(key=lambda f: (-SEVERITY_RANK.get(f.get("severity"), 0),
                                  0 if f.get("relation") == "cause" else 1))
 
-    _sides = build_sides(findings, raw)
     # Which box the verdict blames. The colours say which direction stopped
     # working, and for nineteen findings that is a different box - so on those
     # the panel pointed at a side the verdict had just exonerated.
@@ -16447,7 +16454,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         "path_source": path_source,
         # The path as four legs, decided here so the page and the terminal
         # cannot end up with two versions of which direction stopped.
-        "path_legs": build_path_legs(raw, _sides),
+        "path_legs": _legs,
         # Present only on a box that has one, because that is the only box
         # where saying "TCP" tells a reader anything.
         "other_plane": other_plane(raw),
@@ -16489,10 +16496,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # How far away each side is, on the way in. Done here rather than in
     # build_path_legs, which reads what has already been collected and does not
     # probe: this is one ping per side and belongs where the other probes are.
-    trace_each_side(report.get("path_legs"), findings, quick)
     fold_the_probe_into_the_way_out(report)
-    count_the_hops_in(report.get("path_legs"), quick)
-    _check_asymmetric_path(report.get("path_legs"), findings)
     report["peer_names"] = name_the_addresses(
         addresses_on_the_page(report), raw, quick)
     return report

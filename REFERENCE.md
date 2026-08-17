@@ -1313,6 +1313,16 @@ Corroboration is also only counted from the same layer or below:
 downstream failures are consequences, not evidence. A duplex mismatch confirmed
 by collisions reads `high`; a lone historical error count reads `low`.
 
+Layer decides that, so the two halves of the rule met at a strict comparison
+and a symptom sitting at its cause's own layer fell between them - too high to
+be excluded from corroboration, too low to be named as a consequence. Loss past
+the gateway and unusable calls are both layer 3, and the call score is computed
+from the loss figure that same ping produced, so the verdict read `high` off
+one measurement counted twice. A transport symptom at the cause's own layer,
+facing the same way, is now named as explained rather than counted as
+agreement, which is why an upstream loss verdict reads `medium` unless
+something else confirms it.
+
 A third rule: findings too weak to be a verdict are too weak to be evidence for
 one. An error count that stopped climbing, an MTU that's merely unusual, and a
 router that declines to answer traceroute all read as `low` confidence when
@@ -1360,7 +1370,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **179** | Distinct conclusions it can reach and state in plain language. 148 are faults; 31 are context, like which switch port you're on. |
 | **Ranked causes** | **148** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1587 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1590 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 179 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2157,7 +2167,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1587 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1590 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3678,7 +3688,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1587 tests, no dependencies, no network, a few seconds, so they run
+1590 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

@@ -9450,6 +9450,44 @@ class TestASeverityIsNeverMilderThanWhatItRestsOn(unittest.TestCase):
     does not contain.
     """
 
+    def _loss_and_calls(self, mos_code="call_quality_bad", sev="critical"):
+        """Loss past the gateway, and the call score computed from that same
+        ping's loss figure. Both layer 3, facing the same way."""
+        return [{"code": "inet_partial_loss", "severity": "warning", "layer": 3,
+                 "message": "loss past the gateway"},
+                {"code": mos_code, "severity": sev, "layer": 3,
+                 "message": "calls are unusable"}]
+
+    def test_a_symptom_at_the_cause_s_own_layer_is_not_evidence_for_it(self):
+        """The rule is that downstream failures are consequences rather than
+        evidence, and layer is how that is decided - so a symptom level with
+        its cause was counted as an independent second fault. Here the two are
+        not even two checks: the call score is computed from the loss figure
+        this same ping produced."""
+        v = nd.build_verdict(self._loss_and_calls(), raw={})
+        self.assertEqual(v["based_on"][0], "inet_partial_loss")
+        self.assertNotIn("call_quality_bad", v["corroborated_by"])
+        self.assertEqual(v["confidence"], "medium")
+
+    def test_it_is_named_as_a_consequence_instead(self):
+        """Dropped from one list and added to the other, not just discarded.
+        The reader is told the cause accounts for it."""
+        v = nd.build_verdict(self._loss_and_calls(), raw={})
+        self.assertIn("call_quality_bad", v["explains"])
+
+    def test_a_second_fault_at_the_same_layer_still_corroborates(self):
+        """The narrowing is to symptoms the cause produces. An unrelated fault
+        at the same layer is still a second opinion, and reading this as a
+        consequence would throw away the corroboration the field is for."""
+        findings = [{"code": "inet_partial_loss", "severity": "warning", "layer": 3,
+                     "message": "loss past the gateway"},
+                    {"code": "no_route_to_target", "severity": "critical", "layer": 3,
+                     "message": "no route"}]
+        v = nd.build_verdict(findings, raw={})
+        self.assertNotIn(v["based_on"][0], v["explains"])
+        self.assertTrue(v["corroborated_by"] or v["explains"],
+                        "a second layer-3 fault vanished from both lists")
+
     def test_a_critical_the_verdict_rests_on_lifts_the_verdict(self):
         findings = [{"code": "inet_partial_loss", "severity": "warning", "layer": 3},
                     {"code": "call_quality_bad", "severity": "critical", "layer": 3}]
@@ -13001,9 +13039,15 @@ class TestVerdict(unittest.TestCase):
         self.assertNotIn("provider", v["owner"])
 
     def test_an_uplink_with_headroom_leaves_the_verdict_alone(self):
+        """Headroom removes the caveat. It does not raise the confidence, and
+        it used to look as though it did: the only thing corroborating the loss
+        was the call-quality score, and that score is computed from the same
+        ping's loss figure. One check cannot confirm itself, so this reads
+        medium now and the difference from an unknown line rate is carried
+        where it belongs, in whether the caveat is offered."""
         v = self.congested(uplink_mbps=500)["verdict"]
         self.assertEqual(v["based_on"][0], "inet_partial_loss")
-        self.assertEqual(v["confidence"], "high")
+        self.assertEqual(v["confidence"], "medium")
         self.assertNotIn("--uplink-mbps", v["next_step"])
 
     def test_blaming_upstream_with_the_line_rate_unknown_is_not_high_confidence(self):
@@ -13016,7 +13060,7 @@ class TestVerdict(unittest.TestCase):
         """Half a megabit fills nothing anyone was sold, so the caveat would be
         noise on every upstream verdict rather than a real alternative."""
         v = self.congested(mbps=0.5)["verdict"]
-        self.assertEqual(v["confidence"], "high")
+        self.assertEqual(v["confidence"], "medium")
         self.assertNotIn("--uplink-mbps", v["next_step"])
 
     def test_the_caveat_only_attaches_to_verdicts_congestion_could_explain(self):

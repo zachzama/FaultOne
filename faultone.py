@@ -9580,9 +9580,14 @@ def _verdict_severity(cause_severity, based_on, findings):
     the unusable calls it corroborates are critical, and the strip failed the
     internet stage while the headline stayed mild.
 
-    Only the findings the verdict is actually built on count. A critical fault
-    somewhere else on the box is a second problem, and inflating this verdict
-    with it would misdescribe the cause this one names.
+    What counts is everything the verdict accounts for: the cause, what
+    corroborates it, and the symptoms it says it explains. A consequence is
+    part of the case being made, so a cause that accounts for a critical
+    symptom is not reporting a mild situation.
+
+    A critical fault the verdict accounts for in neither way is a second
+    problem, and inflating this verdict with it would misdescribe the cause
+    this one names. The report already carries it under "unrelated".
     """
     if cause_severity == "critical":
         return cause_severity
@@ -9655,10 +9660,28 @@ def build_verdict(findings, quick=False, raw=None):
         layer = matches[0].get("layer") or 9
         family = _finding_family(code)
         side = finding_side(code)
+        # A consequence sitting at the cause's own layer. The rule is that
+        # downstream failures are evidence of nothing, and layer is how that
+        # gets decided, so the two halves meet at a strict comparison and a
+        # symptom level with its cause fell between them: too high to be
+        # excluded from corroboration, too low to be named as explained.
+        #
+        # Loss past the gateway and unusable calls are both layer 3, and the
+        # calls are what the loss does. The verdict counted them as a second,
+        # independent fault agreeing with the first and read "high confidence"
+        # off one fact twice - the same double count `_same_scope` was written
+        # to stop between two interfaces.
+        level_symptoms = {f.get("code") for f in findings
+                          if f.get("code") != code
+                          and f.get("code") in TRANSPORT_SYMPTOMS
+                          and (f.get("layer") or 9) == layer
+                          and _finding_family(f.get("code")) != family
+                          and _sides_can_agree(side, finding_side(f.get("code")))}
         corroborating = [f.get("code") for f in findings
                          if _finding_family(f.get("code")) != family
                          and f["severity"] != "ok"
                          and f.get("code") not in WEAK_EVIDENCE
+                         and f.get("code") not in level_symptoms
                          and (f.get("layer") or 9) <= layer
                          # A fault facing the other way is not agreement. A
                          # local one faces both, so it corroborates either.
@@ -9699,6 +9722,11 @@ def build_verdict(findings, quick=False, raw=None):
         # suggests upstream congestion", which sends someone to a carrier over
         # a fault on their own box.
         def _above_and_facing_the_same_way(f):
+            # At the cause's own layer only a transport symptom qualifies, and
+            # `level_symptoms` has already decided which those are. Above it,
+            # the layer is the argument on its own.
+            if (f.get("layer") or 0) == layer:
+                return f.get("code") in level_symptoms
             return ((f.get("layer") or 0) > layer
                     and _sides_can_agree(side, finding_side(f.get("code"))))
 
@@ -9736,8 +9764,10 @@ def build_verdict(findings, quick=False, raw=None):
             # because they are already printed in full below.
             "explains": [f.get("code") for f in explains],
             "based_on": [code] + corroborating,
-            "severity": _verdict_severity(matches[0]["severity"],
-                                          [code] + corroborating, findings),
+            "severity": _verdict_severity(
+                matches[0]["severity"],
+                [code] + corroborating + [f.get("code") for f in explains],
+                findings),
             "detail": matches[0]["message"],
         }
 

@@ -9440,6 +9440,132 @@ class TestNamingTheProcessBehindASocket(unittest.TestCase):
                               self.owners_for(code, listening))
 
 
+class TestTheLegThatCarriesTheRecord(unittest.TestCase):
+    """The third leg: this box shipping its own logs somewhere else.
+
+    Client tunnels arrive, brokered traffic leaves, and the box also sends its
+    record of both to a collector. Nothing modelled that leg, and the gap was
+    not only a missing feature - the outbound column held it already and could
+    not tell it from the rest, which broke the reading that column depends on.
+    """
+
+    def _sockets(self, control=3, logs=0, proxy=0, port="6514", stalled=0):
+        rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+                "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*"]
+        rows += ["ESTAB 0 0 10.0.0.5:49%03d 203.0.113.7:443" % i for i in range(control)]
+        rows += ["ESTAB 0 0 10.0.0.5:52%03d 10.90.4.%d:%s" % (i, 20 + i, port)
+                 for i in range(logs)]
+        rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.70.9.%d:8443" % (i, i % 250)
+                 for i in range(proxy)]
+        rows += ["SYN-SENT 0 1 10.0.0.5:54%03d 10.90.4.%d:%s" % (i, 20 + i, port)
+                 for i in range(stalled)]
+        return nd.parse_socket_states("\n".join(rows) + "\n")
+
+    def _raw(self, **kw):
+        return {"sockets": dict(self._sockets(**kw), ok=True),
+                "udp_tunnels": {"ok": True, "total": 180, "tunnels": 170,
+                                "unanswered": 10, "ports": ["443"]}}
+
+    def test_a_log_shipper_does_not_stop_a_broker_being_one(self):
+        """The defect this was built for. forwards_out_of_band() recognises a
+        broker by seeing few outbound connections, reasoning that what is left
+        in that column is the control plane. A log shipper's sessions land in
+        the same column, and past the bar the box stopped being recognised at
+        all - so the report went back to calling that column "what this box
+        connects out to", which is the one label that function exists to
+        prevent. Every box like this ships logs, so it fired in the field and
+        never in the corpus."""
+        self.assertTrue(nd.forwards_out_of_band(self._raw(control=3, logs=0)))
+        self.assertTrue(nd.forwards_out_of_band(self._raw(control=3, logs=12)),
+                        "a shipper's sessions were counted as brokered traffic")
+
+    def test_a_real_population_out_is_still_not_a_broker(self):
+        """The discrimination the fix must not cost. A box with a population of
+        outbound connections is a proxy, which the existing split already
+        describes correctly, and it stays that way with or without a shipper."""
+        self.assertIsNone(nd.forwards_out_of_band(self._raw(control=3, proxy=40)))
+        self.assertIsNone(nd.forwards_out_of_band(
+            self._raw(control=3, proxy=40, logs=12)))
+
+    def test_the_control_plane_is_counted_apart_from_the_logs(self):
+        shape = nd.forwards_out_of_band(self._raw(control=3, logs=12))
+        self.assertEqual(shape["control_plane"], 3)
+        self.assertEqual(shape["shipping_logs"], 12)
+
+    def test_the_port_says_whether_the_record_crosses_in_the_clear(self):
+        self.assertEqual(nd.log_egress(self._raw(logs=6, port="6514"))["plaintext_ports"], [])
+        self.assertEqual(nd.log_egress(self._raw(logs=6, port="514"))["plaintext_ports"], ["514"])
+
+    def test_a_collector_that_will_not_open_is_counted(self):
+        seen = nd.log_egress(self._raw(logs=1, stalled=5))
+        self.assertEqual(seen["stalled"], 5)
+
+    def test_a_box_shipping_nothing_says_nothing(self):
+        """No finding for the absence. This cannot tell a box whose shipper is
+        gone from one that was never meant to ship anywhere, and inventing a
+        fault out of that would fire on every box that logs locally."""
+        self.assertIsNone(nd.log_egress(self._raw(control=3, logs=0)))
+
+    def test_no_peer_travels_with_the_count(self):
+        """The same rule the rest of this table is read under. Which collector,
+        and which client, are not questions a report answers."""
+        seen = nd.log_egress(self._raw(logs=6, stalled=2))
+        self.assertNotIn("10.90.4.20", repr(seen))
+        self.assertNotIn("peers", seen)
+
+    def test_the_record_never_headlines_over_a_live_fault(self):
+        """A log leg that is down is a liability, not a cause of anything a
+        user is reporting. Ranking it over an outage would have the tool say
+        the opposite of what it means - so it is latent: always reported, and
+        the answer only when nothing else is broken.
+
+        The live fault here is deliberately one that ranks *below* the log
+        finding. Written first with a link fault, which ranks above it, this
+        passed without exercising the rule at all - the order alone decided it,
+        and deleting the latent entry changed nothing. A latent finding is only
+        tested by something it would otherwise outrank.
+        """
+        plain = {"code": "log_egress_plaintext", "severity": "warning", "layer": 4,
+                 "message": "logs in the clear"}
+        below = {"code": "dns_fail", "severity": "critical", "layer": 7,
+                 "message": "no name resolves"}
+        self.assertLess(
+            [c for c, *_ in nd.VERDICT_RULES].index("log_egress_plaintext"),
+            [c for c, *_ in nd.VERDICT_RULES].index("dns_fail"),
+            "this test only means something while the log finding ranks higher")
+        self.assertEqual(nd.build_verdict([plain], raw={})["based_on"][0],
+                         "log_egress_plaintext")
+        self.assertEqual(nd.build_verdict([plain, below], raw={})["based_on"][0],
+                         "dns_fail", "a latent liability stood over a live outage")
+
+    def test_and_it_is_still_reported_when_it_stands_aside(self):
+        """Standing aside is not falling silent. The point of latent is that
+        the finding is always in the report and only the headline is given
+        up."""
+        plain = {"code": "log_egress_plaintext", "severity": "warning", "layer": 4,
+                 "message": "logs in the clear"}
+        below = {"code": "dns_fail", "severity": "critical", "layer": 7,
+                 "message": "no name resolves"}
+        v = nd.build_verdict([plain, below], raw={})
+        named = set(v.get("based_on") or []) | {u["code"] for u in v.get("unrelated") or []}
+        self.assertIn("log_egress_plaintext", named)
+
+    def test_both_log_findings_are_latent(self):
+        for code in ("log_egress_stalled", "log_egress_plaintext"):
+            self.assertIn(code, nd.LATENT)
+
+    def test_the_strip_is_not_lit_by_a_leg_that_is_not_on_it(self):
+        """The eight stages are the path a user's traffic takes. Shipping logs
+        is not on it, which is the whole argument these findings make about why
+        nobody notices them breaking, so lighting a stage would have the
+        picture contradict the sentence."""
+        on_a_stage = set()
+        for _name, fails, warns in nd.STAGE_RULES:
+            on_a_stage |= set(fails) | set(warns)
+        for code in ("log_egress_stalled", "log_egress_plaintext"):
+            self.assertNotIn(code, on_a_stage)
+
+
 class TestASeverityIsNeverMilderThanWhatItRestsOn(unittest.TestCase):
     """The two places that refuse to under-report, tested where they are.
 
@@ -9669,6 +9795,13 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         "clock_skewed", "clock_unsynced",       # the box's clock, not the path
         "regression_since_baseline",            # a comparison across two runs
         "no_clients_connected",                 # there is no inbound leg to judge
+        # The eight stages are the path a user's traffic takes. Shipping logs
+        # is not on it, which is the whole argument these two findings make
+        # about why nobody notices them breaking - so lighting a stage of that
+        # chain would have the picture contradict the sentence. They were on
+        # the clients stage for one run, which is the inbound side, and they
+        # face the other way.
+        "log_egress_stalled", "log_egress_plaintext",
     }
 
     # A column can be lit with all four legs reading OK. Loss and jitter count
@@ -14206,9 +14339,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 859),
-            "compressed": (len(gzip.compress(raw, 9)), 259),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 183),
+            "on disk": (len(raw), 933),
+            "compressed": (len(gzip.compress(raw, 9)), 282),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 198),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19796,6 +19929,33 @@ def _(nd):
 @scenario("forwards_inside_tunnels")
 def _(nd): two_planes(nd, tunnels=180, tcp_sessions=2)
 
+
+def shipping_logs(nd, port, n=6, stalled=0, process="rsyslogd"):
+    """A box holding sessions to a log collector, and optionally some that
+    will not open. The port is what says it is a log collector; the process
+    name only confirms it."""
+    rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+            "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*",
+            "ESTAB 0 0 10.0.0.5:443 198.51.100.1:52000"]
+    rows += ["ESTAB 0 0 10.0.0.5:53%03d 10.90.4.%d:%s" % (i, 20 + i, port)
+             for i in range(n)]
+    rows += ["SYN-SENT 0 1 10.0.0.5:54%03d 10.90.4.%d:%s" % (i, 20 + i, port)
+             for i in range(stalled)]
+    serving(nd, "\n".join(rows) + "\n")
+    nd.cmd_socket_owners = lambda: {
+        "ok": True, "cmd": "ss -tanp",
+        "owners": [{"process": process, "pid": 812, "state": "ESTAB",
+                    "local_port": "53000", "peer": "10.90.4.20:%s" % port}]}
+
+@scenario("log_egress_plaintext")
+def _(nd): shipping_logs(nd, "514")
+
+@scenario("log_egress_encrypted")
+def _(nd): shipping_logs(nd, "6514")
+
+@scenario("log_egress_stalled")
+def _(nd): shipping_logs(nd, "6514", n=1, stalled=5)
+
 @scenario("transport_fell_back")
 def _(nd): two_planes(nd, tunnels=4, tcp_sessions=60)
 
@@ -21225,6 +21385,12 @@ class TestEveryFindingFires(unittest.TestCase):
         "no_clients_connected",                      # the absence of the inbound
                                                      # leg, which the clients
                                                      # stage reports as "-"
+        # The leg that carries this box's record of what it did. The eight
+        # stages are the path a user's traffic takes and shipping logs is not
+        # on it - which is precisely why nobody notices this breaking, and why
+        # lighting a stage of that chain would have the picture say something
+        # the finding spends its message denying.
+        "log_egress_stalled", "log_egress_plaintext",
     }
 
     def test_findings_that_move_no_stage_are_a_decision_not_an_oversight(self):

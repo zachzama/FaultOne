@@ -1,6 +1,6 @@
 # FaultOne
 
-**179 findings it can reach. One line saying which one to fix first.**
+**182 findings it can reach. One line saying which one to fix first.**
 
 ```bash
 python3 faultone.py --report                    # what's wrong, in this terminal
@@ -93,8 +93,8 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 859 KB of
-repetitive text: it goes over the wire at 259 KB with compression on, for the
+`-C` because OpenSSH doesn't compress by default, and the file is 933 KB of
+repetitive text: it goes over the wire at 282 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -103,12 +103,12 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 183 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 198 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
-Stripped and compressed together it's 183 KB instead of 859. That is 79%
-less, which is just over twelve minutes down to under three on a 9600-baud
+Stripped and compressed together it's 198 KB instead of 933. That is 79%
+less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
 
@@ -292,8 +292,8 @@ directions.
 
 ### What it actually checks
 
-**41 things are inspected**, and **179 distinct conclusions** can come out of
-them: 148 are faults, 31 are context.
+**41 things are inspected**, and **182 distinct conclusions** can come out of
+them: 150 are faults, 32 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -319,8 +319,10 @@ specific ports · TLS handshake and certificate
 
 *Worked out from those, not separately collected:* call quality (MOS), where
 your network ends and the provider's begins, per-hop latency and jitter, link
-utilisation, which side of this box a fault is on, and what changed since a
-previous visit.
+utilisation, which side of this box a fault is on, what changed since a
+previous visit, and what the outbound connections are actually for - the
+control plane this box enrols with, the logs it ships elsewhere, and the
+traffic it brokers, which are three different things in one column.
 
 [The same list with what each one catches.](REFERENCE.md#what-a-check-means-here-and-how-many-there-are)
 
@@ -385,7 +387,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1595 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1606 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

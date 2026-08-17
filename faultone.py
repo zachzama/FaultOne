@@ -2186,6 +2186,7 @@ def parse_socket_states(text, own_access=(None, None)):
     """
     states = {}
     pending = {}
+    pending_ports = {}
     # Which ports this box accepts on, and how many of its live connections
     # arrived rather than left. That split is what separates a server from a
     # client, and a server with clients connected to it right now has a working
@@ -2262,6 +2263,15 @@ def parse_socket_states(text, own_access=(None, None)):
             host = peer_host(peer)
             pending.setdefault(key, {})
             pending[key][host] = pending[key].get(host, 0) + 1
+            # And the same counted by destination port. A host says which
+            # machine is not answering; the port says what this box was trying
+            # to do with it, which is the only way to tell shipping logs from
+            # reaching a connector when both are stuck. Counted, like every
+            # other reading of this table - no peer travels with it.
+            dest_port = peer_port(peer)
+            if dest_port:
+                pending_ports.setdefault(key, {})
+                pending_ports[key][dest_port] = pending_ports[key].get(dest_port, 0) + 1
     # A source port is only unique per destination: the same one can serve any
     # number of different destinations at once. So the pressure on the range is
     # the busiest single destination, not the total - and on a box brokering
@@ -2285,6 +2295,18 @@ def parse_socket_states(text, own_access=(None, None)):
     for host, port, local_port in waiting_dests:
         if host and port and local_port not in listening:
             waiting_counts[(host, port)] = waiting_counts.get((host, port), 0) + 1
+    # The same connections counted by what they were for rather than by where
+    # they went. The outbound column holds more than one kind of traffic on a
+    # box that brokers: the plane it enrols with, the connectors it reaches,
+    # and the logs it ships. Nothing could tell those apart, so a log shipper's
+    # sessions counted as broker traffic and stopped the box being recognised
+    # as a broker at all. A port is what separates them and it is a number, so
+    # this stays inside the rule the rest of this function keeps - counted per
+    # port, never listed per connection.
+    outbound_by_port = {}
+    for host, port, local_port in outbound_dests:
+        if host and port and local_port not in listening:
+            outbound_by_port[port] = outbound_by_port.get(port, 0) + 1
     worst = max(dest_counts.items(), key=lambda kv: (kv[1], kv[0]), default=None)
     inbound = sum(1 for p in established if p and p in listening)
     # Counted per address, never listed per connection. Who is connected is the
@@ -2301,7 +2323,9 @@ def parse_socket_states(text, own_access=(None, None)):
             served_on[host] = served_on.get(host, 0) + 1
             key = "%s:%s" % (host, port)
             served_endpoints[key] = served_endpoints.get(key, 0) + 1
-    return {"states": states, "pending": pending, "served_on": served_on,
+    return {"states": states, "pending": pending, "pending_ports": pending_ports,
+            "outbound_by_port": outbound_by_port,
+            "served_on": served_on,
             "served_endpoints": served_endpoints,
             "listen_ports": ports_in_order(listening), "bound": bound, "peers": peers,
             "outbound_destinations": len(dest_counts),
@@ -7423,6 +7447,22 @@ VERDICT_RULES = [
      "The certificate this box serves is close to expiry",
      "Renew it before it becomes an outage that looks like a network fault to "
      "everyone who reports it."),
+    # The log leg, ranked here because these are the same shape as the
+    # certificate above: real, nobody is being turned away yet, and the cost
+    # lands later. Stalled above plaintext deliberately - a collector that is
+    # not being reached is losing the record now, where an unencrypted one is
+    # still keeping it.
+    ("log_egress_stalled", "the log collector, or the path to it",
+     "This box cannot reach the collector it ships its logs to",
+     "Nothing is recording what this box is doing, and nothing else on this "
+     "report will show it: shipping logs is not on the path anyone's traffic "
+     "takes. Check the collector is up and that whatever filters this box's "
+     "own egress still permits it."),
+    ("log_egress_plaintext", "whoever configured the log shipper",
+     "This box is sending its logs across the network unencrypted",
+     "Everything it writes about the traffic it carries is readable by "
+     "anything on the path to the collector. Move the shipper to the encrypted "
+     "port, or give it a transport that wraps what it sends."),
     ("aborts_on_memory", "this box's socket memory, not the network",
      "This box is killing established connections because it has no memory for them",
      "Not the network refusing anything: the box is out of socket memory and "
@@ -7850,6 +7890,9 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   "clients_may_be_on_the_datagram_plane",
                   "tunnel_payload_room",
                   "forwards_inside_tunnels",
+                  # This box shipping its own logs, encrypted. Context on
+                  # what the outbound column is made of, not a fault.
+                  "log_egress_encrypted",
                   "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
@@ -7917,6 +7960,10 @@ LATENT = {
     "syncookies_historical",
     # Real, dated, and not yet refusing anyone.
     "own_tls_expiring",
+    # The log leg. Nothing a user is reporting is caused by these, so neither
+    # may stand over a live fault - but both are the answer on a box where
+    # nothing else is wrong, which is exactly when anyone would act on them.
+    "log_egress_stalled", "log_egress_plaintext",
     # It throttled earlier and is not throttling now.
     "cpu_throttled_historical",
 }
@@ -8129,6 +8176,10 @@ FINDING_SIDE.update({
     "tunnel_payload_room": "upstream",
     # About the way out, and specifically about what it does not cover.
     "forwards_inside_tunnels": "upstream",
+    # The collector is off this box, whichever direction the users are.
+    "log_egress_stalled": "upstream",
+    "log_egress_plaintext": "upstream",
+    "log_egress_encrypted": "upstream",
     "trace_took_another_route": "upstream",
     # The certificate this box serves is only ever seen by whoever connects.
     "own_tls_expired": "downstream",
@@ -10520,6 +10571,90 @@ def _tunnels_counted(raw):
                " and %d with nothing coming back" % quiet if quiet else ""))
 
 
+# Where a box sends its logs, by registered port. Ports rather than process
+# names on purpose: a port is a documented interface and the same one means the
+# same thing on every box, where the shipper's name is a product decision that
+# changes under you. The name is better evidence when it is there, and
+# `cmd_socket_owners` already reads it, so it is used to confirm rather than to
+# decide.
+#
+# Each carries whether the wire is encrypted, because that is the whole of the
+# plaintext question and it is answerable from the port alone.
+LOG_EGRESS_PORTS = {
+    "514":   ("syslog", False),
+    "601":   ("syslog over TCP", False),
+    "6514":  ("syslog over TLS", True),
+    "1514":  ("syslog", False),
+    "10514": ("syslog", False),
+    "5044":  ("log shipping", False),
+    "12201": ("GELF", False),
+    "24224": ("log forwarding", False),
+    "4317":  ("OpenTelemetry gRPC", False),
+    "4318":  ("OpenTelemetry HTTP", False),
+}
+
+# Process names that ship logs, used only to confirm a port reading. Kept
+# together and deletable, the same way the proxy stats reader is: this is the
+# one other place in the file that knows a product exists, and the argument for
+# it is the same - a name that is already on the box, read and not guessed.
+LOG_SHIPPER_NAMES = ("rsyslog", "syslog-ng", "syslogd", "filebeat", "fluentd",
+                     "fluent-bit", "vector", "otelcol", "logstash", "promtail",
+                     "nxlog", "auditbeat", "journald")
+
+
+def _shipper_processes(raw):
+    """Log shippers this box is running, by name, or an empty list.
+
+    Read from the socket owners rather than the process table, so it only names
+    something that actually holds a socket.
+    """
+    owners = ((raw or {}).get("socket_owners") or {}).get("owners") or []
+    seen = []
+    for row in owners:
+        name = (row.get("process") or "").lower()
+        if any(s in name for s in LOG_SHIPPER_NAMES) and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def log_egress(raw):
+    """What this box is shipping its logs over, or None if nothing says.
+
+    The third leg. Client tunnels arrive, brokered traffic leaves, and the box
+    also sends its own record of both somewhere else - a collector in a data
+    centre, or a logging environment on the same site. It is the only one of
+    the three whose failure is silent by design: the box goes on serving, every
+    check here passes, and nothing is being written down.
+
+    Established sessions and attempts that never established are both counted,
+    because they are different faults with the same appearance from outside. A
+    collector that refuses leaves SYN_SENT piling up against its port; one that
+    was never configured leaves nothing at all, and this cannot tell that from
+    a box that is not supposed to ship anywhere.
+    """
+    sock = (raw or {}).get("sockets") or {}
+    live = sock.get("outbound_by_port") or {}
+    trying = (sock.get("pending_ports") or {}).get("SYN_SENT") or {}
+    if not sock.get("ok", True) and not live:
+        return None
+    sessions = {str(p): n for p, n in live.items() if str(p) in LOG_EGRESS_PORTS}
+    stalled = {str(p): n for p, n in trying.items() if str(p) in LOG_EGRESS_PORTS}
+    if not sessions and not stalled:
+        return None
+    plaintext = sorted(p for p in sessions if not LOG_EGRESS_PORTS[p][1])
+    return {
+        "sessions": sum(sessions.values()),
+        "ports": sorted(sessions),
+        "stalled": sum(stalled.values()),
+        "stalled_ports": sorted(stalled),
+        "plaintext_ports": plaintext,
+        "encrypted": bool(sessions) and not plaintext,
+        "shippers": _shipper_processes(raw),
+        "what": sorted({LOG_EGRESS_PORTS[p][0]
+                        for p in list(sessions) + list(stalled)}),
+    }
+
+
 def forwards_out_of_band(raw):
     """Does this box carry traffic it never opens a connection for.
 
@@ -10545,12 +10680,22 @@ def forwards_out_of_band(raw):
     if not counted.get("ok") or not counted.get("total"):
         return None
     outbound = sock.get("outbound") or 0
+    # Logs are not the control plane and they are not brokered traffic either,
+    # and until they were counted separately they were neither: a box shipping
+    # to a collector put those sessions in the same column, and past the bar
+    # below it stopped being recognised as a broker at all. The report then
+    # went back to calling that column "what this box connects out to", which
+    # is the one label this function exists to prevent. Every box like this
+    # ships logs, so it fired in the field and never in the corpus.
+    shipping = log_egress(raw) or {}
+    working = max(0, outbound - (shipping.get("sessions") or 0))
     # Written as the condition for being a broker rather than for not being
     # one, so the bar reads the way it is documented: a box at the number is
     # still holding a control plane, and one past it has a population out and
     # is a proxy, which the existing split already describes correctly.
-    if outbound <= CONTROL_PLANE_MAX_SESSIONS:
+    if working <= CONTROL_PLANE_MAX_SESSIONS:
         return {"tunnels": counted["total"], "outbound": outbound,
+                "control_plane": working, "shipping_logs": shipping.get("sessions") or 0,
                 "ports": counted.get("ports") or []}
     return None
 
@@ -10934,6 +11079,72 @@ def _check_forwarding_shape(raw, findings):
             f"figure or a stalled return on that side is about this box reaching the "
             f"service it enrols with, not about anyone's traffic getting through."),
     })
+
+
+def _check_log_egress(raw, findings):
+    """The leg that carries this box's own record of what it did.
+
+    Three legs, not two. Client tunnels arrive, brokered traffic leaves, and
+    the box also ships its logs somewhere - a collector in a data centre, or a
+    logging environment on the same site. The third is the only one whose
+    failure is silent by design: the box keeps serving, every check on this
+    report passes, and nothing is being written down. Nobody finds out at the
+    time. They find out when they go looking for the record and it stops.
+
+    So none of these headline over a live fault. A log leg that is down is a
+    liability rather than a cause of anything a user is reporting, and putting
+    it above an outage would be the ranking saying the opposite of what it
+    means. They are latent, which is exactly what latent is for: reported
+    always, and the answer only when nothing else is broken.
+    """
+    shipping = log_egress(raw)
+    if not shipping:
+        return
+    what = ", ".join(shipping["what"]) or "a collector"
+    named = (" (%s)" % ", ".join(shipping["shippers"][:2])
+             if shipping["shippers"] else "")
+
+    if shipping["stalled"]:
+        findings.append({
+            "severity": "warning",
+            "layer": 4,
+            "code": "log_egress_stalled",
+            "message": (
+                f"{shipping['stalled']} connection(s) to a log collector are stuck "
+                f"waiting to open, on {', '.join(shipping['stalled_ports'])} "
+                f"({what}){named}. This box is still serving and every check below "
+                f"passes, because shipping logs is not on the path anyone's traffic "
+                f"takes - which is the problem. Nothing is recording what this box is "
+                f"doing, and that is not visible from anywhere except here until "
+                f"somebody goes looking for the record."),
+        })
+
+    if shipping["plaintext_ports"]:
+        findings.append({
+            "severity": "warning",
+            "layer": 4,
+            "code": "log_egress_plaintext",
+            "message": (
+                f"Logs are leaving this box unencrypted, on "
+                f"{', '.join(shipping['plaintext_ports'])} ({what}){named}. Whatever "
+                f"this box writes about the traffic it carries - addresses, names, "
+                f"which user reached what - crosses the network in the clear and is "
+                f"readable by anything on the path to the collector. The encrypted "
+                f"port for syslog is 6514; the shipper's own transport setting is the "
+                f"other place this gets decided."),
+        })
+    elif shipping["sessions"]:
+        findings.append({
+            "severity": "ok",
+            "layer": 4,
+            "code": "log_egress_encrypted",
+            "message": (
+                f"{shipping['sessions']} log session(s) are open to a collector on "
+                f"{', '.join(shipping['ports'])} ({what}){named}, encrypted. Recorded "
+                f"because the outbound side of this report counts these as "
+                f"connections this box opened, and they are neither its control plane "
+                f"nor traffic it is brokering for anyone."),
+        })
 
 
 def _check_transport_fallback(raw, findings):
@@ -12910,6 +13121,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     _check_proxy_backends(raw, late)
     _check_inbound_filtering(raw, late)
     _check_forwarding_shape(raw, late)
+    _check_log_egress(raw, late)
     _check_transport_fallback(raw, late)
     _check_encapsulation_headroom(raw, late)
     # After the flows, because it reads them. Wired in beside the sessions

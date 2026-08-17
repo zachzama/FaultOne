@@ -7393,6 +7393,11 @@ VERDICT_RULES = [
      "hops than the trace walked. That is what a transparent proxy looks like from "
      "here, and it is usually policy rather than a fault - but everything below about "
      "reaching that address describes the connection to whatever answered."),
+    ("proxy_denies_this_box", "whoever owns the policy on the proxy, or this box's credentials",
+     "The proxy accepted the connection and will not let this box through",
+     "Not a network fault and it will not show as one - every check here goes direct "
+     "and presents nothing. Check the credentials this box offers and whether it is "
+     "still enrolled, then what policy applies to the identity it presents."),
     ("proxy_unreachable", "the proxy this box is told to use, not the path to it",
      "The proxy every application here is told to use does not answer",
      "Nothing else on this report will show it: every probe here goes direct and does "
@@ -7893,6 +7898,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # This box shipping its own logs, encrypted. Context on
                   # what the outbound column is made of, not a fault.
                   "log_egress_encrypted",
+                  # A service refusing an anonymous caller is the service
+                  # working. It is reported so a 4xx in the evidence is not
+                  # read as an error, and never ranked as one.
+                  "own_service_demands_auth",
                   "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
@@ -8186,6 +8195,9 @@ FINDING_SIDE.update({
     "own_service_not_accepting": "downstream",
     "proxy_backend_down": "upstream",
     "proxy_unreachable": "upstream",
+    "proxy_denies_this_box": "upstream",
+    # The box answering for itself, so it faces the clients.
+    "own_service_demands_auth": "downstream",
     "answered_closer_than_the_path": "upstream",
     "own_service_silent": "downstream",
     "own_service_erroring": "downstream",
@@ -8374,7 +8386,7 @@ STAGE_RULES = [
       # What sits between this site and the internet. Neither is a fault on
       # its own, and both change what the way out can do.
       "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
-      "proxy_unreachable", "answered_closer_than_the_path"}),
+      "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path"}),
     ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
@@ -12376,7 +12388,29 @@ def _own_service_findings(res, port, findings, owners=()):
         })
         return
     status = res.get("status")
-    if status in GATEWAY_ERRORS:
+    if status in (401, 403):
+        # Not a fault, and this is the point of saying so. A box whose job is
+        # deciding who may pass answers an unauthenticated request with a
+        # refusal, and that is the service working. It is recorded because the
+        # alternative is a reader seeing a 4xx in the evidence and drawing the
+        # opposite conclusion, and because it separates a service enforcing
+        # policy from one that is silent or erroring - which are three
+        # different states that all mean "no useful answer came back".
+        findings.append({
+            "severity": "ok",
+            "layer": 7,
+            "code": "own_service_demands_auth",
+            "message": (
+                f"The service on port {port} answered {status} to an unauthenticated "
+                f"request for its root path"
+                + _that_service_is(owners, port)
+                + ". That is a working service refusing an anonymous caller, not a "
+                  "fault: it accepted the connection, read the request and applied a "
+                  "policy. Recorded so the code below is not read as an error, and so "
+                  "this is distinguishable from a service that answered nothing at "
+                  "all."),
+        })
+    elif status in GATEWAY_ERRORS:
         findings.append({
             "severity": "critical",
             "layer": 7,
@@ -15130,13 +15164,68 @@ def proxy_endpoints(cfg):
     return list(found.values())
 
 
-def cmd_proxy_reachable(cfg, timeout=3):
-    """Can this box open a connection to the proxy it is told to use.
+#: What this box asks the proxy to open, to see whether it is allowed to. A
+#: CONNECT rather than a fetch: the proxy answers out of its own policy before
+#: it reaches anything, so nothing is retrieved and no third party is
+#: contacted unless the proxy itself chooses to. The host is a documentation
+#: name that resolves nowhere useful, for the same reason.
+PROXY_PROBE_TARGET = "example.com:443"
 
-    One TCP connect, no request sent and nothing read. The point is not to
-    exercise the proxy - it is that a proxy which refuses or does not answer
-    breaks every application on the box while ping, traceroute and DNS all
-    pass, which is the shape of report this check exists to stop producing.
+#: A proxy that answers one of these has reached its own decision about this
+#: box and said no. Only the codes that mean "not you" - a 502 from a proxy is
+#: about what it was asked to reach, which is a different fault and is already
+#: read that way for this box's own listeners.
+PROXY_REFUSES = {
+    407: "it wants credentials this box is not presenting",
+    403: "it refused on policy, with no offer to authenticate",
+}
+
+
+def proxy_answers(host, port, timeout=3):
+    """What the proxy says when this box asks it for something.
+
+    Connecting is not being allowed through. A proxy that accepts TCP and
+    refuses every request breaks each application on this box while the
+    connect check calls it reachable - the same gap `own_service_silent`
+    exists for, one hop further out, and the same answer: ask it for one thing
+    and read what comes back.
+
+    Nothing is fetched. A CONNECT is refused or permitted on the proxy's own
+    policy before it opens anything, so a 407 arrives without a third party
+    being involved at all.
+    """
+    try:
+        sock = connect_from(host, port, timeout)
+    except (OSError, ValueError):
+        return None
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n"
+                      % (PROXY_PROBE_TARGET, PROXY_PROBE_TARGET)).encode())
+        first = sock.recv(200).decode("latin-1", "replace").split("\r\n")[0]
+    except (OSError, socket.error):
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    m = re.match(r"HTTP/\d(?:\.\d)?\s+(\d{3})", first.strip())
+    return {"status": int(m.group(1)), "status_line": first.strip()} if m else \
+           {"status": None, "status_line": first.strip()}
+
+
+def cmd_proxy_reachable(cfg, timeout=3):
+    """Can this box open a connection to the proxy it is told to use, and is it
+    allowed through once it has.
+
+    A proxy which refuses or does not answer breaks every application on the
+    box while ping, traceroute and DNS all pass, which is the shape of report
+    this check exists to stop producing. Connecting was the whole of it for a
+    while, and connecting is not the same as being allowed: a proxy that wants
+    credentials this box does not have accepts the connection and refuses
+    everything after it, which reads identically from outside and is a
+    different fault with a different owner.
     """
     endpoints = proxy_endpoints(cfg or {})
     if not endpoints:
@@ -15147,8 +15236,10 @@ def cmd_proxy_reachable(cfg, timeout=3):
         started = time.monotonic()
         try:
             connect_from(where["host"], where["port"], timeout).close()
+            answered = proxy_answers(where["host"], where["port"], timeout)
             tried.append(dict(where, reachable=True,
-                              connect_ms=round((time.monotonic() - started) * 1000, 1)))
+                              connect_ms=round((time.monotonic() - started) * 1000, 1),
+                              **(answered or {})))
         except (OSError, ValueError) as exc:
             tried.append(dict(where, reachable=False,
                               refusal=why_it_would_not_connect(exc) or "unreachable"))
@@ -15232,6 +15323,33 @@ def _check_proxy(raw, findings, target):
                   "load anything."
                 + (f" {len(dead)} configured proxies are unreachable."
                    if len(dead) > 1 else "")),
+        })
+
+    # Reached, and refused anyway. Connecting is not being allowed through, and
+    # the two look identical from a TCP check: a proxy wanting credentials this
+    # box does not have accepts the connection and answers 407 to everything
+    # after it. Every application here is failing and every network check below
+    # passes, because none of them present a credential either.
+    refused = [p for p in (raw["proxy_reachable"].get("proxies") or [])
+               if p.get("reachable") and p.get("status") in PROXY_REFUSES]
+    if refused:
+        worst = refused[0]
+        why = PROXY_REFUSES[worst["status"]]
+        findings.append({
+            "severity": "critical",
+            "layer": 7,
+            "code": "proxy_denies_this_box",
+            "message": (
+                f"The proxy at {worst['host']}:{worst['port']} accepted the connection "
+                f"and answered {worst['status']} - {why}. This box can reach it and is "
+                f"not allowed through it, which is not a network fault and will not "
+                f"appear as one: a ping, a traceroute and a TCP connect to the target "
+                f"all go direct, present nothing, and pass. Every application here that "
+                f"honours the proxy setting is failing right now."
+                + (" Check the credentials this box presents, and whether the account "
+                   "or device is still enrolled." if worst["status"] == 407 else
+                   " Check what policy applies to this box, and to whatever identity it "
+                   "is presenting.")),
         })
 
     findings.append({
@@ -15488,6 +15606,7 @@ FINDING_HINT = {
     "own_service_not_accepting": "this box",
     "proxy_backend_down": "the backend",
     "proxy_unreachable": "the app",
+    "proxy_denies_this_box": "the app",
     "own_service_silent": "the service",
     "own_service_erroring": "the service",
     "own_service_not_http": "the service",

@@ -9440,6 +9440,108 @@ class TestNamingTheProcessBehindASocket(unittest.TestCase):
                               self.owners_for(code, listening))
 
 
+class _FakeSock:
+    """A socket that answers once and records what it was asked, so the proxy
+    probe can be driven without one existing."""
+    def __init__(self, reply): self.reply, self.sent = reply, b""
+    def settimeout(self, t): pass
+    def sendall(self, data): self.sent += data
+    def recv(self, n): return self.reply[:n]
+    def close(self): pass
+
+
+class TestBeingAllowedThroughIsNotBeingAbleToConnect(unittest.TestCase):
+    """Authentication, which had no finding at all.
+
+    The status code was parsed and only `>= 500` was graded, so a box that
+    could reach nothing because it was not authorised reported a healthy
+    service. The two halves of it face opposite ways: this box refusing an
+    anonymous caller is the service working, and the proxy in front refusing
+    this box is an outage nothing else on the report can see.
+    """
+
+    def _proxy(self, **kw):
+        m = fresh()
+        m.cmd_proxy_config = lambda: {"ok": True, "cmd": "proxy configuration",
+                                      "code": 0, "stderr": "", "stdout": "",
+                                      "env": {"https_proxy": "http://10.0.0.9:3128"},
+                                      "system": {}}
+        m.cmd_proxy_reachable = lambda cfg, timeout=3: {
+            "ok": True, "cmd": "tcp connect (proxy)", "stdout": "",
+            "proxies": [dict({"host": "10.0.0.9", "port": 3128,
+                              "reachable": True, "connect_ms": 1.4}, **kw)]}
+        return m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None)
+
+    def test_a_proxy_that_wants_credentials_is_an_outage(self):
+        r = self._proxy(status=407, status_line="HTTP/1.1 407 Proxy Authentication Required")
+        codes = {f["code"] for f in r["findings"]}
+        self.assertIn("proxy_denies_this_box", codes)
+        self.assertEqual(r["verdict"]["based_on"][0], "proxy_denies_this_box")
+        self.assertEqual(r["verdict"]["severity"], "critical")
+
+    def test_a_proxy_refusing_on_policy_is_the_same_shape(self):
+        r = self._proxy(status=403, status_line="HTTP/1.1 403 Forbidden")
+        self.assertIn("proxy_denies_this_box", {f["code"] for f in r["findings"]})
+
+    def test_a_proxy_that_lets_this_box_through_says_nothing(self):
+        r = self._proxy(status=200, status_line="HTTP/1.1 200 Connection established")
+        self.assertNotIn("proxy_denies_this_box", {f["code"] for f in r["findings"]})
+
+    def test_a_bad_gateway_from_a_proxy_is_not_an_authorisation_fault(self):
+        """502 is the proxy telling you about what it was asked to reach, not
+        about this box. Grading every non-200 as a refusal would have said the
+        credentials were wrong when the far side was simply down."""
+        r = self._proxy(status=502, status_line="HTTP/1.1 502 Bad Gateway")
+        self.assertNotIn("proxy_denies_this_box", {f["code"] for f in r["findings"]})
+
+    def test_this_box_refusing_an_anonymous_caller_is_not_a_fault(self):
+        """The case that must not fire. A box whose job is deciding who may
+        pass answers an unauthenticated request with a refusal, and that is the
+        service working. Reporting it as a fault would fire on every correctly
+        configured box on the estate."""
+        setup, kw = S["own_service_demands_auth"]
+        m = fresh(); setup(m)
+        r = m.diagnose(quick=False, **scenario_kwargs(kw))
+        got = [f for f in r["findings"] if f["code"] == "own_service_demands_auth"]
+        self.assertTrue(got, "the scenario stopped reaching it")
+        self.assertEqual(got[0]["severity"], "ok")
+        self.assertIn("own_service_demands_auth", nd.VERDICT_EXEMPT)
+
+    def test_it_is_still_told_apart_from_a_service_that_said_nothing(self):
+        """Three states mean "no useful answer came back" - silent, erroring,
+        and refusing an anonymous caller - and only the third is healthy."""
+        for status, expect in ((401, "own_service_demands_auth"),
+                               (500, "own_service_erroring")):
+            m = fresh(); own_service(m, status=status)
+            r = m.diagnose(quick=False, target="8.8.8.8",
+                           check_ports=None, baseline=None)
+            with self.subTest(status=status):
+                self.assertIn(expect, {f["code"] for f in r["findings"]})
+
+    def test_the_answer_reaches_the_connect_check(self):
+        """The wiring, not the mechanism. Every test above stubs
+        cmd_proxy_reachable whole, so removing the call to proxy_answers inside
+        it broke nothing - the reading existed and nothing carried it."""
+        # The real module, because fresh() makes this probe inapplicable so the
+        # suite opens no sockets. connect_from is replaced rather than reached
+        # through, so nothing leaves the process here either.
+        real = nd.connect_from
+        self.addCleanup(setattr, nd, "connect_from", real)
+        nd.connect_from = lambda h, p, t=3: _FakeSock(
+            b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+        got = nd.cmd_proxy_reachable({"env": {"https_proxy": "http://10.0.0.9:3128"}})
+        self.assertEqual(got["proxies"][0]["status"], 407)
+
+    def test_the_probe_asks_for_nothing_and_fetches_nothing(self):
+        """A CONNECT rather than a fetch: the proxy answers out of its own
+        policy before it opens anything, so a 407 arrives without a third party
+        being contacted at all."""
+        self.assertIn("CONNECT", nd.proxy_answers.__doc__ or "")
+        src = inspect.getsource(nd.proxy_answers)
+        self.assertIn("CONNECT %s HTTP/1.1", src)
+        self.assertNotIn("GET ", src)
+
+
 class TestTheLegThatCarriesTheRecord(unittest.TestCase):
     """The third leg: this box shipping its own logs somewhere else.
 
@@ -19289,6 +19391,9 @@ def _(nd): own_service(nd, status=502)
 @scenario("own_service_erroring")
 def _(nd): own_service(nd, status=500)
 
+@scenario("own_service_demands_auth")
+def _(nd): own_service(nd, status=401)
+
 @scenario("own_service_not_http")
 def _(nd): own_service(nd, ok=False, not_http=True, status=None,
                        status_line="+OK POP3 ready")
@@ -19850,6 +19955,20 @@ PROXY_CSV = ("# pxname,svname,qcur,status,chkfail,chkdown,lastchg,downtime,"
              "api,web2,7,DOWN,3,2,412,930,L4TOUT\n"
              "api,web3,0,MAINT,0,0,7200,0,\n"
              "api,BACKEND,7,UP,,,,,\n")
+
+@scenario("proxy_denies_this_box")
+def _(nd):
+    """Reached, and refused anyway: the proxy wants a credential this box is
+    not presenting, and answers 407 to everything."""
+    nd.cmd_proxy_config = lambda: {"ok": True, "cmd": "proxy configuration",
+                                   "code": 0, "stderr": "", "stdout": "",
+                                   "env": {"https_proxy": "http://10.0.0.9:3128"},
+                                   "system": {}}
+    nd.cmd_proxy_reachable = lambda cfg, timeout=3: {
+        "ok": True, "cmd": "tcp connect (proxy)", "stdout": "",
+        "proxies": [{"host": "10.0.0.9", "port": 3128, "reachable": True,
+                     "connect_ms": 1.4, "status": 407,
+                     "status_line": "HTTP/1.1 407 Proxy Authentication Required"}]}
 
 @scenario("proxy_unreachable")
 def _(nd):

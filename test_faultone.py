@@ -9477,6 +9477,58 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestNamingWhoseNetworkTheDelayIsIn(unittest.TestCase):
+    """The site edge says the delay is not yours. The AS says whose it is.
+
+    Those are different amounts of help. "Past this site's edge" closes the
+    question for the person reading it and opens one for whoever they escalate
+    to; a network number is the answer to the second.
+    """
+
+    def _wall(self, tr):
+        m = fresh(); trace(m, tr)
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        got = [f for f in r["findings"] if f["code"] == "latency_wall"]
+        return got[0]["message"] if got else ""
+
+    PUBLIC = (" 1  10.0.0.1 (10.0.0.1)%s  1.0 ms\n"
+              " 2  203.0.113.1 (203.0.113.1)%s  8.0 ms\n"
+              " 3  203.0.113.9 (203.0.113.9)%s  640.0 ms\n"
+              " 4  8.8.8.8 (8.8.8.8)%s  645.0 ms\n")
+
+    def test_the_wall_names_the_network_it_landed_in(self):
+        msg = self._wall(self.PUBLIC % (" [AS64500]", " [AS64500]",
+                                        " [AS15169]", " [AS15169]"))
+        self.assertIn("past this site's edge (AS15169)", msg)
+
+    def test_a_trace_that_did_not_say_still_reads_properly(self):
+        """Most traces will not carry one - it needs mtr with the option, and
+        DNS that works. The sentence has to be whole without it."""
+        msg = self._wall(self.PUBLIC % ("", "", "", ""))
+        self.assertIn("past this site's edge.", msg)
+        self.assertNotIn("(AS", msg)
+
+    def test_a_jump_inside_the_local_network_is_not_given_one(self):
+        """An AS on a private hop is whoever the trace resolved for a range
+        that is not globally routed, which means nothing here. The delay is
+        inside the site and the site is who owns it."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1) [AS64500]  1.0 ms\n"
+                 " 2  10.0.1.1 (10.0.1.1) [AS64500]  640.0 ms\n"
+                 " 3  8.8.8.8 (8.8.8.8) [AS15169]  645.0 ms\n")
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        got = [f for f in r["findings"] if f["code"] == "latency_wall"]
+        if got:
+            self.assertIn("inside the local network", got[0]["message"])
+            self.assertNotIn("(AS", got[0]["message"])
+
+    def test_the_worst_jump_carries_it_for_anything_else_that_wants_it(self):
+        m = fresh()
+        trace(m, self.PUBLIC % (" [AS64500]", " [AS64500]", " [AS15169]", " [AS15169]"))
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        self.assertEqual((r.get("worst_jump") or {}).get("asn"), "AS15169")
+
+
 class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
     """Asymmetric routing, which the page has drawn and never concluded from.
 

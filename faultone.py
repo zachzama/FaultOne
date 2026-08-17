@@ -7030,6 +7030,10 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
         "demarc_hop": demarc,
         "worst_jump": {"hop": worst["hop"], "delta_ms": worst["delta_ms"],
                        "host": worst.get("display") or worst.get("host"),
+                       # Whose network the delay is introduced in, where the
+                       # trace said. "Past this site's edge" is where the
+                       # ticket stops being yours; the AS is who it goes to.
+                       "asn": worst.get("asn"),
                        "private": worst.get("private"),
                        "share_pct": worst_share,
                        "total_ms": total_ms,
@@ -14503,6 +14507,11 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
             side = "inside the local network - so the delay starts before traffic leaves the site"
         else:
             side = "out on the provider's side of the network, past this site's edge"
+        # And whose, where the trace was able to say. The demarc already puts
+        # the jump outside the site; this names the network it landed in, which
+        # is the difference between "not ours" and somewhere to send it.
+        if wj.get("asn") and not wj.get("private"):
+            side += " (%s)" % wj["asn"]
         # Mark the hop on the way past. The chain scored its nodes on loss and
         # timeouts alone, which are the only things it could see for itself -
         # so on a latency wall the one hop this finding names was the one thing

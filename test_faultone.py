@@ -9450,6 +9450,81 @@ class _FakeSock:
     def close(self): pass
 
 
+class TestTheFallbackThatNeverWorked(unittest.TestCase):
+    """tracepath has been the documented fallback behind traceroute since it
+    was written - the one thing a box with no traceroute would reach - and it
+    could not produce a single hop.
+
+    It writes "1:  10.0.0.1" where traceroute writes " 1  10.0.0.1". The hop
+    header wanted a number followed by whitespace, so every line fell through
+    to the continuation branch with nothing to continue, and the fallback
+    returned an empty path on every box that got that far. Nothing noticed,
+    because no test drove the parser with the format of the tool it was there
+    to support.
+    """
+
+    OUT = (" 1?: [LOCALHOST]                      pmtu 1500\n"
+           " 1:  10.0.0.1                                    0.822ms\n"
+           " 1:  10.0.0.1                                    0.601ms\n"
+           " 2:  10.0.0.1                                    0.559ms pmtu 1400\n"
+           " 2:  203.0.113.9                                12.345ms\n"
+           " 3:  no reply\n"
+           " 4:  8.8.8.8                                    21.001ms reached\n"
+           "     Resume: pmtu 1400 hops 4 back 4\n")
+
+    def test_it_produces_hops_at_all(self):
+        hops = nd.parse_traceroute_hops(self.OUT)
+        self.assertTrue(hops, "tracepath output still parses to nothing")
+        self.assertEqual([h["hop"] for h in hops], [1, 2, 3, 4])
+
+    def test_one_hop_per_number_not_one_per_probe(self):
+        """tracepath prints a line per probe. Left unmerged those become
+        duplicate hops, which is a longer path than exists and splits one
+        hop's timings across fake ones."""
+        hops = nd.parse_traceroute_hops(self.OUT)
+        self.assertEqual(hops[0]["times_ms"], [0.822, 0.601])
+
+    def test_this_box_is_not_the_first_hop(self):
+        """The opening line names this box and the MTU of the interface it will
+        leave from. Carrying it would put this box's own interface into the
+        path as a router, with an MTU nothing out there reported."""
+        hops = nd.parse_traceroute_hops(self.OUT)
+        self.assertEqual(hops[0]["host"], "10.0.0.1")
+        self.assertIsNone(hops[0].get("pmtu"))
+
+    def test_no_reply_is_a_timeout(self):
+        hops = nd.parse_traceroute_hops(self.OUT)
+        self.assertTrue(hops[2]["timed_out"])
+
+    def test_the_per_hop_mtu_is_kept(self):
+        """The one thing tracepath knows that traceroute does not, and it was
+        being discarded with the rest of the output. A box that has fallen back
+        to the lesser tool gets something the better one would not have
+        given."""
+        hops = nd.parse_traceroute_hops(self.OUT)
+        self.assertEqual(hops[1]["pmtu"], 1400)
+
+    def test_traceroute_output_is_unchanged_by_the_colon(self):
+        """The header now accepts a colon as well as whitespace, which must not
+        change how the format it was written for parses."""
+        hops = nd.parse_traceroute_hops(
+            " 1  10.0.0.1 (10.0.0.1)  1.0 ms  1.1 ms  1.2 ms\n"
+            " 2  * * *\n"
+            " 3  dns.google (8.8.8.8)  20.0 ms\n")
+        self.assertEqual([h["hop"] for h in hops], [1, 2, 3])
+        self.assertEqual(hops[0]["times_ms"], [1.0, 1.1, 1.2])
+        self.assertTrue(hops[1]["timed_out"])
+        self.assertEqual(hops[2]["display"], "dns.google")
+
+    def test_an_indented_continuation_is_still_not_a_hop(self):
+        """The regression the header regex was tightened for: a wrapped line
+        beginning with an address must not parse as hop 203."""
+        hops = nd.parse_traceroute_hops(
+            " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+            "    203.0.113.67 (203.0.113.67)  2.0 ms\n")
+        self.assertEqual([h["hop"] for h in hops], [1])
+
+
 class TestAFloorUnderTheHopList(unittest.TestCase):
     """What the report can still say about the path when nothing can walk it.
 

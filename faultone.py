@@ -6617,17 +6617,35 @@ def parse_traceroute_hops(output):
     for raw_line in (output or "").splitlines():
         if not raw_line.strip():
             continue
-        # A hop header is a number followed by whitespace. A continuation line -
-        # emitted when several routers answer probes for the same hop, which is
-        # normal with ECMP - starts with an address instead. Matching on the
-        # unstripped line matters: "    203.0.113.67 (...)" would otherwise
-        # parse as hop 108, inventing hops and splitting one hop's timings
-        # across several fake ones (which then look like partial reply loss).
-        m = re.match(r"^\s*(\d{1,3})\s+", raw_line)
+        # A hop header is a number followed by whitespace, or by a colon. A
+        # continuation line - emitted when several routers answer probes for
+        # the same hop, which is normal with ECMP - starts with an address
+        # instead. Matching on the unstripped line matters: "    203.0.113.67
+        # (...)" would otherwise parse as hop 108, inventing hops and splitting
+        # one hop's timings across several fake ones (which then look like
+        # partial reply loss).
+        #
+        # The colon is tracepath, and without it that whole branch was dead.
+        # tracepath has been the documented fallback behind traceroute since it
+        # was written - the one thing a box with no traceroute would use - and
+        # it writes "1:  10.0.0.1" where traceroute writes " 1  10.0.0.1". The
+        # regex wanted whitespace, so every line fell through to the
+        # continuation branch with nothing to continue, and the fallback
+        # returned an empty path on every box that reached it. "1?:" is the
+        # same line for a hop it is still probing.
+        m = re.match(r"^\s*(\d{1,3})\??[:\s]", raw_line)
+        # tracepath opens by naming this box and the MTU of the interface it
+        # will leave from. That is not a hop on the path and its MTU is not a
+        # hop's - carrying it would put this box's own interface into the path
+        # as the first router, with a pmtu nothing out there reported.
+        if m and "[LOCALHOST]" in raw_line:
+            continue
         line = raw_line.strip()
         times = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*ms", line)]
         ip_match = IP_ANY_RE.search(line)
         host = ip_match.group(0) if ip_match else None
+        pmtu_m = re.search(r"\bpmtu\s+(\d{3,5})\b", line)
+        pmtu = int(pmtu_m.group(1)) if pmtu_m else None
         display = host or "*"
         if ip_match:
             # traceroute puts the address in round brackets after the name and
@@ -6657,7 +6675,26 @@ def parse_traceroute_hops(output):
             continue
 
         hop_num = int(m.group(1))
-        timed_out = not times and "*" in line
+        # tracepath prints one line per probe rather than one per hop, so the
+        # same number arrives several times. Those are the same hop and merging
+        # them is what the continuation branch above already does for every
+        # other layout - reached from here because these lines carry a header.
+        if hops and hops[-1]["hop"] == hop_num:
+            last = hops[-1]
+            last["times_ms"].extend(times)
+            if times:
+                last["timed_out"] = False
+            if host and not last["host"]:
+                last["host"], last["display"] = host, display
+            elif host and host != last["host"]:
+                last.setdefault("also", [])
+                if display not in last["also"]:
+                    last["also"].append(display)
+            if pmtu and not last.get("pmtu"):
+                last["pmtu"] = pmtu
+            continue
+        # "no reply" is tracepath's "*".
+        timed_out = not times and ("*" in line or "no reply" in line)
         flags = TRACE_ANNOTATION_RE.findall(line)
         hops.append({
             "hop": hop_num,
@@ -6668,6 +6705,12 @@ def parse_traceroute_hops(output):
             # Kept in the order the router gave them, deduplicated: three
             # probes to one refusing hop print the same flag three times.
             "flags": list(dict.fromkeys(flags)) or None,
+            # What the path would carry at this point, where the tool says so.
+            # Only tracepath reports it, and it was being thrown away with the
+            # rest of that output. It is the one thing tracepath knows that
+            # traceroute does not, so a box that has fallen back to it gets
+            # something the richer tool would not have given.
+            "pmtu": pmtu,
         })
     return hops
 

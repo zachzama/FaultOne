@@ -9566,6 +9566,33 @@ def _retarget_verdict(verdict, raw):
     verdict["owner"], verdict["headline"], verdict["next_step"] = override
 
 
+def _verdict_severity(cause_severity, based_on, findings):
+    """The verdict's severity, which cannot be milder than its own evidence.
+
+    `build_stages` already refuses to leave a stage reading "warn" when a
+    critical finding lands on it, because the strip is the summary someone acts
+    on and it has to agree with the severity beside it. The verdict is that
+    severity, and it never got the rule.
+
+    So a cause could be a warning while the case for it rested on a critical
+    finding, and the report drew a red stage under the word "warning". Three
+    scenarios did exactly that: moderate loss past the gateway is a warning,
+    the unusable calls it corroborates are critical, and the strip failed the
+    internet stage while the headline stayed mild.
+
+    Only the findings the verdict is actually built on count. A critical fault
+    somewhere else on the box is a second problem, and inflating this verdict
+    with it would misdescribe the cause this one names.
+    """
+    if cause_severity == "critical":
+        return cause_severity
+    evidence = set(based_on)
+    if any(f.get("severity") == "critical" and f.get("code") in evidence
+           for f in findings):
+        return "critical"
+    return cause_severity
+
+
 def build_verdict(findings, quick=False, raw=None):
     """Pick the most likely root cause from the findings and say who owns it."""
     by_code = {}
@@ -9709,7 +9736,8 @@ def build_verdict(findings, quick=False, raw=None):
             # because they are already printed in full below.
             "explains": [f.get("code") for f in explains],
             "based_on": [code] + corroborating,
-            "severity": matches[0]["severity"],
+            "severity": _verdict_severity(matches[0]["severity"],
+                                          [code] + corroborating, findings),
             "detail": matches[0]["message"],
         }
 

@@ -9440,6 +9440,58 @@ class TestNamingTheProcessBehindASocket(unittest.TestCase):
                               self.owners_for(code, listening))
 
 
+class TestASeverityIsNeverMilderThanWhatItRestsOn(unittest.TestCase):
+    """The two places that refuse to under-report, tested where they are.
+
+    Both were caught surviving a mutation: reverting either one broke no test,
+    because the scenario corpus happens not to separate the rule from a coarser
+    version of it. A scenario is not a test of the rule it exercises, only of
+    the answer it produces, and these two rules are about the case the corpus
+    does not contain.
+    """
+
+    def test_a_critical_the_verdict_rests_on_lifts_the_verdict(self):
+        findings = [{"code": "inet_partial_loss", "severity": "warning", "layer": 3},
+                    {"code": "call_quality_bad", "severity": "critical", "layer": 3}]
+        self.assertEqual(
+            nd._verdict_severity("warning",
+                                 ["inet_partial_loss", "call_quality_bad"], findings),
+            "critical")
+
+    def test_a_critical_elsewhere_on_the_box_does_not(self):
+        """The narrowing, which is the whole content of the rule. A second
+        fault the verdict is not built on is a second problem; letting it raise
+        this verdict would describe the named cause as worse than it is, and
+        the report already carries the other one under 'unrelated'."""
+        findings = [{"code": "inet_partial_loss", "severity": "warning", "layer": 3},
+                    {"code": "tls_expired", "severity": "critical", "layer": 7}]
+        self.assertEqual(
+            nd._verdict_severity("warning", ["inet_partial_loss"], findings),
+            "warning")
+
+    def test_a_cause_that_is_already_critical_is_left_alone(self):
+        self.assertEqual(nd._verdict_severity("critical", ["x"], []), "critical")
+
+    def test_a_critical_finding_fails_the_stage_it_only_warns_on(self):
+        """`build_stages`' half of the same rule. `call_quality_bad` is a warn
+        code for the internet stage, so a table lookup alone leaves the stage
+        amber under a critical fault."""
+        stages = nd.build_stages(
+            [{"code": "call_quality_bad", "severity": "critical", "layer": 3,
+              "message": "calls are unusable"}], raw={})
+        internet = [s for s in stages if s["stage"] == "internet"][0]
+        self.assertEqual(internet["state"], "fail")
+
+    def test_the_same_code_at_warning_leaves_the_stage_amber(self):
+        """The other side of it, so the test above is about severity rather
+        than about the code appearing at all."""
+        stages = nd.build_stages(
+            [{"code": "call_quality_bad", "severity": "warning", "layer": 3,
+              "message": "calls are rough"}], raw={})
+        internet = [s for s in stages if s["stage"] == "internet"][0]
+        self.assertEqual(internet["state"], "warn")
+
+
 class TestTheWordsAndThePictureAgree(unittest.TestCase):
     """Every scenario, checked for saying one thing and drawing another.
 
@@ -9614,6 +9666,67 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
                 self.assertTrue(
                     any(s["state"] in self.LIT for s in rep["stages"]),
                     "a %s verdict over eight green stages" % v["severity"])
+
+    #: Codes whose stage fails while their own finding is only a warning, and
+    #: which are allowed to. `STAGE_RULES` sorts a code into fail or warn once,
+    #: for good; two of these three decide their severity per run, from
+    #: evidence the table cannot see. A duplex mismatch with collisions
+    #: recorded is critical and without them is a warning, and the link stage
+    #: fails either way - the misconfiguration is there whether or not it has
+    #: started dropping frames yet. That is a coarser table under a finer
+    #: reading, not a disagreement about the box.
+    COARSER_ON_THE_STRIP = {
+        "duplex_mismatch",        # critical only once collisions are counted
+        "port_host_unreachable",  # severity computed from what answered
+        "tls_handshake_failed",   # listening, not serving; nothing lost yet
+    }
+
+    def test_the_headline_is_no_milder_than_the_strip_beneath_it(self):
+        """A red stage under the word "warning" is the contradiction a reader
+        sees first. `build_stages` already refuses to leave a stage on "warn"
+        under a critical finding, and said why: the strip has to agree with the
+        severity beside it. The severity beside it never got the rule, so three
+        scenarios drew a failed internet stage under a mild headline.
+
+        The exceptions are listed rather than silently skipped, because a
+        static table sorting a code into fail or warn once cannot express a
+        severity that is decided per run."""
+        for code, rep, v, _z in self.every_report():
+            failed = [s for s in rep["stages"] if s["state"] == "fail"]
+            drivers = {c for s in failed for c in s["because"]}
+            if not failed or drivers <= self.COARSER_ON_THE_STRIP:
+                continue
+            with self.subTest(code=code):
+                self.assertNotEqual(
+                    v["severity"], "warning",
+                    "the strip fails %s under a verdict reading 'warning'"
+                    % ", ".join(s["stage"] for s in failed))
+
+    def test_the_listed_exceptions_are_still_exceptions(self):
+        """An allowlist that stops applying is a gap wearing a decision's
+        clothes. Each code above must still be a fail code on some stage while
+        its finding can come out a warning; when that stops being true the
+        entry is stale and the reason above no longer describes anything."""
+        fail_codes = set()
+        for _name, fails, _warns in nd.STAGE_RULES:
+            fail_codes |= set(fails)
+        self.assertEqual(sorted(self.COARSER_ON_THE_STRIP - fail_codes), [],
+                         "listed as coarser on the strip and no longer a fail code")
+
+    def test_a_verdict_is_never_milder_than_the_evidence_it_rests_on(self):
+        """The same rule stated where it is enforced, so it survives a change
+        to how stages are coloured."""
+        for code, rep, v, _z in self.every_report():
+            evidence = set(v.get("based_on") or [])
+            worst = {f["severity"] for f in rep["findings"]
+                     if f.get("code") in evidence}
+            if "critical" not in worst:
+                continue
+            with self.subTest(code=code):
+                self.assertEqual(
+                    v["severity"], "critical",
+                    "built on a critical finding and reported as %s"
+                    % v["severity"])
 
     def test_a_lit_column_has_a_lit_leg_or_a_reason_it_cannot(self):
         for code, rep, v, _z in self.every_report():

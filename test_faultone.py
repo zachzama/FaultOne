@@ -10514,6 +10514,42 @@ class TestAStateFromAReportCannotLeaveItsAttribute(unittest.TestCase):
         for empty in (None, ""):
             self.assertEqual(run_viewer_fn(self, "cls", [empty]), "")
 
+    def test_every_class_attribute_in_the_template_is_filtered(self):
+        """The tests below run five fragments and prove those five are safe.
+        They cannot prove there is not a sixth, and there were five: the fix
+        landed on the fragments that had been extracted into functions, and
+        every site still inline in `renderDiagnosis` kept interpolating a
+        report value straight into a class attribute.
+
+        This reads the source instead, which is the weaker instrument and the
+        right one for the question "did we get them all". Executing a fragment
+        says it is safe; only counting says nothing was missed.
+        """
+        import re
+        # Comments talk about the bug, including the one inside `cls` itself.
+        source = re.sub(r"//[^\n]*", "", nd.VIEWER_TEMPLATE)
+        raw = []
+        for m in re.finditer(r'class="[^"]*\$\{([^}]{0,80})', source):
+            body = m.group(1).strip()
+            # A literal chosen by a ternary cannot carry a quote, and a lookup
+            # on a fixed table returns one of its own values or nothing.
+            if body.startswith(("cls(", "escapeHtml(")) or "?" in body:
+                continue
+            if body in ("lamp",):
+                continue
+            raw.append((source[:m.start()].count("\n") + 1, body))
+        self.assertEqual(raw, [], "a report value reaches a class attribute unfiltered")
+
+    def test_the_lookup_that_is_allowed_through_really_is_a_lookup(self):
+        """`lamp` is exempt above because it is `VERDICT_LAMP[...] || 'skip'` -
+        a fixed table, so a hostile severity yields nothing and falls back. If
+        it ever stops being a lookup the exemption is wrong."""
+        self.assertIn("const lamp = VERDICT_LAMP[v.severity] || 'skip';",
+                      nd.VIEWER_TEMPLATE)
+        self.assertEqual(run_viewer_fn(self, "verdictRow",
+                                       [{"severity": self.XSS, "headline": "x"}],
+                                       deps=("escapeHtml",)).count("<img"), 0)
+
     def test_a_hostile_zone_state_cannot_open_a_tag(self):
         html = run_viewer_fn(self, "zoneCard", [{"side": "local", "state": self.XSS}])
         self.assertNotIn("<img", html)

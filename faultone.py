@@ -16855,7 +16855,7 @@ function renderDiagnosis(data, opts){
   const lowest = data.lowest_broken_layer || null;
   const v = data.verdict;
   const verdictHtml = v ? `
-    <div class="verdict ${v.severity || 'warning'}">
+    <div class="verdict ${cls(v.severity) || 'warning'}">
       <div class="vlabel">likely root cause</div>
       <div class="vhead">${escapeHtml(v.headline)}</div>
       <div class="vmeta">
@@ -16957,12 +16957,12 @@ function renderDiagnosis(data, opts){
   // where it did not.
 
   const pp = data.probe_path;
-  const probeHtml = pp ? `<div class="pcol ${pp.state}">
+  const probeHtml = pp ? `<div class="pcol ${cls(pp.state)}">
       <div class="pcol-hd"><span class="pwho">reachability probe</span>
         <span class="pfacts">${escapeHtml(pp.target)}<br>${pp.hops.length} hop${
           pp.hops.length === 1 ? '' : 's'}${
           pp.total_ms ? ' \u00b7 ' + pp.total_ms + 'ms' : ''}</span></div>
-      <div class="plane ${pp.state}">
+      <div class="plane ${cls(pp.state)}">
         <div class="ptop"><span class="pwhat">path out</span>
           <span class="pverd">${{pass:'OK', warn:'SLOW', fail:'FAULT'}[pp.state]}</span></div>
         <div class="ptrack"><span class="pend">this box</span>
@@ -17003,7 +17003,7 @@ function renderDiagnosis(data, opts){
       // rather than as two lines pointing at each other. With both heads in the
       // same place the pair looked like one measurement drawn twice.
       const track = leg.direction === 'back' ? tip + line : line + tip;
-      return `<div class="plane ${leg.state}">
+      return `<div class="plane ${cls(leg.state)}">
           <div class="ptop"><span class="pwhat">${escapeHtml(leg.what)}</span>
             <span class="pverd">${LEGWORD[leg.state] || leg.state}</span></div>
           <div class="ptrack"><span class="pend">${escapeHtml(side.left)}</span>
@@ -17018,7 +17018,7 @@ function renderDiagnosis(data, opts){
     // the connections it opens, once at somewhere it never sends anything.
     const op = side.traced;
     const traced = op ? hopList(op, NAMES) : '';
-    return `<div class="pcol ${side.state}">
+    return `<div class="pcol ${cls(side.state)}">
         <div class="pcol-hd"><span class="pwho">${escapeHtml(side.title)}${planeTag(otherPlane)}</span>
           <span class="pfacts"${side.hops_in
             ? ` title="The distance is counted from a reply that arrived here, assuming it left at ttl ${side.ttl_assumed}. Each router on the way decrements it, so the difference is the hops it crossed."`
@@ -17038,7 +17038,7 @@ function renderDiagnosis(data, opts){
     ? '<div class="section-title">What was found</div>' : '';
   document.body.classList.add('report-loaded');
   findingsWrap.innerHTML = changesHtml + '<div class="findings">' + findings.map(f => `
-    <div class="finding ${f.severity}">
+    <div class="finding ${cls(f.severity)}">
       <div class="sev"></div>
       <div>
         <div class="tagline">${findingTags(f, layers, lowest)}</div>

@@ -9736,6 +9736,45 @@ class TestWhoOwnsEachHop(unittest.TestCase):
         self.assertEqual(hops[0]["asn"], "AS64512")
         self.assertIsNone(hops[1]["asn"])
 
+    HOP = {"hop": 1, "host": "10.0.1.1", "state": "ok", "ms": 1.0, "delta_ms": None,
+           "share_pct": 10, "timed_out": False, "site_edge": False, "why": None,
+           "edge": None, "fanout": 0, "fanout_also": []}
+    DEPS = ("escapeHtml", "cls", "hopWhy", "fanoutLine")
+
+    def _drawn(self, hop, names):
+        return run_viewer_fn(self, "hopList",
+                             [{"hops": [hop], "of": 1, "hops_in": None,
+                               "baseline": None}, names], deps=self.DEPS)
+
+    def test_the_network_sits_under_the_address_not_beside_it(self):
+        """The top row is four fixed columns - hop, address, bar, timing. An AS
+        appended to the address made its width vary and pushed the bar about,
+        so it reads on the line below, in front of the name."""
+        out = self._drawn(dict(self.HOP, asn="AS64512"),
+                          {"10.0.1.1": "edge-rtr-01.corp.internal"})
+        top = out[out.index('class="hh"'):out.index('class="hbar"')]
+        self.assertNotIn("AS64512", top, "the AS is back on the address row")
+        under = out[out.index('class="hname"'):]
+        self.assertLess(under.index("AS64512"), under.index("edge-rtr-01"),
+                        "the network should come before the name")
+
+    def test_a_hop_with_no_reverse_name_still_shows_its_network(self):
+        """The line under the address only existed when reverse DNS answered.
+        Hung off that, the AS would vanish on every hop without a PTR, which is
+        most of them once the path leaves the site - and it would have looked
+        like the tool not having the reading, which is the thing this whole
+        change was fixing."""
+        out = self._drawn(dict(self.HOP, asn="AS64512"), {})
+        self.assertIn("AS64512", out)
+
+    def test_a_hop_with_neither_draws_no_second_line(self):
+        self.assertNotIn('class="hname"', self._drawn(dict(self.HOP), {}))
+
+    def test_a_name_with_no_network_is_unchanged(self):
+        out = self._drawn(dict(self.HOP), {"10.0.1.1": "edge-rtr-01.corp.internal"})
+        self.assertIn("edge-rtr-01.corp.internal", out)
+        self.assertNotIn("hasn", out)
+
     def test_it_reaches_the_column_and_the_page(self):
         """A field nothing draws is a field nobody has. It travels into the
         rendered column, and the page prints it beside the hop."""
@@ -15048,7 +15087,7 @@ class TestDocsMatchReality(unittest.TestCase):
                       encoding="utf-8").read()
         claims = {
             "on disk": (len(raw), 964),
-            "compressed": (len(gzip.compress(raw, 9)), 291),
+            "compressed": (len(gzip.compress(raw, 9)), 292),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 204),
         }
         for label, (measured, quoted) in claims.items():

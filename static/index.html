@@ -1017,13 +1017,23 @@ function hopList(col, names){
       ${h.site_edge ? `<div class="edge"><span>site edge \u00b7 past here is the provider's network</span></div>` : ''}
       <div class="hrow ${cls(h.state === 'ok' ? '' : h.state)}">
         <span class="hn">hop ${escapeHtml(String(h.hop))}</span>
-        <span class="hh">${escapeHtml(h.host)}${
-          h.asn ? ` <span class="hasn">${escapeHtml(h.asn)}</span>` : ''}</span>
+        <span class="hh">${escapeHtml(h.host)}</span>
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
           : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
-      </div>${fanoutLine(h)}${names[h.host] ? `<div class="hname">${escapeHtml(names[h.host])}</div>` : ''}${
+      </div>${fanoutLine(h)}${
+        // The network and the name on the line under the address, in that
+        // order: the top row stays four fixed columns - hop, address, bar,
+        // timing - where an AS appended to the address made its width vary and
+        // pushed the bar about. Drawn when there is either, not only when
+        // reverse DNS answered: hung off the name it would have disappeared on
+        // every hop without a PTR, which is most of them on a path that leaves
+        // the site.
+        (h.asn || names[h.host]) ? `<div class="hname">${
+          h.asn ? `<span class="hasn">${escapeHtml(h.asn)}</span>` : ''}${
+          h.asn && names[h.host] ? ' \u00b7 ' : ''}${
+          names[h.host] ? escapeHtml(names[h.host]) : ''}</div>` : ''}${
           h.why ? `<div class="hwhy ${cls(h.state)}">${escapeHtml(h.why)}</div>` : ''}${
         h.edge ? `<div class="hwhy edge">enters ${escapeHtml(h.edge)}</div>` : ''}`).join('')}
       ${col.hops_in ? `<div class="pboth">${

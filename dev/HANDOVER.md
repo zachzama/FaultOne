@@ -118,9 +118,19 @@ Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 
 CI was red on every push from 2026-08-16 to 2026-08-18 - all four jobs, for
 three different reasons - while the suite passed here every time. It was never
-checked, which is the first lesson: **local green is not green.**
+checked, which is the first lesson: **local green is not green.** All three are
+fixed and the run is green; one part is left open and is described below.
 
-Two causes are fixed. `_sysfs_names` walked /sys/class/net without the `_read_`
+Two of the three were the same shape: a test asking the host operating system a
+question instead of the code under test. The third was `dev/audit.py`, which is
+in the "dev harnesses" job and is not the suite - so a rule that only that
+harness checks can break without a single test failing, which is the point of
+it. `test_a_closed_port_says_nothing` bound a socket, closed it, connected to
+the port it had just released and required the refusal to be "refused"; the
+Windows runner answered with a timeout. Which refusal an operating system gives
+is not this tool's to assert. That the two are told apart is.
+
+`_sysfs_names` walked /sys/class/net without the `_read_`
 prefix, so nothing stubbed it and the seal reported it on every Linux job;
 there is no /sys on a Mac, so the branch never ran here. Four more host readers
 had the same naming problem and are renamed. A static guard now asks the

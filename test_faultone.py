@@ -10108,6 +10108,38 @@ class TestAskingEachInstanceRatherThanTheBox(unittest.TestCase):
             self._row("10.0.2.10", "ixla2", reached=False, tcp="timeout")])
         self.assertNotIn("Every address on", found["source_cannot_reach"]["message"])
 
+    def test_the_table_answers_the_same_question_the_finding_does(self):
+        """The reaches column read the ping alone. On a path filtering ICMP
+        that printed "no" in red against every address while the finding under
+        it said those same addresses reached over TCP - one screen, two
+        answers, and the table is what someone looks at first."""
+        m = fresh()
+        m.PROBE_EVERY_SOURCE = True
+        m.probe_each_source = lambda t, a, c, w: [
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="open"),
+            self._row("10.0.1.11", "ixla1", reached=False, tcp="timeout"),
+            self._row("10.0.9.9", "lb0", reached=False, tcp="not held", held=False)]
+        txt = nd.render_text_report(
+            m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None))
+        table = txt[txt.index("SOURCES TO"):]
+        self.assertIn("tcp only", table)
+        self.assertIn("not held", table)
+        self.assertIn("is not configured here", table)
+        # The one that reached over TCP must not be listed as reaching nothing.
+        self.assertNotIn("10.0.1.10 reaches nothing", table)
+
+    def test_the_page_says_the_same_four_things(self):
+        """Checked by running the viewer's own function, because a branch that
+        is never taken still contains the string."""
+        rows = [self._row("10.0.0.5", "igb0"),
+                self._row("10.0.1.10", "ixla1", reached=False, tcp="open"),
+                self._row("10.0.9.9", "lb0", reached=False, tcp="not held", held=False)]
+        out = run_viewer_fn(self, "sourceTable", [rows, "8.8.8.8"], deps=("escapeHtml",))
+        for word in ("yes", "tcp only", "not held"):
+            with self.subTest(word=word):
+                self.assertIn(word, out)
+
     def test_an_address_the_kernel_will_not_bind_is_a_different_fault(self):
         """A bind that fails before a packet leaves is the address not being
         here - an instance that is not present, or a partner holding it - and
@@ -15871,9 +15903,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1011),
-            "compressed": (len(gzip.compress(raw, 9)), 305),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 212),
+            "on disk": (len(raw), 1013),
+            "compressed": (len(gzip.compress(raw, 9)), 306),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 213),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

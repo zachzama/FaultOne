@@ -1096,16 +1096,28 @@ function sourceTable(rows, target){
   rows = rows || [];
   if(rows.length < 2) return '';
   const cell = (r, key, suffix) => r[key] == null ? '-' : escapeHtml(String(r[key])) + (suffix || '');
-  const body = rows.map(r => `<tr class="${r.reached ? '' : 'no'}">`
+  // Four answers, not two. This column read the ping alone, so on a path
+  // filtering ICMP every row went red while the finding underneath said those
+  // addresses reached over TCP - one screen saying both. "not held" is a
+  // different thing again: the kernel refused the bind, so nothing was
+  // measured from that address rather than measured and failed.
+  const out = r => r.reached || r.tcp === 'open';
+  const word = r => r.held === false ? 'not held'
+    : r.reached ? (r.tcp == null || r.tcp === 'open' ? 'yes' : 'ping only')
+    : (r.tcp === 'open' ? 'tcp only' : 'no');
+  const body = rows.map(r => `<tr class="${r.held === false ? 'warn' : out(r) ? '' : 'no'}">`
     + `<td>${escapeHtml(r.address)}</td>`
     + `<td>${escapeHtml(r.interface || '-')}</td>`
-    + `<td>${r.reached ? 'yes' : 'no'}</td>`
+    + `<td>${escapeHtml(word(r))}</td>`
     + `<td class="num">${cell(r, 'loss_pct', '%')}</td>`
     + `<td class="num">${cell(r, 'avg_ms', ' ms')}</td></tr>`).join('');
-  const failed = rows.filter(r => !r.reached).map(r => r.address);
-  const note = !failed.length
+  const absent = rows.filter(r => r.held === false).map(r => r.address);
+  const failed = rows.filter(r => r.held !== false && !out(r)).map(r => r.address);
+  const note = absent.length && !failed.length
+    ? absent.join(', ') + ' is not configured here, so nothing was measured from it'
+    : !failed.length
     ? 'every address this box holds can reach the target'
-    : failed.length < rows.length
+    : failed.length < rows.length - absent.length
       ? failed.join(', ') + ' reaches nothing while its neighbours do'
       : 'no address on this box can reach the target, so this is the target rather than the addressing';
   return `<table class="srcs"><tr><th>address</th><th>interface</th>`

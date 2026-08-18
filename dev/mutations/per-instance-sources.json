@@ -28,5 +28,20 @@
   "label": "one address on an interface counts as every address on it",
   "old": "if i not in fine and len(hurt[i]) > 1)",
   "new": "if i not in fine)"
+ },
+ {
+  "label": "the table reads the ping alone again",
+  "old": "                f\"{_reaches_word(row):<11}{loss:>6}{avg:>12}\",",
+  "new": "                f\"{('yes' if row.get('reached') else 'no'):<11}{loss:>6}{avg:>12}\","
+ },
+ {
+  "label": "an unbindable address is listed as unreachable in the table",
+  "old": "        absent = [r[\"address\"] for r in matrix if r.get(\"held\") is False]",
+  "new": "        absent = []"
+ },
+ {
+  "label": "the page reads the ping alone again",
+  "old": "    + `<td>${escapeHtml(word(r))}</td>`",
+  "new": "    + `<td>${r.reached ? 'yes' : 'no'}</td>`"
  }
 ]

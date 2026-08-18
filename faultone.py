@@ -18509,16 +18509,28 @@ function sourceTable(rows, target){
   rows = rows || [];
   if(rows.length < 2) return '';
   const cell = (r, key, suffix) => r[key] == null ? '-' : escapeHtml(String(r[key])) + (suffix || '');
-  const body = rows.map(r => `<tr class="${r.reached ? '' : 'no'}">`
+  // Four answers, not two. This column read the ping alone, so on a path
+  // filtering ICMP every row went red while the finding underneath said those
+  // addresses reached over TCP - one screen saying both. "not held" is a
+  // different thing again: the kernel refused the bind, so nothing was
+  // measured from that address rather than measured and failed.
+  const out = r => r.reached || r.tcp === 'open';
+  const word = r => r.held === false ? 'not held'
+    : r.reached ? (r.tcp == null || r.tcp === 'open' ? 'yes' : 'ping only')
+    : (r.tcp === 'open' ? 'tcp only' : 'no');
+  const body = rows.map(r => `<tr class="${r.held === false ? 'warn' : out(r) ? '' : 'no'}">`
     + `<td>${escapeHtml(r.address)}</td>`
     + `<td>${escapeHtml(r.interface || '-')}</td>`
-    + `<td>${r.reached ? 'yes' : 'no'}</td>`
+    + `<td>${escapeHtml(word(r))}</td>`
     + `<td class="num">${cell(r, 'loss_pct', '%')}</td>`
     + `<td class="num">${cell(r, 'avg_ms', ' ms')}</td></tr>`).join('');
-  const failed = rows.filter(r => !r.reached).map(r => r.address);
-  const note = !failed.length
+  const absent = rows.filter(r => r.held === false).map(r => r.address);
+  const failed = rows.filter(r => r.held !== false && !out(r)).map(r => r.address);
+  const note = absent.length && !failed.length
+    ? absent.join(', ') + ' is not configured here, so nothing was measured from it'
+    : !failed.length
     ? 'every address this box holds can reach the target'
-    : failed.length < rows.length
+    : failed.length < rows.length - absent.length
       ? failed.join(', ') + ' reaches nothing while its neighbours do'
       : 'no address on this box can reach the target, so this is the target rather than the addressing';
   return `<table class="srcs"><tr><th>address</th><th>interface</th>`
@@ -19548,15 +19560,26 @@ def _render_services(report, out, tint, width):
                 addr = addr[:addr_w - 1] + "…"
             loss = "-" if row.get("loss_pct") is None else f"{row['loss_pct']}%"
             avg = "-" if row.get("avg_ms") is None else f"{row['avg_ms']:.1f} ms"
-            line = (f"  {addr:<{addr_w}}  {(row.get('interface') or '-'):<10}"
-                    f"{('yes' if row.get('reached') else 'no'):<11}{loss:>6}{avg:>12}")
-            out.append(tint(line, "ok" if row.get("reached") else "critical"))
+            # This column read the ping alone, which on a path filtering ICMP
+            # printed "no" in red against every address while the finding under
+            # it said those same addresses reached over TCP. One screen, two
+            # answers. It says which question was answered instead.
+            out.append(tint(
+                f"  {addr:<{addr_w}}  {(row.get('interface') or '-'):<10}"
+                f"{_reaches_word(row):<11}{loss:>6}{avg:>12}",
+                _reaches_tint(row)))
         # One sentence under the rows, because a table of three yeses is a
         # measurement and not yet a reading.
-        unreachable = [r["address"] for r in matrix if not r.get("reached")]
+        absent = [r["address"] for r in matrix if r.get("held") is False]
+        unreachable = [r["address"] for r in matrix
+                       if r.get("held") is not False and not _source_got_out(r)]
+        if absent:
+            out.append(f"  -> {', '.join(absent[:3])} {'is' if len(absent) == 1 else 'are'} "
+                       f"not configured here, so nothing was measured from "
+                       f"{'it' if len(absent) == 1 else 'them'}")
         if not unreachable:
             out.append("  -> every address this box holds can reach the target")
-        elif len(unreachable) < len(matrix):
+        elif len(unreachable) < len(matrix) - len(absent):
             out.append(f"  -> {', '.join(unreachable[:3])} reaches nothing while its "
                        f"neighbours do")
         else:
@@ -19619,6 +19642,31 @@ def _render_comparison(report, out, tint, width):
             out.append(tint(line, {"worse": "warning", "better": "ok"}.get(c["direction"], "ok")))
 
     out.append("")
+
+def _source_got_out(row):
+    """Did this address reach the target, by either question asked of it."""
+    return bool(row.get("reached")) or row.get("tcp") == "open"
+
+
+def _reaches_word(row):
+    """What the table says in the reaches column.
+
+    Four answers, not two. "tcp only" is the one that matters on these boxes:
+    ICMP filtered and a handshake completing is a working address, and printing
+    "no" for it is the table disagreeing with the finding underneath.
+    """
+    if row.get("held") is False:
+        return "not held"
+    if row.get("reached"):
+        return "yes" if row.get("tcp") in (None, "open") else "ping only"
+    return "tcp only" if row.get("tcp") == "open" else "no"
+
+
+def _reaches_tint(row):
+    if row.get("held") is False:
+        return "warning"
+    return "ok" if _source_got_out(row) else "critical"
+
 
 def render_text_report(report, color=False, width=None):
     """Render a diagnosis as plain text for a terminal. Returns a string."""

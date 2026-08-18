@@ -7,6 +7,35 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
+## Settled: what a mutation being caught by one test does and does not mean
+
+The whole set ran on 2026-08-18: **33 mutations, 0 survived, control clean.**
+The first time it has gone through in one pass.
+
+Ten of the 33 are held by exactly one test each. All ten were checked and all
+ten are behavioural - they call the tool and assert on what comes back, not the
+"a string appears in VIEWER_TEMPLATE" shape this project has been wrong about
+three times. A single assertion is not a weak assertion.
+
+**One real gap came out of asking a different question.** Not "is the test
+strong" but "does the rule reach the reader". Replacing `annotation_means(f)`
+with the raw flag was caught only by `nothing_is_defined_and_never_used` - a
+structural test that fired because the function became unused, and would not
+have fired had anything else still called it. Nothing asserted that a report
+says "administratively prohibited" rather than "!X". It does now, on the
+message rather than on the function.
+
+**And a measurement that is not a defect.** 21 of 24 vocabulary phrases never
+appear in any scenario's message. That is inherent to a lookup table:
+`TRACE_ANNOTATIONS` has nine entries and only the three in `TRACE_PROHIBITED`
+are ever rendered in words, and `CHECK_MEANS` surfaces one status per run. A
+scenario per enum member would be corpus bloat for no signal. Recorded so
+nobody reads the same number later as twenty-one holes.
+
+The rule worth carrying: **a vocabulary being complete, and a vocabulary
+reaching the page, are two different tests.** The AS numbers shipped correct
+and invisible on forty pages for a week for the same reason.
+
 ## Settled: the two long functions, split along seams that were already there
 
 `diagnose` was 451 lines and `_check_path` 388, and every ordering mistake this

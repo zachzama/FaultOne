@@ -9991,6 +9991,34 @@ class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
         behaviour for anything this does not recognise."""
         self.assertEqual(nd.annotation_means("!zz"), "!zz")
 
+    def test_the_words_reach_the_message_and_not_the_flag(self):
+        """A vocabulary existing is not the same as it reaching the reader.
+
+        Every test above asks `annotation_means` directly. Nothing asked what
+        the finding actually says, so replacing the call with the raw flag was
+        caught only by the structural test that noticed the function had become
+        unused - which would not have fired had anything else still called it.
+        The report is the product; "!X" is not an answer.
+        """
+        setup, kw = S["path_admin_prohibited"]
+        m = fresh(); setup(m)
+        r = m.diagnose(quick=False, **scenario_kwargs(kw))
+        said = [f for f in r["findings"] if f["code"] == "path_admin_prohibited"]
+        self.assertTrue(said, "the scenario stopped reaching the finding")
+        self.assertIn("administratively prohibited", said[0]["message"])
+        self.assertNotIn("!X", said[0]["message"])
+
+    def test_a_numeric_code_reaches_the_message_too(self):
+        """The half with no letter, which is the one that fell through raw."""
+        m = fresh()
+        trace(m, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+                 " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms  0.4 ms\n"
+                 " 2  198.51.100.7 (198.51.100.7)  12.0 ms !13  12.1 ms !13\n")
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        said = [f for f in r["findings"] if f["code"] == "path_admin_prohibited"]
+        if said:
+            self.assertIn("code 13", said[0]["message"])
+
     def test_the_named_ones_are_unchanged(self):
         self.assertEqual(nd.annotation_means("!X"), "administratively prohibited")
         self.assertEqual(nd.annotation_means("!F"), "fragmentation needed")

@@ -79,6 +79,7 @@ the suite. Run it when you tag.
 python3 dev/release.py 1.7.0 --notes-file notes.md            # bump, test, commit, tag
 python3 dev/release.py 1.7.0 --notes-file notes.md --push     # ...and ship it
 python3 dev/release.py 1.7.0 --notes-file notes.md --dry-run  # print the plan
+python3 dev/release.py --self-test                            # check the CI gate
 ```
 
 `git push --follow-tags` creates a tag and nothing else. A GitHub Release is a
@@ -87,10 +88,24 @@ and notifies watchers. Nine tags shipped without a Release before anyone
 noticed, so the Releases page went on showing a version eight releases behind
 while every tag was correct.
 
-It bumps the version in **both** places that carry it, runs the suite **before**
-committing, and reverts the bump if the suite fails, so a release that cannot
-pass its own tests never reaches a tag, then commits, tags, and with `--push`
-pushes and publishes the Release together. Publishing together is the point:
+It bumps the version in **both** places that carry it, runs the checks
+**before** committing, and reverts the bump if any of them fails, so a release
+that cannot pass its own tests never reaches a tag, then commits, tags, and with
+`--push` pushes and publishes the Release together.
+
+The checks are the suite **and** `deep_e2e.py`, `audit.py` and `counts.py
+--check`, because the suite is not all of them. The audit holds every finding
+and five hundred combinations of them to the rules that only exist *between*
+findings, and nothing in the suite checks those - so it went red and stayed red
+through three releases, each of which this gate waved past after asking the
+suite alone. They cost under two seconds together.
+
+Then it asks GitHub whether the commit being released *from* is green, and
+refuses to cut if it is not. Everything above runs here, on one machine, on one
+Python, and none of the four jobs CI runs is this one: "it passed locally" is a
+statement about a Mac. A commit CI has never seen is not a pass either, which is
+the case a cut from unpushed work lands in. `--no-ci-check` is there for working
+offline and is meant to be mentioned in the notes when it is used. Publishing together is the point:
 doing the second half separately is what got forgotten nine times.
 
 With `--push` it also sets the GitHub About box from `REFERENCE.md`, because

@@ -2204,8 +2204,9 @@ rather than leaving you to wonder why a measurement moved.
 ## Versioning
 
 Releases are cut with `python3 dev/release.py <version> --push`, which bumps the
-version in both files that carry it, runs the suite before committing, tags, and
-publishes the GitHub Release in the same step. That last part is why the script
+version in both files that carry it, runs the suite and the `dev/` harnesses
+before committing, refuses to cut unless CI is green on the commit being
+released from, tags, and publishes the GitHub Release in the same step. That last part is why the script
 exists: `git push --follow-tags` creates a tag and nothing else, so nine tagged
 versions once shipped with no Release and the Releases page kept showing one
 from eight releases back.

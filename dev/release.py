@@ -6,6 +6,7 @@
     python3 dev/release.py 1.7.0 --notes-file notes.md            # local only
     python3 dev/release.py 1.7.0 --notes-file notes.md --push     # and ship it
     python3 dev/release.py 1.7.0 --notes-file notes.md --dry-run  # show the plan
+    python3 dev/release.py --self-test                            # check the CI gate
 
 Why this exists: `git push --follow-tags` creates a tag and nothing else. A
 GitHub Release is a separate object built on top of one, and it is what drives
@@ -19,6 +20,7 @@ pass it, the push and the Release happen together - which is the whole point,
 since forgetting the second half is the failure this replaces.
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -28,6 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "zachzama/FaultOne"
 TOOL = os.path.join(ROOT, "faultone.py")
 REFERENCE = os.path.join(ROOT, "REFERENCE.md")
+LOOK_BACK = 30      # runs of history to search for the commit being released
 
 
 def run(cmd, dry=False, capture=False):
@@ -48,6 +51,45 @@ def current_version():
     if not m:
         sys.exit("no __version__ in faultone.py")
     return m.group(1)
+
+
+def what_ci_said(sha):
+    """('ok'|'bad'|'unknown', sentence) for the run CI made on `sha`.
+
+    The checks above this one all run here, on one machine, on one Python. CI
+    runs four jobs the tool is meant to work on and this machine is none of
+    them - so "it passed locally" is a statement about a Mac, and three
+    releases were cut on it while every job was red. The suite passed here each
+    time, which is what made it invisible.
+
+    Unknown is its own answer and not a pass. A commit CI has never seen has
+    never been checked on anything but this machine, which is the case a cut
+    from unpushed work lands in.
+    """
+    try:
+        out = subprocess.run(
+            ["gh", "run", "list", "--limit", str(LOOK_BACK), "--json",
+             "headSha,conclusion,status,workflowName"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "unknown", f"could not ask GitHub ({e})"
+    if out.returncode != 0:
+        return "unknown", "could not ask GitHub: " + (out.stderr.strip() or "gh failed")
+    runs = [r for r in json.loads(out.stdout or "[]") if r.get("headSha") == sha]
+    if not runs:
+        # LOOK_BACK is the window, so this means "not in recent history"
+        # rather than "never ran". For a cut from the tip, which is the only
+        # thing this is ever asked about, they are the same sentence.
+        return "unknown", f"no CI run for {sha[:9]} in the last {LOOK_BACK} runs"
+    pending = [r for r in runs if r.get("status") != "completed"]
+    if pending:
+        return "unknown", f"CI is still running on {sha[:9]}"
+    bad = [r for r in runs if r.get("conclusion") != "success"]
+    if bad:
+        return "bad", "%s on %s: %s" % (
+            ", ".join(sorted({r["workflowName"] for r in bad})), sha[:9],
+            ", ".join(sorted({r["conclusion"] or "?" for r in bad})))
+    return "ok", f"CI is green on {sha[:9]}"
 
 
 def bump(new, old, dry=False):
@@ -78,6 +120,10 @@ def main():
     ap.add_argument("--push", action="store_true",
                     help="push the branch and tag, then publish the Release")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and stop")
+    ap.add_argument("--no-ci-check", action="store_true",
+                    help="cut without asking GitHub whether the commit being "
+                         "released from is green. For working offline; say so "
+                         "in the notes if you use it")
     args = ap.parse_args()
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
@@ -106,6 +152,21 @@ def main():
         sys.exit(f"the working tree is not clean:\n{dirty}\n"
                  f"commit the work first - this cuts a release, it does not write one")
 
+    # Asked before anything is bumped, so a red tree stops with the tree
+    # untouched. The commit checked is the one being released *from*: a release
+    # adds a version bump and a redrawn hero on top of it, and CI cannot have
+    # seen a commit that does not exist yet.
+    if args.no_ci_check:
+        print("not asking GitHub about CI (--no-ci-check)")
+    else:
+        head = run(["git", "rev-parse", "HEAD"], capture=True).strip()
+        state, said = what_ci_said(head)
+        print(f"asking GitHub about CI\n  {said}")
+        if state != "ok" and not args.dry_run:
+            sys.exit(f"not cutting a release on this: {said}\n"
+                     f"push and wait for it, fix it, or pass --no-ci-check if "
+                     f"you are working offline and mean it")
+
     if finishing:
         print(f"{tag} is cut already - pushing and publishing it")
     else:
@@ -129,14 +190,26 @@ def main():
             for line in drawn.stdout.splitlines():
                 print("  " + line)
 
-    # Before the commit, not after. A release that fails its own suite should
+    # Before the commit, not after. A release that fails its own checks should
     # never reach a tag, and a tag is the one thing here that must not move.
-    print("running the suite")
-    if args.dry_run:
-        print("  would run: python3 test_faultone.py")
-    else:
-        proc = subprocess.run([sys.executable, "test_faultone.py"], cwd=ROOT,
-                              capture_output=True, text=True)
+    #
+    # The suite is not all of them. `dev/audit.py` and `dev/deep_e2e.py` are a
+    # CI job of their own and check rules no test does - the audit holds every
+    # finding and five hundred combinations of them to the invariants that only
+    # exist *between* findings - so they can go red without one test failing.
+    # That is what happened: the audit was broken for three releases and each
+    # of them was cut anyway, because this gate asked the suite and stopped.
+    # They cost under two seconds together, which was never the reason.
+    for what, cmd in (("the suite", [sys.executable, "test_faultone.py"]),
+                      ("dev/deep_e2e.py", [sys.executable, "dev/deep_e2e.py"]),
+                      ("dev/audit.py", [sys.executable, "dev/audit.py"]),
+                      ("dev/counts.py --check",
+                       [sys.executable, "dev/counts.py", "--check"])):
+        print(f"running {what}")
+        if args.dry_run:
+            print(f"  would run: {' '.join(cmd[1:])}")
+            continue
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
         if proc.returncode != 0:
             # Nothing to revert when the bump happened in an earlier run - the
             # commit and the tag are already made. Stopping short of the push
@@ -144,10 +217,12 @@ def main():
             # that matters: a tag that never left this machine can be deleted.
             if not finishing:
                 run(["git", "checkout", "--", "faultone.py", "REFERENCE.md"])
-            sys.exit("the suite failed"
-                     + ("" if finishing else " - the bump has been reverted") + ":\n"
-                     + proc.stderr.strip()[-3000:])
-        print(f"  {proc.stderr.strip().splitlines()[-1]}")
+            said = (proc.stderr.strip() or proc.stdout.strip())[-3000:]
+            sys.exit(f"{what} failed"
+                     + ("" if finishing else " - the bump has been reverted")
+                     + ":\n" + said)
+        last = (proc.stderr.strip() or proc.stdout.strip()).splitlines()
+        print(f"  {last[-1] if last else 'ok'}")
 
     notes = ""
     if args.notes_file:
@@ -214,5 +289,34 @@ def main():
     return 0
 
 
+def self_test():
+    """The CI gate, against runs that really happened.
+
+    Nothing in `dev/` is covered by the suite, and this one decides whether a
+    tag gets cut - so the check that would have stopped three bad releases has
+    to be checked by something. It reads real history rather than a stub,
+    because what it has to get right is GitHub's answer shape.
+
+    b0a8b503 is the commit the whole gate exists for: pushed, red on all four
+    jobs, released from anyway.
+    """
+    cases = [("HEAD", ("ok", "unknown")),         # green, or not yet pushed
+             ("b0a8b5033", ("bad",)),
+             ("0" * 40, ("unknown",))]            # a commit that does not exist
+    bad = 0
+    for ref, allowed in cases:
+        sha = subprocess.run(["git", "rev-parse", ref], cwd=ROOT,
+                             capture_output=True, text=True).stdout.strip() or ref
+        state, said = what_ci_said(sha)
+        ok = state in allowed
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {ref:12} -> {state}: {said}")
+    if bad:
+        print("\nFAILED: the gate does not read CI the way it must")
+        return 1
+    print("\nok: green, red and never-run are three different answers")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(self_test() if "--self-test" in sys.argv else main())

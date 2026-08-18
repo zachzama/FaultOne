@@ -141,52 +141,54 @@ answers the same on every platform.
 scenario found whatever the build box had bound - datagram findings on Windows,
 none here. Stubbed.
 
-**The open part: twenty-six other collectors are still live in `fresh()`.**
-The list is hand-written, which is the staleness `DiagnoseHarness` was fixed for
-by deriving it, and `fresh()` never got that fix. Every scenario in the corpus
-runs through it.
+**The open part: four collectors are still live in `fresh()`.** Twenty-four
+were, and this is what closing most of it looked like.
 
-Two of the twenty-eight are now stubbed, and both were live faults rather than
-tidiness. `_read_load_average` returned the real run queue of whichever machine
-the suite was on, and `_check_cpu_load` fires `cpu_saturated` off load over
-CPUs: pinning it to a saturated box fails **fifty-six tests**, so the corpus was
-one busy build runner away from that, and two finding messages quoted the
-number verbatim. `_read_resolvers` returned this laptop's home router, and the
+Two of them were live faults rather than tidiness. `_read_load_average`
+returned the real run queue of whichever machine the suite was on, and
+`_check_cpu_load` fires `cpu_saturated` off load over CPUs: pinning it to a
+saturated box fails **fifty-six tests**, so the corpus was one busy build
+runner away from that, and two finding messages quoted the number verbatim.
+`_read_resolvers` returned this laptop's home router, and the
 neighbour-inventory fixture only exercised the naming path *because* a resolver
 happened to be configured.
 
-**The earlier claim that blanket-stubbing stops forty-four scenarios firing was
-wrong, and it is worth knowing why.** The blanket stub returned `None`. Almost
-every `_read_*` here returns `{}` on a Mac and its callers do `.get()`, so the
-scenarios were not losing a finding, they were raising `AttributeError`. Blank
-each collector one at a time with the shape it really returns and the picture is
-much smaller. Measured that way, this is the whole of it:
+The other twenty-two answer the way they answer when the file or the tool is
+not there, which is what a Mac already returns - so nothing moved here, and
+Linux was made to agree. That is the whole point. "Changes nothing on this
+machine" is not the same as "changes nothing", and for these two facts it is
+the reason to stub them rather than a reason not to.
 
-| collector | scenarios whose findings change |
+**Two earlier numbers here were wrong, and both were wrong the same way.** The
+claim that blanket-stubbing stops forty-four scenarios firing came from a blank
+that returned `None`; almost every `_read_*` returns `{}` and its callers do
+`.get()`, so those scenarios were raising, not losing a finding. And blanking a
+collector *unconditionally* overwrites the stub a scenario set for itself,
+which counts "this scenario configures the collector" as "this scenario reads
+the host". Measure it by blanking one collector at a time, with the shape it
+really returns, and only where the scenario left it live. Then the whole of
+what is left is:
+
+| collector | scenarios that lean on this machine |
 |---|---|
-| `cmd_kernel_drops`, `_read_kernel_drops` | 28 each |
-| `cmd_tcp_flows` | 22 |
-| `cmd_link_stats` | 14 |
-| `_read_uptime_seconds` | 6 |
-| `cmd_udp_tunnels` | 4 |
-| `cmd_proxy_config` | 3 |
-| `cmd_kernel_log`, `cmd_clock_sync` | 2 each |
-| `cmd_tcp_health`, `cmd_route_to`, `cmd_qdisc`, `cmd_firewall_counters` | 1 each |
-| the seven `/proc` and `/sys` readers, `_read_neigh_table`, `_read_sysfs_names`, `cmd_socket_owners`, `cmd_ethtool`, `_read_text`, `_read_link_drivers_linux` | 0 |
+| `cmd_kernel_drops` | 28 |
+| `cmd_link_stats` | 13 |
+| `cmd_kernel_log` | 2 |
+| `cmd_tcp_health` | 1 |
 
-Everything in the last row can be stubbed today and nothing moves. The rows
-above it are scenarios that lean on the collector rather than saying what they
-mean, and each wants its own fixture - which is the work, and it is a list now
-rather than a number. The script that produces this table is in the session
-scratchpad; it blanks one collector, re-runs all 192 scenarios, and diffs the
-finding codes.
+Those 44 scenarios say what they mean through whatever the build box happens to
+report, and each collector needs a fixture before it can be baselined. That is
+the remaining work, and it is a list now rather than a number.
 
 `fresh()` keeps `AS_WRITTEN`, every collector as the module wrote it, captured
-before anything replaces one. A test of a collector's own behaviour needs the
+before anything replaces one. A test of a collector's *own* behaviour needs the
 real function bound to the copy whose `open` and `OS_NAME` it patched, and
-stubbing a collector takes that away - which it did to
-`test_list_resolvers_says_why_it_found_nothing` immediately. Use it when adding
-each baseline.
+stubbing the collector takes that away - which it did to fifteen tests at once.
+Each of them names the collector it is testing now, which is an improvement on
+receiving it by accident. Use `AS_WRITTEN` when baselining the last four.
+
+The script that produced the table is in the session scratchpad: it blanks one
+collector, re-runs all 192 scenarios, and diffs the finding codes.
 
 ```bash
 python3 - <<'EOF'

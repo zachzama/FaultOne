@@ -9510,6 +9510,9 @@ class TestNamingTheProcessBehindASocket(unittest.TestCase):
     # ---- the readers are tried in order of how much they say --------------
 
     def stub_commands(self, mod, available, outputs):
+        # The collector itself, not the baseline fresh() puts over it. This
+        # class exists to test which command it reaches for and in what order.
+        mod.cmd_socket_owners = mod.AS_WRITTEN["cmd_socket_owners"]
         seen = []
         mod.which = lambda c: c in available
         mod.OS_NAME = "Linux"
@@ -14307,6 +14310,7 @@ class TestProxyScale(unittest.TestCase):
 
     def collect(self, n):
         mod = fresh()
+        mod.cmd_tcp_flows = mod.AS_WRITTEN["cmd_tcp_flows"]
         text = self.table(n)
         mod.OS_NAME = "Linux"
         mod.which = lambda c: c == "ss"
@@ -20297,6 +20301,31 @@ def fresh():
     # resolvers" should look like.
     mod._read_resolvers = lambda with_reason=False: (
         ([], "not stubbed by this scenario") if with_reason else [])
+    # Collectors no scenario configures, which every scenario runs through.
+    # Each answers the way it answers when the file or the tool is not there -
+    # which is what a Mac already returns, so nothing moves here and Linux is
+    # made to agree. That is the whole point: what the suite concludes must not
+    # depend on the box it runs on, and every CI failure in the last week came
+    # from one of these.
+    #
+    # Four are deliberately not here. cmd_kernel_drops, cmd_link_stats,
+    # cmd_kernel_log and cmd_tcp_health have scenarios that lean on this
+    # machine's answer instead of saying what they mean - 44 between them - and
+    # each needs a fixture written before it can be baselined. See HANDOVER.md.
+    for _name in ("cmd_udp_tunnels", "cmd_tcp_flows", "cmd_socket_owners",
+                  "cmd_route_to", "cmd_qdisc", "cmd_proxy_config",
+                  "cmd_firewall_counters", "cmd_ethtool", "cmd_clock_sync"):
+        setattr(mod, _name, (lambda n: lambda *a, **k: {
+            "ok": False, "cmd": n, "applicable": False,
+            "error": "not stubbed by this scenario"})(_name))
+    for _name in ("_read_thermal_throttle", "_read_softnet", "_read_conntrack",
+                  "_read_snmp_counters_linux", "_read_server_limits",
+                  "_read_orphans", "_read_listen_drops", "_read_neigh_table",
+                  "_read_kernel_drops", "_read_link_drivers_linux"):
+        setattr(mod, _name, lambda *a, **k: {})
+    mod._read_sysfs_names = lambda *a, **k: []
+    mod._read_uptime_seconds = lambda *a, **k: None
+    mod._read_text = lambda *a, **k: None
     # The kernel's own answer to "which address would this box leave from".
     # It sends nothing - connect() on a datagram socket fixes a destination
     # rather than transmitting - but the answer comes from this machine's
@@ -22047,6 +22076,7 @@ class TestPerFlowTcp(unittest.TestCase):
         """`stdout` present but None - the key exists, so .get's default never
         fires and every string operation after it is on None."""
         mod = fresh()
+        mod.cmd_tcp_flows = mod.AS_WRITTEN["cmd_tcp_flows"]
         mod.OS_NAME = "Linux"
         mod.which = lambda c: True
         mod.run = lambda cmd, timeout=15, limit=None: {"ok": True, "cmd": "ss", "stdout": None,
@@ -22068,6 +22098,7 @@ class TestPerFlowTcp(unittest.TestCase):
         """ss -tin runs ~430 bytes a socket and names every peer. Storing it raw
         would add ~86KB to a 200-socket report; the digest is a few hundred."""
         mod = fresh()
+        mod.cmd_tcp_flows = mod.AS_WRITTEN["cmd_tcp_flows"]
         big = SS_HEADER + "".join(ss_flow(f"203.0.113.{i}", sent=5_000_000, retrans=0)
                                   for i in range(200))
         mod.OS_NAME = "Linux"
@@ -22082,6 +22113,7 @@ class TestPerFlowTcp(unittest.TestCase):
     def test_the_collector_is_absent_rather_than_failing_off_linux(self):
         """A check that can't run is never reported as a fault."""
         mod = fresh()
+        mod.cmd_tcp_flows = mod.AS_WRITTEN["cmd_tcp_flows"]
         mod.OS_NAME = "Darwin"
         res = mod.cmd_tcp_flows()
         self.assertFalse(res["ok"])
@@ -22397,6 +22429,7 @@ class TestEveryFindingFires(unittest.TestCase):
         """A check that cannot run is never reported as a fault - and a clock
         nobody asked about must not read as a clock that is fine."""
         mod = fresh()
+        mod.cmd_clock_sync = mod.AS_WRITTEN["cmd_clock_sync"]
         mod.which = lambda c: False
         res = mod.cmd_clock_sync()
         self.assertFalse(res["ok"])
@@ -22776,6 +22809,7 @@ class TestEveryFindingFires(unittest.TestCase):
         import io
         mod.open = lambda path, *a, **k: (io.StringIO(rows) if "stat/nf_conntrack" in path
                                           else io.StringIO("100"))
+        mod._read_conntrack = mod.AS_WRITTEN["_read_conntrack"]
         got = mod._read_conntrack()
         self.assertEqual(got["ct_insert_failed"], 0xa + 0x6)   # summed across CPUs
         self.assertEqual(got["ct_drop"], 0x5 + 0x1)
@@ -23191,6 +23225,7 @@ class TestEveryFindingFires(unittest.TestCase):
         import io
         mod.open = lambda path, *a, **k: (io.StringIO(rows) if "softnet" in path
                                           else io.StringIO(""))
+        mod._read_softnet = mod.AS_WRITTEN["_read_softnet"]
         got = mod._read_softnet()
         self.assertEqual(got["softnet_processed"], 0xffff + 0xf)   # summed across CPUs
         self.assertEqual(got["softnet_dropped"], 0xa + 0x5)

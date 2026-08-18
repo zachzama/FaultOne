@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 188
+difference is which one it puts at the top, and that is the whole product: 189
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1380,11 +1380,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **188** | Distinct conclusions it can reach and state in plain language. 155 are faults; 33 are context, like which switch port you're on. |
-| **Ranked causes** | **155** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1679 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **189** | Distinct conclusions it can reach and state in plain language. 156 are faults; 33 are context, like which switch port you're on. |
+| **Ranked causes** | **156** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1689 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 188 findings are the useful figure** if you want to know what the tool can
+**The 189 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2185,7 +2185,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1679 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1689 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2241,6 +2241,8 @@ can say what the bar was rather than "the tool said so".
 | `UDP_DROP_PCT` | **1.0** | share of arriving datagrams this box failed to take delivery of. UDP has no retransmission and no window, so a datagram dropped at the socket is gone and the sender is never told. A share rather than a count per minute, because ten a minute means nothing without knowing whether ten thousand or ten million arrived |
 | `UDP_DROP_FLOOR` | **10** | and enough of them for the share to be a share. Netdata alerts on more than ten of these a minute with no share at all - a receive-buffer overflow is never routine, unlike a discard, so a small absolute count already means something and the share is what stops a busy box reporting its own noise |
 | `CONTROL_PLANE_MAX_SESSIONS` | **8** | how many outbound connections a box can hold and still be forwarding rather than proxying. A control plane is a handful of long-lived sessions to the service the box enrols with; a proxy opens one per piece of work and has a population. The number only has to separate those two shapes, and anything between a handful and a population would do - it is set where a box with redundant control sessions still reads as a broker. Log shipping is counted out before this is applied: those sessions are neither, and a box shipping to a collector used to cross the bar on them alone and stop being recognised as a broker |
+| `LOAD_PER_CPU_WARN` | **2.0** | how deep the run queue has to be, per CPU, before this box's own load is offered as the reason something is slow. Higher than the 1.0 the context sentence beside it uses, and deliberately: that one only qualifies somebody else's finding - *the limit you hit is a setting, not a shortage* - where this is the finding, and a box at exactly one runnable task per CPU is fully used rather than in trouble. At two, work has been waiting as long as it has been running |
+| `LOAD_PER_CPU_BAD` | **8.0** | four times subscribed, where the wait dominates and every timing this tool takes is measuring the queue for a processor rather than the network. Above this the finding is critical rather than a warning |
 | `LOCAL_QUEUE_STANDING_PKTS` | **64** | how many packets have to be sitting in this box's own egress queue before the queue is the story rather than ordinary bursting. A queue exists to hold a burst, so a handful waiting is it working; a standing backlog is traffic being delayed here long enough for the connections above it to see it. Set where an `fq_codel` default of 10240 is plainly not coping rather than where it is merely busy. This is the one reading that turns a latency symptom into a cause: without it the report says traffic is being held up and which way it was going, and names the delay itself as the answer |
 | `ASYMMETRIC_HOP_GAP` | **2** | how far the hop count out and the hop count back have to differ before the path is called asymmetric. The two are not measured the same way - one is walked hop by hop, the other inferred from the TTL of a single reply against an assumed starting value - so an off-by-one falls out of the method without anything being wrong. Two is a different route |
 | `CLOSER_THAN_PATH_PCT` | **40** | how much of the round trip a TCP handshake can take and still have plausibly made it. Below this share something nearer than the target answered. Generous on purpose: a legitimate cache or edge node really is closer than the name it serves, and the claim is only that something closer replied |
@@ -3708,7 +3710,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1679 tests, no dependencies, no network, a few seconds, so they run
+1689 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3787,7 +3789,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 188 findings with readable rules instead of
+> way out - and who owns it. Ranks 189 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

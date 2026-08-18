@@ -3189,6 +3189,99 @@ def worst_local_queue(raw):
 LOCAL_QUEUE_STANDING_PKTS = 64
 
 
+#: Run-queue depth per CPU before this box's own load is worth reporting as the
+#: reason something is slow. Higher than the 1.0 the context sentence above
+#: uses, and deliberately: that one only qualifies somebody else's finding -
+#: "the limit is a setting, not a shortage" - where this one *is* the finding,
+#: and a box sitting at exactly one runnable task per CPU is fully used rather
+#: than in trouble. At two, work has been waiting as long as it has been
+#: running.
+LOAD_PER_CPU_WARN = 2.0
+#: Four times subscribed. Past here the wait dominates and every timing this
+#: tool measures is measuring the queue for a CPU rather than the network.
+LOAD_PER_CPU_BAD = 8.0
+
+
+def _check_cpu_load(findings):
+    """This box being too busy to keep up, said as a cause.
+
+    The last of the readings that were collected and thrown away. The load
+    average has been read on every run and spent on one sentence inside other
+    findings' messages, and only ever to rule the box *out* - "the load is 0.2,
+    so the limit you hit is a setting rather than a shortage". When the load was
+    the shortage, nothing in the report could say so.
+
+    That is the same shape as the egress queue before `queue_standing_here`, and
+    it is the last case the X.733 audit finds: `cpuCyclesLimitExceeded` was a
+    cause with no finding behind it while the number sat in `cmd_kernel_drops`
+    output.
+
+    Layer 1 because it is the machine rather than any part of the network, which
+    puts it under every timing finding and lets it explain them instead of
+    arriving as a second opinion beside them.
+
+    **What the number is and is not.** On Linux the load average counts tasks in
+    uninterruptible sleep as well as runnable ones, so a box blocked on a disk
+    reads as loaded while its CPUs idle. That is why this reports a run queue
+    rather than a busy processor, and why the message says to look at what is
+    running rather than asserting the CPU is the bottleneck. `/proc/pressure/cpu`
+    would separate the two and is not read here - it is Linux 4.20 and later,
+    needs CONFIG_PSI, and would be a new collection for a sharper version of an
+    answer this already gives.
+    """
+    # A busy box is not a fault, and that rule is older than this finding: a
+    # proxy at capacity doing exactly what it was bought for must not be
+    # reported as broken. What was missing was never a load alarm - it was a
+    # cause for the timings that already had none, so this speaks only when
+    # there is something for it to explain and stays silent otherwise.
+    #
+    # Read off the X.733 class rather than a second hand-kept list of codes,
+    # which is the first thing that vocabulary has been asked to do beyond
+    # being counted.
+    explainable = [f for f in findings
+                   if FINDING_CLASS.get(f.get("code"), (None,))[0] == "qualityOfServiceAlarm"]
+    if not explainable:
+        return
+    load1, cpus = _read_load_average()
+    # Without a CPU count the ratio means nothing: 8.0 is idle on a 64-way box
+    # and hopeless on one core. Absent, this says nothing rather than guessing.
+    if load1 is None or not cpus:
+        return
+    per_cpu = load1 / cpus
+    # Written as the condition for firing rather than as a guard against it,
+    # the same way the queue below is, so the bar reads the way the reference
+    # states it and a run queue of exactly this depth is one that counts.
+    saturated = per_cpu >= LOAD_PER_CPU_WARN
+    if not saturated:
+        return
+    findings.append({
+        "severity": "critical" if per_cpu >= LOAD_PER_CPU_BAD else "warning",
+        "layer": 1,
+        "code": "cpu_saturated",
+        # The timings this is answering for. Named because this finding is
+        # built out of other findings, and one that does not declare its inputs
+        # can be corroborated by them - the report then agrees with itself and
+        # counts that as evidence.
+        "derived_from": sorted({f["code"] for f in explainable}),
+        "message": (
+            f"The run queue on this box is {per_cpu:.1f} deep per CPU - a load "
+            f"average of {load1:.2f} across {cpus} CPU(s). Work is waiting for a "
+            f"processor, and everything this tool times is timed by a process "
+            f"that has to be scheduled before it can answer: latency measured "
+            f"from here, the interface queue draining, packets taken off the "
+            f"NIC. A slow path and a busy box look identical from a socket, and "
+            f"this is the second one. "
+            + ("The delay reported here is a timing taken that way. "
+               if len(explainable) == 1
+               else f"{len(explainable)} of the timings in this report were taken "
+                    f"that way. ")
+            + f"On Linux this figure also counts tasks "
+            f"waiting on disk, so read it as a queue for the machine rather "
+            f"than proof the CPUs are the thing that is full - check what is "
+            f"running before adding capacity."),
+    })
+
+
 def _check_local_queue(raw, findings):
     """This box holding traffic on the way out, said as a cause.
 
@@ -3913,8 +4006,16 @@ def _read_listen_drops():
     return {}
 
 
-def _load_average():
-    """(one-minute load, CPU count), or (None, 0) where that isn't readable."""
+def _read_load_average():
+    """(one-minute load, CPU count), or (None, 0) where that isn't readable.
+
+    Named `_read_` like every other host read, which is not cosmetic: the suite
+    derives what to stub from that prefix, and this sat outside it for as long
+    as it only fed a sentence. The moment it fed a finding, six harness tests
+    began reading the load of whatever machine they ran on - the exact flake
+    the naming prevents, caught by the process seal in the same session rather
+    than by a strange failure weeks later.
+    """
     try:
         return os.getloadavg()[0], (os.cpu_count() or 0)
     except (OSError, AttributeError):
@@ -3930,7 +4031,7 @@ def _load_context():
     and that is a different fix, in a different file, often by a different
     person.
     """
-    load1, cpus = _load_average()
+    load1, cpus = _read_load_average()
     if load1 is None:
         return ""
     if not cpus:
@@ -4362,7 +4463,7 @@ def cmd_kernel_drops(sample_seconds=0, baseline=None):
     if delta:
         lines.append(f"during sample : {delta.get('softnet_dropped', 0)} backlog, "
                      f"{delta.get('ListenOverflows', 0)} accept-queue")
-    load1, cpus = _load_average()
+    load1, cpus = _read_load_average()
     if load1 is not None:
         lines.append(f"load average  : {load1:.2f}" + (f" across {cpus} CPU(s)" if cpus else ""))
     return {"ok": True, "cmd": "/proc/net/softnet_stat + /proc/net/netstat",
@@ -7466,6 +7567,13 @@ VERDICT_RULES = [
      "Two unhealthy sides usually means two faults with different owners. This "
      "is the case where it does not: a single router both directions run "
      "through. Fixing it is expected to move both."),
+    ("cpu_saturated", "this box's own capacity, not the network",
+     "This box does not have the processor time to keep up",
+     "Every measurement in this report was taken by a process that had to wait "
+     "for a CPU, so a slow answer here is this box being busy rather than a "
+     "slow path. Find what is running before adding capacity - on Linux this "
+     "number counts tasks waiting on disk too, so a box blocked on storage "
+     "reads the same way."),
     ("queue_standing_here", "this box's own egress queue, not the path beyond it",
      "Traffic is waiting in this box's own interface queue before it leaves",
      "Every round trip measured from here carries that wait and reads as a slow "
@@ -8349,6 +8457,7 @@ FINDING_SIDE.update({
     # On both paths, so it faces both ways - which is what "local" means
     # here, and is why it can explain findings on either side.
     "shared_hop_degraded": "local",
+    "cpu_saturated": "local",
     "queue_standing_here": "local",
     # Named per side by its scope; the finding itself is about a route
     # that leaves one way and comes back another, which faces both.
@@ -8510,7 +8619,7 @@ STAGE_RULES = [
       "collisions", "link_errors_historical", "drops_live", "link_saturated",
       "link_busy",
       "optics_rx_marginal", "optics_warning", "link_flapping", "nic_drops_historical",
-      "cpu_throttled_historical", "queue_standing_here"}),
+      "cpu_throttled_historical", "queue_standing_here", "cpu_saturated"}),
     ("address", {"no_ipv4", "no_gateway", "duplicate_ip", "virtual_router_conflict",
                  "target_is_discarded",
                  "source_address_not_held"},
@@ -9366,7 +9475,7 @@ X733_CAUSES = frozenset((
     "applicationSubsystemFailure", "authenticationFailure",
     "bandwidthReduced", "breachOfConfidentiality",
     "configurationOrCustomisationError", "congestion",
-    "connectionEstablishmentError", "corruptData", "degradedSignal",
+    "connectionEstablishmentError", "corruptData", "cpuCyclesLimitExceeded", "degradedSignal",
     "denialOfService", "dteDceInterfaceError",
     "equipmentIdentifierDuplication", "equipmentMalfunction",
     "excessiveErrorRate", "excessiveResponseTime",
@@ -9479,6 +9588,7 @@ FINDING_CLASS = {
 "queuing_delay": ("qualityOfServiceAlarm", "congestion"),
 "queuing_delay_backends": ("qualityOfServiceAlarm", "congestion"),
 "queuing_delay_clients": ("qualityOfServiceAlarm", "congestion"),
+"cpu_saturated": ("processingErrorAlarm", "cpuCyclesLimitExceeded"),
 "queue_standing_here": ("qualityOfServiceAlarm", "queueSizeExceeded"),
 "link_saturated": ("qualityOfServiceAlarm", "bandwidthReduced"),
 "uplink_saturated": ("qualityOfServiceAlarm", "bandwidthReduced"),
@@ -16636,6 +16746,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     trace_each_side(_legs, findings, quick)
     count_the_hops_in(_legs, quick)
     _check_asymmetric_path(_legs, findings)
+    # Last, because it only speaks about findings that already exist.
+    _check_cpu_load(findings)
     _check_shared_hop(_legs, findings)
     # Built again, because the walk above can add findings and the sides are a
     # summary of them. The first pass exists only to decide which peer each

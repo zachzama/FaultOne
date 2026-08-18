@@ -3952,6 +3952,87 @@ class TestThePathSummaryAgreesWithTheFinding(unittest.TestCase):
         self.assertIn("182ms", line)
 
 
+class TestABusyBoxIsNotASlowPath(unittest.TestCase):
+    """The load average was read on every run and spent on one sentence inside
+    other findings' messages, and only ever to rule the box out. When the load
+    was the shortage, nothing in the report could say so - the same shape as the
+    egress queue before `queue_standing_here`, and the last cause the X.733
+    audit found with no finding behind it."""
+
+    def fire(self, load, cpus, alongside="queuing_delay"):
+        """The load, and something for it to account for.
+
+        The second half is not scaffolding. This only speaks where a timing
+        already needs explaining, so a helper that passed an empty list would
+        be testing a path the tool never takes."""
+        mod = fresh()
+        mod._read_load_average = lambda: (load, cpus)
+        findings = [{"code": alongside}] if alongside else []
+        mod._check_cpu_load(findings)
+        return [f for f in findings if f.get("code") == "cpu_saturated"]
+
+    def test_a_busy_box_says_so(self):
+        found = self.fire(12.0, 4)
+        self.assertEqual([f["code"] for f in found], ["cpu_saturated"])
+        self.assertIn("3.0 deep per CPU", found[0]["message"])
+
+    def test_a_busy_box_with_nothing_slow_is_not_a_fault(self):
+        """The rule this finding had to be built around rather than through. A
+        proxy at capacity doing what it was bought for is not broken, and was
+        deliberately excluded from the report long before there was a finding
+        here - so the load speaks only as somebody else's cause."""
+        self.assertEqual(self.fire(99.0, 1, alongside=None), [])
+
+    def test_it_answers_only_for_timings(self):
+        """Gated on the X.733 class rather than a second hand-kept list of
+        codes, so a new latency finding is covered the day it is classified.
+        An expired certificate is not slow and load does not explain it."""
+        self.assertEqual(self.fire(99.0, 1, alongside="tls_expired"), [])
+        self.assertEqual(len(self.fire(99.0, 1, alongside="latency_high")), 1)
+
+    def test_a_box_with_headroom_says_nothing(self):
+        self.assertEqual(self.fire(1.0, 4), [])
+
+    def test_the_ratio_is_per_cpu_and_not_the_raw_number(self):
+        """8.0 is idle on a 64-way box and hopeless on one core. Reading the
+        load without the CPU count is the whole mistake this guards."""
+        self.assertEqual(self.fire(8.0, 64), [])
+        self.assertEqual([f["code"] for f in self.fire(8.0, 1)], ["cpu_saturated"])
+
+    def test_the_bar_is_where_it_is_documented(self):
+        self.assertEqual(self.fire(nd.LOAD_PER_CPU_WARN * 4 - 0.1, 4), [])
+        self.assertEqual(len(self.fire(nd.LOAD_PER_CPU_WARN * 4, 4)), 1)
+
+    def test_four_times_subscribed_is_critical(self):
+        self.assertEqual(self.fire(nd.LOAD_PER_CPU_BAD * 2 - 0.1, 2)[0]["severity"], "warning")
+        self.assertEqual(self.fire(nd.LOAD_PER_CPU_BAD * 2, 2)[0]["severity"], "critical")
+
+    def test_a_box_that_cannot_say_says_nothing(self):
+        """Windows has no getloadavg, and a count of zero makes the ratio
+        meaningless. Neither is a quiet box."""
+        self.assertEqual(self.fire(None, 0), [])
+        self.assertEqual(self.fire(40.0, 0), [])
+
+    def test_it_outranks_the_delay_it_explains(self):
+        """The point of the finding. A busy box and a slow path are identical
+        from a socket, so this has to sit under the timings rather than beside
+        them - ranked below the queue it fills, and above every latency
+        symptom it accounts for."""
+        order = [c for c, *_r in nd.VERDICT_RULES]
+        self.assertLess(order.index("cpu_saturated"), order.index("queuing_delay"))
+        self.assertLess(order.index("cpu_saturated"), order.index("latency_high"))
+        self.assertLess(order.index("cpu_saturated"), order.index("queue_standing_here"))
+
+    def test_the_message_does_not_claim_the_cpus_are_the_thing_that_is_full(self):
+        """Linux counts uninterruptible sleep in the load average, so a box
+        blocked on disk reads as loaded while its processors idle. The finding
+        reports a run queue and says to look, rather than asserting a cause it
+        cannot see from here."""
+        message = self.fire(12.0, 4)[0]["message"]
+        self.assertIn("run queue", message)
+        self.assertIn("waiting on disk", message)
+
+
 class TestEveryFindingHasAKind(unittest.TestCase):
     """Each ranked finding is classified in ITU-T X.733's vocabulary, so the
     188 outcomes can be counted by kind rather than read one at a time.
@@ -15173,9 +15254,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 980),
-            "compressed": (len(gzip.compress(raw, 9)), 295),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 206),
+            "on disk": (len(raw), 986),
+            "compressed": (len(gzip.compress(raw, 9)), 297),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 208),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19000,6 +19081,11 @@ class DiagnoseHarness(unittest.TestCase):
                 setattr(nd, name, self._unavailable(name))
             elif name == "_read_text":
                 setattr(nd, name, lambda *a, **k: None)
+            elif name == "_read_load_average":
+                # Same rule, different shape of nothing: this one answers with
+                # a pair, and (None, 0) is what it returns on a box that will
+                # not say - Windows, or anything without getloadavg.
+                setattr(nd, name, lambda *a, **k: (None, 0))
             else:
                 setattr(nd, name, lambda *a, **k: {})
         # Defaults: a healthy device with nothing optional installed.
@@ -20810,6 +20896,25 @@ def deep_local_queue(nd):
             " Sent 91882361042 bytes 71204418 pkt (dropped 9143, overlimits 0 requeues 118)\n"
             " backlog 2841260b 1904p requeues 118\n")}
 
+@scenario("cpu_saturated")
+def _(nd):
+    """A box with more runnable work than processors, and the delay that comes
+    of measuring anything from it.
+
+    Both, for the reason `queue_standing_here` gives below: a busy box on its
+    own is not a fault and must not be reported as one, so the finding only
+    speaks where there is a timing to account for. With the load alone the
+    capability exists and no report ever shows it.
+
+    `fresh()` blocks `getloadavg` - it reads the machine the suite runs on - so
+    every other scenario leaves this silent, which is the right default and
+    means this one has to put the reading back deliberately."""
+    nd._read_load_average = lambda: (12.0, 4)
+    flows(nd, ss_flow("203.0.113.9", sent=40_000_000, retrans=1000)
+              .replace("rtt:12.4/3.1", "rtt:340.0/3.1")
+              .replace("minrtt:11.9", "minrtt:41.0"))
+
+
 @scenario("queue_standing_here")
 def _(nd):
     """This box's own egress queue holding traffic, and the delay it is causing
@@ -21714,7 +21819,7 @@ class TestEveryFindingFires(unittest.TestCase):
                 with self.subTest(code=code, load=load):
                     setup, kw = S[code]
                     mod = fresh(); setup(mod)
-                    mod._load_average = lambda l=load, c=cpus: (l, c)
+                    mod._read_load_average = lambda l=load, c=cpus: (l, c)
                     report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
                     msg = [f["message"] for f in report["findings"]
                            if f.get("code") == code][0]
@@ -21725,7 +21830,7 @@ class TestEveryFindingFires(unittest.TestCase):
         """Windows has no getloadavg. The finding still stands on its own -
         silence beats a sentence about a number nobody has."""
         mod = fresh()
-        mod._load_average = lambda: (None, 0)
+        mod._read_load_average = lambda: (None, 0)
         self.assertEqual(mod._load_context(), "")
         setup, kw = S["nic_drops_live"]; setup(mod)
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
@@ -21734,9 +21839,15 @@ class TestEveryFindingFires(unittest.TestCase):
         self.assertNotIn("Load average", msg)
         self.assertIn("receive backlog was full", msg)
 
-    def test_load_is_context_not_a_check_of_its_own(self):
-        """A busy box is not a network fault. This never fires on its own -
-        it only qualifies a finding that has already been made.
+    def test_load_is_never_a_fault_on_its_own(self):
+        """A busy box is not a network fault, and that has not changed.
+
+        There is a load-derived finding now - `cpu_saturated`, which names the
+        run queue as the cause of a timing that otherwise had none. It does not
+        weaken this rule, it is built around it: the finding is gated on some
+        other finding already describing something slow, so a box at capacity
+        with nothing failing still reports ok. That is what the assertion below
+        measures, and it is the same assertion as before.
 
         The rule is about *load*, not about the CPU. Thermal throttling is a
         finding, and rightly: it is a count of times the hardware clocked
@@ -21749,14 +21860,14 @@ class TestEveryFindingFires(unittest.TestCase):
                        '"code": "cpu_busy', '"code": "load_'):
             self.assertNotIn(banned, source)
         mod = fresh()
-        mod._load_average = lambda: (99.0, 1)
+        mod._read_load_average = lambda: (99.0, 1)
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertEqual(report["verdict"]["severity"], "ok")
 
     def test_a_busy_box_that_is_not_throttling_reports_nothing_thermal(self):
         """The counters are what fires this, not the load beside them."""
         mod = fresh()
-        mod._load_average = lambda: (99.0, 1)
+        mod._read_load_average = lambda: (99.0, 1)
         kernel_drops(mod, {"core_throttles": 12, "package_throttles": 12},
                           {"core_throttles": 12, "package_throttles": 12})
         codes = [f["code"] for f in mod.diagnose("8.8.8.8", None, quick=False)["findings"]]

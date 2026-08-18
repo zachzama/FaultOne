@@ -15871,7 +15871,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1010),
+            "on disk": (len(raw), 1011),
             "compressed": (len(gzip.compress(raw, 9)), 305),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 212),
         }

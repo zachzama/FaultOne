@@ -5063,73 +5063,18 @@ def _where_that_is(peers):
     return ""
 
 
-def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
-    """Aggregate per-connection statistics into who owns the problem.
+def _split_flows_by_side(out, measurable, listen_ports, lossy, worst):
+    """Which side of this box each connection is on, and what each side is
+    doing.
 
-    `listen_ports` splits the connections into the ones that arrived and the
-    ones this box opened. On a proxy those are two different networks with two
-    different owners - clients out on the internet, backends on an internal
-    segment - and averaging them produced the wrong answer with confidence: a
-    lossy database on 10.0.0.90 came out as "some destinations are losing
-    traffic", owner *the provider or upstream*, which sends someone to argue
-    with a carrier about the inside of their own rack.
+    Only meaningful where the box accepts connections: a local port that is
+    listened on makes a connection inbound, and anything else is one this
+    box opened. Ninety lines of the aggregate above it, and the only part
+    that needs to know what a listening port means - everything else there
+    is arithmetic over the same flows regardless of direction.
+
+    Writes into `out` rather than returning, which is what it did inline.
     """
-    listen_ports = set(listen_ports or ())
-    ssh_peer, ssh_port = _own_ssh_peer()
-    measurable, skipped_own = [], 0
-    for flow in flows:
-        if _flow_is_local(flow["peer"]):
-            continue
-        if flow["peer"] == ssh_peer and flow["peer_port"] == ssh_port:
-            skipped_own += 1
-            continue
-        pct, basis = _flow_loss_pct(flow)
-        if pct is None:
-            continue
-        flow["retrans_pct"], flow["basis"] = pct, basis
-        flow["side"] = ("client" if flow.get("local_port") in listen_ports
-                        else "backend" if listen_ports else None)
-        measurable.append(flow)
-
-    lossy = [f for f in measurable if f["retrans_pct"] >= FLOW_LOSSY_PCT]
-    clean = [f for f in measurable if f["retrans_pct"] < FLOW_LOSSY_PCT]
-    lossy_nets = {_flow_subnet(f["peer"]) for f in lossy}
-    clean_nets = {_flow_subnet(f["peer"]) for f in clean} - lossy_nets
-
-    # Every figure describing "the worst" has to come off the same connection.
-    # Reading the percentage from one and the basis from another reported a
-    # segment-derived rate as a byte-derived one, and naming the peer from a
-    # sorted list attributed the worst loss to whoever sorted first.
-    worst = max(lossy, key=lambda f: f["retrans_pct"]) if lossy else None
-    out = {
-        "flows_seen": len(flows),
-        "flows_measurable": len(measurable),
-        "flows_own_session": skipped_own,
-        "networks_lossy": len(lossy_nets),
-        "networks_clean": len(clean_nets),
-        "lossy_peers": sorted({f["peer"] for f in lossy})[:FLOW_PEERS_SHOWN],
-        "worst_loss_pct": worst["retrans_pct"] if worst else None,
-        "worst_peer": worst["peer"] if worst else None,
-        # Smoothed RTT to the destination that is actually suffering, measured
-        # on its own traffic rather than on a probe to somewhere else. It was
-        # parsed and thrown away; a loss figure without the latency beside it
-        # tells half the story.
-        "worst_rtt_ms": worst.get("rtt_ms") if worst else None,
-        "basis": worst["basis"] if worst else None,
-        "truncated": truncated,
-        # The queuing picture across everything, for a box with no listening
-        # ports and therefore no sides to split by. A digest, never the flow
-        # list itself - that names every peer this box talks to.
-        "queue": _queue_summary(measurable),
-        "shape": None,
-        # Which side of a proxy the loss is on. Only meaningful when the
-        # listening ports were known, so it stays None on a box that is not
-        # serving anything - where every flow is outbound by definition and
-        # the distinction would be an invention.
-        "lossy_side": None,
-        "clients_lossy": None,
-        "backends_lossy": None,
-    }
     if listen_ports:
         # Latency and loss per direction, measured on the connections
         # themselves. This is the only view of the inbound side there is:
@@ -5222,6 +5167,76 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
             out["lossy_side"] = "client"
         elif sides["client"] and sides["backend"]:
             out["lossy_side"] = "both"
+
+
+def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
+    """Aggregate per-connection statistics into who owns the problem.
+
+    `listen_ports` splits the connections into the ones that arrived and the
+    ones this box opened. On a proxy those are two different networks with two
+    different owners - clients out on the internet, backends on an internal
+    segment - and averaging them produced the wrong answer with confidence: a
+    lossy database on 10.0.0.90 came out as "some destinations are losing
+    traffic", owner *the provider or upstream*, which sends someone to argue
+    with a carrier about the inside of their own rack.
+    """
+    listen_ports = set(listen_ports or ())
+    ssh_peer, ssh_port = _own_ssh_peer()
+    measurable, skipped_own = [], 0
+    for flow in flows:
+        if _flow_is_local(flow["peer"]):
+            continue
+        if flow["peer"] == ssh_peer and flow["peer_port"] == ssh_port:
+            skipped_own += 1
+            continue
+        pct, basis = _flow_loss_pct(flow)
+        if pct is None:
+            continue
+        flow["retrans_pct"], flow["basis"] = pct, basis
+        flow["side"] = ("client" if flow.get("local_port") in listen_ports
+                        else "backend" if listen_ports else None)
+        measurable.append(flow)
+
+    lossy = [f for f in measurable if f["retrans_pct"] >= FLOW_LOSSY_PCT]
+    clean = [f for f in measurable if f["retrans_pct"] < FLOW_LOSSY_PCT]
+    lossy_nets = {_flow_subnet(f["peer"]) for f in lossy}
+    clean_nets = {_flow_subnet(f["peer"]) for f in clean} - lossy_nets
+
+    # Every figure describing "the worst" has to come off the same connection.
+    # Reading the percentage from one and the basis from another reported a
+    # segment-derived rate as a byte-derived one, and naming the peer from a
+    # sorted list attributed the worst loss to whoever sorted first.
+    worst = max(lossy, key=lambda f: f["retrans_pct"]) if lossy else None
+    out = {
+        "flows_seen": len(flows),
+        "flows_measurable": len(measurable),
+        "flows_own_session": skipped_own,
+        "networks_lossy": len(lossy_nets),
+        "networks_clean": len(clean_nets),
+        "lossy_peers": sorted({f["peer"] for f in lossy})[:FLOW_PEERS_SHOWN],
+        "worst_loss_pct": worst["retrans_pct"] if worst else None,
+        "worst_peer": worst["peer"] if worst else None,
+        # Smoothed RTT to the destination that is actually suffering, measured
+        # on its own traffic rather than on a probe to somewhere else. It was
+        # parsed and thrown away; a loss figure without the latency beside it
+        # tells half the story.
+        "worst_rtt_ms": worst.get("rtt_ms") if worst else None,
+        "basis": worst["basis"] if worst else None,
+        "truncated": truncated,
+        # The queuing picture across everything, for a box with no listening
+        # ports and therefore no sides to split by. A digest, never the flow
+        # list itself - that names every peer this box talks to.
+        "queue": _queue_summary(measurable),
+        "shape": None,
+        # Which side of a proxy the loss is on. Only meaningful when the
+        # listening ports were known, so it stays None on a box that is not
+        # serving anything - where every flow is outbound by definition and
+        # the distinction would be an invention.
+        "lossy_side": None,
+        "clients_lossy": None,
+        "backends_lossy": None,
+    }
+    _split_flows_by_side(out, measurable, listen_ports, lossy, worst)
     if lossy:
         # One network lossy while others are clean is a path fault. Every
         # network lossy is this device's own link. Neither reading is available
@@ -14184,6 +14199,212 @@ def _check_dns(raw, findings, target, inet_loss, quick):
     return dns_failed
 
 
+def _findings_for_one_port(raw, findings, target, port_spec, port_result,
+                           timeout, speculative):
+    """Everything one requested port can turn out to be.
+
+    A hundred and ninety lines of it, which is what the loop around it was
+    hiding: refused, timed out, open but not answering, open and answering
+    something other than what was asked, a name that resolves for one
+    family and not the other. None of that is about iterating - it is about
+    one port - and reading it inside a `for` made the loop look like the
+    subject.
+
+    The three `continue`s that ended an iteration are returns. There is no
+    nested loop in here, so each of them meant "nothing more to say about
+    this port", which is what a return says.
+    """
+    raw[f"port_{target}_{port_spec}"] = port_result
+    # A name with records for both families, where one of them doesn't
+    # work, costs every client a timeout before it falls back - on every
+    # connection. It is invisible from a machine that only has the working
+    # family, and it is why something is "slow for some people" rather
+    # than down for everyone.
+    if port_result.get("family_mismatch"):
+        dead = ", ".join(f"IPv{v}" for v in port_result["family_mismatch"])
+        findings.append({
+            "severity": "warning",
+            "layer": 3,
+            "code": "family_unreachable",
+            "message": f"{target}:{port_spec} answers over "
+                       f"IPv{port_result.get('ip_version')} but not over {dead}, and it "
+                       f"publishes an address for both. Clients try the broken one first "
+                       f"and wait for it to time out before falling back, on every "
+                       f"connection - which is why this reads as slow rather than down.",
+        })
+    # A TLS port that answered deserves the harder question: does the
+    # service behind it actually work, and is anything re-signing it.
+    try:
+        port_num = int(port_spec)
+    except (TypeError, ValueError):
+        return
+    if port_result.get("ok") and port_num in TLS_PORTS:
+        tls = cmd_tls_check(target, port_num)
+        if not tls:
+            return
+        raw[f"tls_{target}_{port_num}"] = tls
+        port_result["tls"] = {k: tls.get(k) for k in
+                              ("tls_version", "subject", "issuer", "expires",
+                               "days_left", "starts", "not_yet_valid_days",
+                               "verified", "verify_error",
+                               "tcp_ms", "tls_ms")}
+        # Where the time went. The connect is a round trip and belongs to
+        # the path; the handshake beyond that is the server's own work, and
+        # "it's slow" gets sent to the wrong team without the split.
+        tcp_ms, tls_ms = tls.get("tcp_ms"), tls.get("tls_ms")
+        if (tls_ms is not None and tcp_ms is not None
+                and tls_ms >= TLS_HANDSHAKE_FLOOR_MS
+                and tcp_ms > 0 and tls_ms / tcp_ms >= TLS_HANDSHAKE_RATIO):
+            findings.append({
+                "severity": "warning",
+                "layer": 7,
+                "code": "tls_handshake_slow",
+                "message": f"Reaching {target}:{port_num} took {tcp_ms + tls_ms:.0f}ms, and "
+                           f"{tls_ms:.0f}ms of that was the TLS handshake against "
+                           f"{tcp_ms:.0f}ms to connect. A handshake is one or two round "
+                           f"trips, so the difference is the server doing work rather than "
+                           f"distance - it is busy, or fetching something mid-handshake. "
+                           f"The network delivered the connection in {tcp_ms:.0f}ms.",
+            })
+        if not tls.get("ok"):
+            findings.append({
+                "severity": "warning",
+                "layer": 4,
+                "code": "tls_handshake_failed",
+                "message": f"Port {port_num} on {target} accepts connections but the TLS "
+                           f"handshake doesn't complete ({tls.get('error', 'no detail')}). "
+                           f"Something is listening; whatever it is isn't serving TLS. A "
+                           f"port check alone would have called this healthy.",
+            })
+            return
+        issuer = (tls.get("issuer") or "").lower()
+        if tls.get("verified") is False:
+            # Two separate findings rather than one with a computed code:
+            # the coverage test greps for literal codes, and a code it
+            # cannot see is a code with no verdict rule.
+            preamble = (f"The certificate returned by {target}:{port_num} doesn't verify "
+                        f"({tls.get('verify_error', 'unknown reason')})"
+                        + (f", and was issued by {tls.get('issuer')}"
+                           if tls.get("issuer") else "") + ". ")
+            if tls.get("intercepted_by") or any(h in issuer for h in INTERCEPTION_HINTS):
+                findings.append({
+                    "severity": "warning",
+                    "layer": 7,
+                    "code": "tls_intercepted",
+                    "message": preamble + "That issuer is an inspection product, so traffic "
+                                          "is being intercepted and re-signed somewhere in "
+                                          "the path - anything that pins or verifies "
+                                          "certificates fails while ping and port checks "
+                                          "look perfect.",
+                })
+            else:
+                findings.append({
+                    "severity": "warning",
+                    "layer": 7,
+                    "code": "tls_untrusted",
+                    "message": preamble + "Either the certificate is genuinely bad, or "
+                                          "something in the path is re-signing traffic. "
+                                          "Anything that verifies certificates refuses to "
+                                          "connect either way.",
+                })
+        ahead = tls.get("not_yet_valid_days")
+        if ahead:
+            findings.append({
+                "severity": "critical",
+                "layer": 7,
+                "code": "tls_not_yet_valid",
+                "message": f"The certificate on {target}:{port_num} does not become valid "
+                           f"for another {ahead} day(s) (from {tls.get('starts')}). A "
+                           f"certificate issued for the future is rare; a clock that is "
+                           f"behind is common, and this device's clock is the first thing "
+                           f"to check. If it is wrong, every TLS result in this report is "
+                           f"measuring the clock rather than the service.",
+            })
+        days = tls.get("days_left")
+        if tls.get("expired"):
+            findings.append({
+                "severity": "critical",
+                "layer": 7,
+                "code": "tls_expired",
+                "message": f"The certificate on {target}:{port_num} has expired. Clients "
+                           f"refuse the connection outright while the network is perfect - "
+                           f"which is why this looks like a network fault and isn't one.",
+            })
+        elif days is not None and days < 0:
+            findings.append({
+                "severity": "critical",
+                "layer": 7,
+                "code": "tls_expired",
+                "message": f"The certificate on {target}:{port_num} expired "
+                           f"{abs(days)} day(s) ago ({tls.get('expires')}). Clients will "
+                           f"refuse the connection outright; the network is fine.",
+            })
+        elif days is not None and days <= CERT_EXPIRY_WARN_DAYS:
+            findings.append({
+                "severity": "warning",
+                "layer": 7,
+                "code": "tls_expiring",
+                "message": f"The certificate on {target}:{port_num} expires in {days} day(s) "
+                           f"({tls.get('expires')}). Not a fault yet, and much cheaper to fix "
+                           f"now than during the outage it becomes.",
+            })
+    if not port_result.get("ok"):
+        reason = port_result.get("reason", "unknown")
+        # A port from the 'common' preset was a look, not a claim. Naming a
+        # port is asserting you expect it open; a preset asserts nothing, so
+        # a closed one there is context rather than a fault.
+        severity = "ok" if speculative else "warning"
+        suffix = (" This came from the 'common' preset rather than a port you named, so "
+                  "plenty of hosts legitimately don't answer here." if speculative else "")
+        if reason == "refused":
+            findings.append({
+                "severity": severity,
+                "code": "port_refused",
+                "layer": 4,
+                "message": f"Port {port_spec} on {target} is closed or filtered: "
+                           f"{port_result.get('error', 'connection refused')}. The service "
+                           f"may not be running, or a firewall is blocking it." + suffix,
+            })
+        elif reason == "no_route":
+            findings.append({
+                # Never speculative: a missing route is this box's own
+                # configuration whichever port asked the question, and a
+                # preset port finding one is the preset doing its job.
+                "severity": "critical",
+                "code": "no_route_to_target",
+                "layer": 3,
+                "message": f"This device has no route to {target} at all - the kernel "
+                           f"refused port {port_spec} instantly rather than sending "
+                           f"anything and waiting. Nothing was put on the wire, so no "
+                           f"part of the network had the chance to fail. Read this "
+                           f"device's routing table: either the destination is not "
+                           f"covered by any route, or the route that should cover it "
+                           f"points at an interface that is down.",
+            })
+        elif reason == "host_unreachable":
+            findings.append({
+                "severity": severity,
+                "code": "port_host_unreachable",
+                "layer": 3,
+                "message": f"A router on the way to {target} reported that it cannot "
+                           f"reach the host, for port {port_spec}. That is different "
+                           f"from silence: something forwarded the traffic partway and "
+                           f"then told us the destination is not reachable from there. "
+                           f"The router that answered knows why - the trace names the "
+                           f"hop." + suffix,
+            })
+        else:  # timeout
+            findings.append({
+                "severity": severity,
+                "code": "port_timeout",
+                "layer": 4,
+                "message": f"Port {port_spec} on {target} timed out: "
+                           f"{port_result.get('error', 'no response')}. Likely a routing or "
+                           f"packet-loss issue rather than a firewall rule." + suffix,
+            })
+
+
+
 def _check_ports(raw, findings, target, check_ports, quick, speculative=False):
     """TCP reachability for the requested ports. Returns the per-port results."""
     port_results = []
@@ -14212,195 +14433,8 @@ def _check_ports(raw, findings, target, check_ports, quick, speculative=False):
         results = [cmd_check_port(target, p, timeout=timeout) for p in check_ports]
     for port_spec, port_result in zip(check_ports, results):
         port_results.append(port_result)
-        raw[f"port_{target}_{port_spec}"] = port_result
-        # A name with records for both families, where one of them doesn't
-        # work, costs every client a timeout before it falls back - on every
-        # connection. It is invisible from a machine that only has the working
-        # family, and it is why something is "slow for some people" rather
-        # than down for everyone.
-        if port_result.get("family_mismatch"):
-            dead = ", ".join(f"IPv{v}" for v in port_result["family_mismatch"])
-            findings.append({
-                "severity": "warning",
-                "layer": 3,
-                "code": "family_unreachable",
-                "message": f"{target}:{port_spec} answers over "
-                           f"IPv{port_result.get('ip_version')} but not over {dead}, and it "
-                           f"publishes an address for both. Clients try the broken one first "
-                           f"and wait for it to time out before falling back, on every "
-                           f"connection - which is why this reads as slow rather than down.",
-            })
-        # A TLS port that answered deserves the harder question: does the
-        # service behind it actually work, and is anything re-signing it.
-        try:
-            port_num = int(port_spec)
-        except (TypeError, ValueError):
-            continue
-        if port_result.get("ok") and port_num in TLS_PORTS:
-            tls = cmd_tls_check(target, port_num)
-            if not tls:
-                continue
-            raw[f"tls_{target}_{port_num}"] = tls
-            port_result["tls"] = {k: tls.get(k) for k in
-                                  ("tls_version", "subject", "issuer", "expires",
-                                   "days_left", "starts", "not_yet_valid_days",
-                                   "verified", "verify_error",
-                                   "tcp_ms", "tls_ms")}
-            # Where the time went. The connect is a round trip and belongs to
-            # the path; the handshake beyond that is the server's own work, and
-            # "it's slow" gets sent to the wrong team without the split.
-            tcp_ms, tls_ms = tls.get("tcp_ms"), tls.get("tls_ms")
-            if (tls_ms is not None and tcp_ms is not None
-                    and tls_ms >= TLS_HANDSHAKE_FLOOR_MS
-                    and tcp_ms > 0 and tls_ms / tcp_ms >= TLS_HANDSHAKE_RATIO):
-                findings.append({
-                    "severity": "warning",
-                    "layer": 7,
-                    "code": "tls_handshake_slow",
-                    "message": f"Reaching {target}:{port_num} took {tcp_ms + tls_ms:.0f}ms, and "
-                               f"{tls_ms:.0f}ms of that was the TLS handshake against "
-                               f"{tcp_ms:.0f}ms to connect. A handshake is one or two round "
-                               f"trips, so the difference is the server doing work rather than "
-                               f"distance - it is busy, or fetching something mid-handshake. "
-                               f"The network delivered the connection in {tcp_ms:.0f}ms.",
-                })
-            if not tls.get("ok"):
-                findings.append({
-                    "severity": "warning",
-                    "layer": 4,
-                    "code": "tls_handshake_failed",
-                    "message": f"Port {port_num} on {target} accepts connections but the TLS "
-                               f"handshake doesn't complete ({tls.get('error', 'no detail')}). "
-                               f"Something is listening; whatever it is isn't serving TLS. A "
-                               f"port check alone would have called this healthy.",
-                })
-                continue
-            issuer = (tls.get("issuer") or "").lower()
-            if tls.get("verified") is False:
-                # Two separate findings rather than one with a computed code:
-                # the coverage test greps for literal codes, and a code it
-                # cannot see is a code with no verdict rule.
-                preamble = (f"The certificate returned by {target}:{port_num} doesn't verify "
-                            f"({tls.get('verify_error', 'unknown reason')})"
-                            + (f", and was issued by {tls.get('issuer')}"
-                               if tls.get("issuer") else "") + ". ")
-                if tls.get("intercepted_by") or any(h in issuer for h in INTERCEPTION_HINTS):
-                    findings.append({
-                        "severity": "warning",
-                        "layer": 7,
-                        "code": "tls_intercepted",
-                        "message": preamble + "That issuer is an inspection product, so traffic "
-                                              "is being intercepted and re-signed somewhere in "
-                                              "the path - anything that pins or verifies "
-                                              "certificates fails while ping and port checks "
-                                              "look perfect.",
-                    })
-                else:
-                    findings.append({
-                        "severity": "warning",
-                        "layer": 7,
-                        "code": "tls_untrusted",
-                        "message": preamble + "Either the certificate is genuinely bad, or "
-                                              "something in the path is re-signing traffic. "
-                                              "Anything that verifies certificates refuses to "
-                                              "connect either way.",
-                    })
-            ahead = tls.get("not_yet_valid_days")
-            if ahead:
-                findings.append({
-                    "severity": "critical",
-                    "layer": 7,
-                    "code": "tls_not_yet_valid",
-                    "message": f"The certificate on {target}:{port_num} does not become valid "
-                               f"for another {ahead} day(s) (from {tls.get('starts')}). A "
-                               f"certificate issued for the future is rare; a clock that is "
-                               f"behind is common, and this device's clock is the first thing "
-                               f"to check. If it is wrong, every TLS result in this report is "
-                               f"measuring the clock rather than the service.",
-                })
-            days = tls.get("days_left")
-            if tls.get("expired"):
-                findings.append({
-                    "severity": "critical",
-                    "layer": 7,
-                    "code": "tls_expired",
-                    "message": f"The certificate on {target}:{port_num} has expired. Clients "
-                               f"refuse the connection outright while the network is perfect - "
-                               f"which is why this looks like a network fault and isn't one.",
-                })
-            elif days is not None and days < 0:
-                findings.append({
-                    "severity": "critical",
-                    "layer": 7,
-                    "code": "tls_expired",
-                    "message": f"The certificate on {target}:{port_num} expired "
-                               f"{abs(days)} day(s) ago ({tls.get('expires')}). Clients will "
-                               f"refuse the connection outright; the network is fine.",
-                })
-            elif days is not None and days <= CERT_EXPIRY_WARN_DAYS:
-                findings.append({
-                    "severity": "warning",
-                    "layer": 7,
-                    "code": "tls_expiring",
-                    "message": f"The certificate on {target}:{port_num} expires in {days} day(s) "
-                               f"({tls.get('expires')}). Not a fault yet, and much cheaper to fix "
-                               f"now than during the outage it becomes.",
-                })
-        if not port_result.get("ok"):
-            reason = port_result.get("reason", "unknown")
-            # A port from the 'common' preset was a look, not a claim. Naming a
-            # port is asserting you expect it open; a preset asserts nothing, so
-            # a closed one there is context rather than a fault.
-            severity = "ok" if speculative else "warning"
-            suffix = (" This came from the 'common' preset rather than a port you named, so "
-                      "plenty of hosts legitimately don't answer here." if speculative else "")
-            if reason == "refused":
-                findings.append({
-                    "severity": severity,
-                    "code": "port_refused",
-                    "layer": 4,
-                    "message": f"Port {port_spec} on {target} is closed or filtered: "
-                               f"{port_result.get('error', 'connection refused')}. The service "
-                               f"may not be running, or a firewall is blocking it." + suffix,
-                })
-            elif reason == "no_route":
-                findings.append({
-                    # Never speculative: a missing route is this box's own
-                    # configuration whichever port asked the question, and a
-                    # preset port finding one is the preset doing its job.
-                    "severity": "critical",
-                    "code": "no_route_to_target",
-                    "layer": 3,
-                    "message": f"This device has no route to {target} at all - the kernel "
-                               f"refused port {port_spec} instantly rather than sending "
-                               f"anything and waiting. Nothing was put on the wire, so no "
-                               f"part of the network had the chance to fail. Read this "
-                               f"device's routing table: either the destination is not "
-                               f"covered by any route, or the route that should cover it "
-                               f"points at an interface that is down.",
-                })
-            elif reason == "host_unreachable":
-                findings.append({
-                    "severity": severity,
-                    "code": "port_host_unreachable",
-                    "layer": 3,
-                    "message": f"A router on the way to {target} reported that it cannot "
-                               f"reach the host, for port {port_spec}. That is different "
-                               f"from silence: something forwarded the traffic partway and "
-                               f"then told us the destination is not reachable from there. "
-                               f"The router that answered knows why - the trace names the "
-                               f"hop." + suffix,
-                })
-            else:  # timeout
-                findings.append({
-                    "severity": severity,
-                    "code": "port_timeout",
-                    "layer": 4,
-                    "message": f"Port {port_spec} on {target} timed out: "
-                               f"{port_result.get('error', 'no response')}. Likely a routing or "
-                               f"packet-loss issue rather than a firewall rule." + suffix,
-                })
-
+        _findings_for_one_port(raw, findings, target, port_spec,
+                               port_result, timeout, speculative)
     return port_results
 
 

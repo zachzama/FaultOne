@@ -7,6 +7,40 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
+## Settled: the two long functions, split along seams that were already there
+
+`diagnose` was 451 lines and `_check_path` 388, and every ordering mistake this
+week has been inside one of them. Both are down: `diagnose` 361,
+`_check_path` 163.
+
+Four blocks came out, each answering a different question from the code around
+it. `_survey_this_box` is everything read before a target is chosen, which is a
+group because aiming at the backend a box depends on most means reading its
+socket table first. `_check_against_the_last_visit` is the only part asking what
+is true now *and was not last time*. `_findings_from_the_walk` reads a path that
+is already a fact, where everything above it is still obtaining one and may
+retry three ways. `_check_path_mtu` is a separate question with separate probes
+that sat in the middle only because it shares a target.
+
+**The check that means something for a refactor is `dev/equivalence.py`, not the
+suite.** 190 scenarios against HEAD, 0 differ, run after each extraction rather
+than once at the end - either could have been the one that moved something, and
+a single check would not say which. The suite asserts what each scenario should
+say, so a change that quietly alters a scenario nobody wrote an assertion for
+goes straight through it.
+
+**Two things worth keeping from doing it.** Threading four values out of the
+baseline block took four NameErrors, which is the argument for the extraction
+rather than against it: a block reading four names out of four hundred lines of
+context is one nobody can check in place. And the `_read_` prefix is
+load-bearing - the harness stubs every `cmd_*` and `_read_*` name to seal the
+process, so an orchestrator called `_read_...` was replaced wholesale and the
+socket table never arrived. Name a collector `_read_`, name anything that only
+calls collectors something else.
+
+Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
+`_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
+
 ## Settled: four vocabularies borrowed, and the rule that found them
 
 All four are done, 2026-08-18. What is worth keeping is the rule the survey

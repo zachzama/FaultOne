@@ -1,0 +1,7 @@
+[
+ {"label": "a target that does not resolve is silent again",
+  "old": "        if raw.get(\"target_ip\") is None:", "new": "        if False:"},
+ {"label": "an address target is asked whether it resolves",
+  "old": "    if target and not _looks_like_ipv4(target) and \":\" not in str(target):",
+  "new": "    if target:"}
+]

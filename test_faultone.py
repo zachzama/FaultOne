@@ -9858,6 +9858,60 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         self.assertIn("weaker of the two", found[0]["message"])
 
 
+class TestTheNameTheRunWasAimedAt(unittest.TestCase):
+    """The one name the run is about, which nothing checked.
+
+    diagnose() resolves the target and, on failure, left `target_ip` as None
+    and said nothing - while the DNS check graded resolution on `google.com`
+    and reported it healthy. Everything below then described a name that never
+    became an address, and the thing the run was asked about was the one thing
+    the report did not mention.
+
+    Found as an unused `target` parameter on `_check_dns`: the fossil of an
+    intent nobody finished.
+    """
+
+    def _run(self, target, resolves):
+        m = fresh()
+        # Both directions have to be faked. The first version only faked the
+        # failure and let the success case use the real resolver, where
+        # "db.internal.example" does not resolve either - so the test that the
+        # finding stays quiet was asking the machine a question it answers the
+        # same way as the failing case.
+        m.socket = (_ResolvesTo(m.socket) if resolves else _NoSuchName(m.socket))
+        r = m.diagnose(quick=True, target=target, check_ports=None, baseline=None)
+        return {f["code"] for f in r["findings"]}, r["verdict"]
+
+    def test_a_name_that_does_not_resolve_is_named(self):
+        codes, verdict = self._run("db.internal.example", resolves=False)
+        self.assertIn("target_name_unresolved", codes)
+        self.assertEqual(verdict["based_on"][0], "target_name_unresolved")
+        self.assertEqual(verdict["severity"], "critical")
+
+    def test_an_address_is_never_asked_whether_it_resolves(self):
+        """An address is not a name and cannot fail to resolve. Without the
+        guard, a box with broken resolution reported that 8.8.8.8 does not
+        resolve, which is nonsense on the most common target there is."""
+        codes, _ = self._run("8.8.8.8", resolves=False)
+        self.assertNotIn("target_name_unresolved", codes)
+
+    def test_an_ipv6_address_is_not_asked_either(self):
+        codes, _ = self._run("2001:db8::1", resolves=False)
+        self.assertNotIn("target_name_unresolved", codes)
+
+    def test_a_name_that_resolves_says_nothing(self):
+        codes, _ = self._run("db.internal.example", resolves=True)
+        self.assertNotIn("target_name_unresolved", codes)
+
+    def test_it_does_not_claim_dns_itself_is_down(self):
+        """Resolution may be working - the general check asks for a different
+        name. Saying "DNS is broken" here would send someone to the resolver
+        over a zone or a record."""
+        codes, verdict = self._run("db.internal.example", resolves=False)
+        self.assertIn("Resolution itself may be working",
+                      [f for f in [verdict.get("detail", "")]][0] or "")
+
+
 class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
     """Four tables that are closed sets of facts, copied incompletely.
 
@@ -15338,9 +15392,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 990),
-            "compressed": (len(gzip.compress(raw, 9)), 299),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 208),
+            "on disk": (len(raw), 993),
+            "compressed": (len(gzip.compress(raw, 9)), 300),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 209),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19899,6 +19953,26 @@ def scenario_kwargs(kw):
 
 # ---- one scenario per finding code ------------------------------------
 S = {}
+class _ResolvesTo:
+    """A socket module whose gethostbyname always answers, for the case where
+    the name being resolvable is the point."""
+    def __init__(self, real): self._real = real
+    def __getattr__(self, name): return getattr(self._real, name)
+    def gethostbyname(self, name): return "192.0.2.7"
+
+
+class _NoSuchName:
+    """A socket module whose gethostbyname fails, and nothing else changed.
+
+    Wrapping rather than replacing: the module is used for a dozen other things
+    and a stub that answers only one of them fails somewhere unrelated.
+    """
+    def __init__(self, real): self._real = real
+    def __getattr__(self, name): return getattr(self._real, name)
+    def gethostbyname(self, name):
+        raise OSError("Name or service not known")
+
+
 def scenario(code, **kw):
     def deco(fn):
         S[code] = (fn, kw); return fn
@@ -20585,6 +20659,12 @@ def _(nd): nd.cmd_path_mtu = lambda t, m=None: {"ok": True, "cmd": "df", "stdout
 
 @scenario("dns_fail")
 def _(nd): nd.cmd_dns = lambda t: {"ok": True, "cmd": "dig", "stdout": "NXDOMAIN\n"}
+
+@scenario("target_name_unresolved", target="db.internal.example")
+def _(nd):
+    """Aimed at a name this box cannot resolve. Resolution itself is fine - the
+    general check asks a resolver for a different name and gets an answer."""
+    nd.socket = _NoSuchName(nd.socket)
 
 @scenario("dns_no_resolvers")
 def _(nd): nd.cmd_dns_health = lambda check_hijack=True: {"ok": False, "cmd": "r",

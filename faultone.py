@@ -2173,6 +2173,9 @@ def peer_port(addr):
 # drawn from an empty set.
 SOCKET_STATE_ALIASES = {"ESTAB": "ESTABLISHED", "LISTENING": "LISTEN",
                         "SYN_RECEIVED": "SYN_RECV"}
+# RFC 9293's eleven states, exactly. A closed set nobody here decided, so it is
+# not a list to extend - a twelfth state would mean the RFC changed, not that
+# this missed one.
 TCP_STATES = frozenset((
     "LISTEN", "ESTABLISHED", "SYN_SENT", "SYN_RECV", "TIME_WAIT", "CLOSE_WAIT",
     "FIN_WAIT_1", "FIN_WAIT_2", "LAST_ACK", "CLOSING", "CLOSED"))
@@ -6230,6 +6233,8 @@ def _connect_once(host, port_num, family, socktype, proto, sockaddr, ip_version,
 # is four chances for one of them to disagree about what is worse than what.
 SEVERITY_RANK = {"ok": 0, "warning": 1, "critical": 2}
 
+# The OSI layers, used only as the depth axis the verdict ranks on. Not a list
+# to add to: "which layer is this" has one answer and it is not ours.
 LAYERS = {
     1: {"name": "Physical", "hint": "cabling, radio, link light, port up/down"},
     2: {"name": "Data link", "hint": "switch/AP, ARP, MAC, local segment"},
@@ -7968,6 +7973,11 @@ VERDICT_RULES = [
      "The resolver configuration couldn't be read",
      "Read it by hand (/etc/resolv.conf, or ipconfig /all on Windows). This run can't say "
      "which resolvers are configured, only whether resolution worked."),
+    ("target_name_unresolved", "this name, its zone, or the resolver's view of it",
+     "The name this run was aimed at does not resolve",
+     "Nothing below is about it - every result was measured against a name that "
+     "never became an address. Resolution itself may be fine; check this name, "
+     "its zone, and what this box's resolver returns for it."),
     ("dns_no_resolvers", "this device's configuration",
      "No DNS resolvers configured at all",
      "Nothing will resolve here whatever the network does. Check DHCP, or set "
@@ -8582,6 +8592,7 @@ FINDING_SIDE.update({
     "uplink_busy": "upstream",
     "saturation_bursts": "upstream",
     "dns_fail": "upstream",
+    "target_name_unresolved": "upstream",
     "dns_no_resolvers": "upstream",
     "dns_all_resolvers_down": "upstream",
     "dns_resolver_down": "upstream",
@@ -8719,7 +8730,8 @@ STAGE_RULES = [
       "cgnat", "double_nat", "nat_observed", "proxy_backend_down",
       "proxy_unreachable", "proxy_denies_this_box", "answered_closer_than_the_path",
       "broker_leg_in_the_clear", "path_asymmetric", "shared_hop_degraded"}),
-    ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers"},
+    ("dns", {"dns_fail", "dns_all_resolvers_down", "dns_no_resolvers",
+             "target_name_unresolved"},
      {"dns_resolver_down", "dns_resolver_slow", "dns_hijack", "dns_disagree",
       "resolvers_unreadable"}),
     ("mtu", {"pmtu_blackhole"}, {"pmtu_unmeasurable", "mtu_nonstandard",
@@ -8906,7 +8918,7 @@ def finding_relation(code, verdict):
     return None
 
 
-def build_stages(findings, raw=None, checked_ports=False, quick=False):
+def build_stages(findings, raw=None, checked_ports=False):
     """Reduce the findings to pass/warn/fail per stage of the chain."""
     raw = raw or {}
     codes = {f.get("code") for f in findings if f.get("severity") != "ok"}
@@ -9620,6 +9632,9 @@ FINDING_CLASS = {
 "service_address_idle": ("communicationsAlarm", "unavailable"),
 "regression_since_baseline": ("communicationsAlarm", "thresholdCrossed"),
 # --- DNS is a communications failure with its own causes --------------------
+# The name the run was aimed at, as opposed to resolution in general: the
+# resolver answered, and answered that this name is not there.
+"target_name_unresolved": ("communicationsAlarm", "invalidMessageReceived"),
 "dns_no_resolvers": ("communicationsAlarm", "configurationOrCustomisationError"),
 "resolvers_unreadable": ("communicationsAlarm", "underlayingResourceUnavailable"),
 "dns_all_resolvers_down": ("communicationsAlarm", "unavailable"),
@@ -11062,7 +11077,7 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     _check_thermal(stats, findings, counter_window)
     _check_udp(stats, findings, counter_window)
     _check_fragments(stats, findings, counter_window)
-    _check_orphans(stats, findings, counter_window)
+    _check_orphans(stats, findings)
 
 
 # ---------------------------------------------------------------------------
@@ -11171,6 +11186,9 @@ FALLBACK_WARN_PCT = 50
 # Written out rather than folded into one number so the arithmetic on the page
 # can be argued with. Someone who knows their own tunnel's overhead should be
 # able to see which part this got wrong.
+# Header sizes from the RFCs that define each one, not measurements. Each is a
+# fixed number somebody else set, which is why they can be listed rather than
+# probed for.
 TUNNEL_OVERHEAD = {"outer IP": 20, "outer UDP": 8, "DTLS record": 13,
                    "cipher nonce and tag": 24}
 
@@ -12085,7 +12103,7 @@ def _check_fragments(stats, findings, counter_window):
             })
 
 
-def _check_orphans(stats, findings, counter_window):
+def _check_orphans(stats, findings):
     """Connections torn down without being closed, against the ceiling."""
     live = stats.get("lifetime") or {}
     count, limit = live.get("tcp_orphans"), live.get("tcp_max_orphans")
@@ -13945,7 +13963,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     findings[slot:slot] = late
 
 
-def _check_device_and_link(raw, findings, counter_window, soak, quick, link_sample):
+def _check_device_and_link(raw, findings, link_sample):
     """Everything about this device and the wire into it: error counters, link
     mode, utilization, switch neighbour, optics, ARP and TCP health.
 
@@ -13986,6 +14004,31 @@ def _check_dns(raw, findings, target, inet_loss, quick):
 
     Returns whether resolution failed, which the all-clear message needs.
     """
+    # The name this run was actually aimed at. Resolved in diagnose() and, until
+    # now, silently: a target that does not resolve left target_ip as None and
+    # nothing said so, while the check below graded DNS on google.com and
+    # reported it healthy. That is the shape of report this tool exists to stop
+    # producing - everything underneath describes a name that was never turned
+    # into an address, and the one thing the run was asked about is the one
+    # thing nothing mentions.
+    #
+    # An address for a target is not a name and cannot fail to resolve, so it is
+    # not asked about.
+    if target and not _looks_like_ipv4(target) and ":" not in str(target):
+        if raw.get("target_ip") is None:
+            findings.append({
+                "severity": "critical",
+                "layer": 7,
+                "code": "target_name_unresolved",
+                "message": (
+                    f"{target} is the name this run was aimed at and it does not "
+                    f"resolve here. Nothing below this line is about it: every "
+                    f"reachability, path and port result was measured against a name "
+                    f"that never became an address. Resolution itself may be working "
+                    f"- the check below asks a resolver for a name that is not this "
+                    f"one - so this is about this name, its zone, or the resolver's "
+                    f"view of it rather than DNS being down."),
+            })
     raw["dns_lookup"] = cmd_dns("google.com")
     dns_out = raw["dns_lookup"].get("stdout", "") if raw["dns_lookup"].get("ok") else ""
     # A missing dig/nslookup is not a DNS failure. When the tool isn't there,
@@ -16636,7 +16679,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     say("checking link mode, switch port and neighbours")
     link_findings_slot = len(findings)
     neighbours, primary_mtu, duplex_by_iface, arp_entries = _check_device_and_link(
-        raw, findings, counter_window, soak, quick, link_sample)
+        raw, findings, link_sample)
 
     gw = guess_default_gateway(raw["routes"])
 
@@ -16921,7 +16964,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
             _z["owns_cause"] = _z["side"] == _owner
     report = {
         "verdict": verdict,
-        "stages": build_stages(findings, raw, checked_ports=bool(check_ports), quick=quick),
+        "stages": build_stages(findings, raw, checked_ports=bool(check_ports)),
         "sides": _sides,
         "comparison": comparison,
         "findings": findings,
@@ -18919,6 +18962,9 @@ def _render_path(report, out, tint, width):
 
 def _render_neighbours(report, out, tint, width):
     """Which switch port this device is on."""
+    # (tint and width unused here.) Every section renderer takes the same four
+    # arguments so the list of them below reads as one thing and a section
+    # can be reordered without checking what each one happens to need.
     neighbours = report.get("neighbours") or []
     if neighbours:
         out.append("")
@@ -19195,6 +19241,9 @@ def _render_services(report, out, tint, width):
 
 def _render_comparison(report, out, tint, width):
     """What changed since the baseline report."""
+    # (width unused here.) Every section renderer takes the same four
+    # arguments so the list of them below reads as one thing and a section
+    # can be reordered without checking what each one happens to need.
     comparison = report.get("comparison") or []
     if comparison:
         out.append("")

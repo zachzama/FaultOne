@@ -86,7 +86,7 @@ def main(argv):
     if "--anchors" in argv:
         return check_anchors(argv)
     if len(argv) < 2:
-        print(__doc__.strip().splitlines()[2].strip())
+        print(__doc__.strip().splitlines()[2].strip(), flush=True)
         return 2
     target = argv[1]
     if os.path.isdir(target):
@@ -115,15 +115,15 @@ def main(argv):
     tree = os.path.join(base, "repo")
     shutil.copytree(REPO, tree, ignore=IGNORE)
     try:
-        print("control: an unchanged tree, to prove a failure means something")
+        print("control: an unchanged tree, to prove a failure means something", flush=True)
         noise = run_suite(tree)
         if noise:
             print("  the suite fails before anything is mutated, so every result "
-                  "below would be noise:")
+                  "below would be noise:", flush=True)
             for n in noise:
-                print("    %s" % n)
+                print("    %s" % n, flush=True)
             return 1
-        print("  clean\n")
+        print("  clean\n", flush=True)
 
         survived, bad = [], []
         for m in mutations:
@@ -136,27 +136,27 @@ def main(argv):
             problem = apply_one(tree, m, sources)
             if problem:
                 bad.append((label, problem))
-                print("  %-46s BAD MUTATION  %s" % (label[:46], problem))
+                print("  %-46s BAD MUTATION  %s" % (label[:46], problem), flush=True)
                 continue
             names = run_suite(tree)
             if names:
                 print("  %-46s caught     %2d  %s"
-                      % (label[:46], len(names), ", ".join(n[5:44] for n in names[:2])))
+                      % (label[:46], len(names), ", ".join(n[5:44] for n in names[:2])), flush=True)
             else:
                 survived.append(label)
-                print("  %-46s SURVIVED" % label[:46])
+                print("  %-46s SURVIVED" % label[:46], flush=True)
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
     print("\n%d of %d mutation(s) survived%s"
           % (len(survived), len(mutations) - len(bad),
-             ", %d could not be applied" % len(bad) if bad else ""))
+             ", %d could not be applied" % len(bad) if bad else ""), flush=True)
     for label in survived:
-        print("  %s" % label)
+        print("  %s" % label, flush=True)
     if bad:
-        print("\nthese edited nothing, so surviving says nothing about the tests:")
+        print("\nthese edited nothing, so surviving says nothing about the tests:", flush=True)
         for label, why in bad:
-            print("  %-46s %s" % (label[:46], why))
+            print("  %-46s %s" % (label[:46], why), flush=True)
     return 1 if survived or bad else 0
 
 
@@ -183,11 +183,11 @@ def check_anchors(argv):
                 if seen != 1:
                     stale.append((name[:-5], m.get("label", ""), seen))
     if stale:
-        print("%d anchor(s) no longer match exactly once:" % len(stale))
+        print("%d anchor(s) no longer match exactly once:" % len(stale), flush=True)
         for name, label, seen in stale:
-            print("  %-18s %-46s matched %d" % (name, label[:46], seen))
+            print("  %-18s %-46s matched %d" % (name, label[:46], seen), flush=True)
         return 1
-    print("every anchor in dev/mutations still matches exactly once")
+    print("every anchor in dev/mutations still matches exactly once", flush=True)
     return 0
 
 
@@ -209,9 +209,9 @@ def self_test():
     path = os.path.join(tempfile.mkdtemp(), "self.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(checks, fh)
-    print("running the harness against two mutations with known answers\n")
+    print("running the harness against two mutations with known answers\n", flush=True)
     code = main(["mutate.py", path])
-    print("\nexpected: the first caught, the second reported as a bad mutation.")
+    print("\nexpected: the first caught, the second reported as a bad mutation.", flush=True)
     return 0 if code == 1 else 1
 
 

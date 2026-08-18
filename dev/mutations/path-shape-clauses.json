@@ -1,0 +1,12 @@
+[
+ {"label": "a fanned pair is not called out on a double NAT",
+  "old": "                          if fanned else \"\"),", "new": "                          if False else \"\"),"},
+ {"label": "a fanned wall does not say the times may be two routes",
+  "old": "                   if fanned else \"\")),", "new": "                   if False else \"\")),"},
+ {"label": "a wall at hop one is described like any other hop",
+  "old": "                 if wj[\"hop\"] == 1 else", "new": "                 if False else"},
+ {"label": "a second translation is not counted",
+  "old": "                          if len(seen) > 1 else \"\")", "new": "                          if False else \"\")"},
+ {"label": "an on-link destination is described as having a router",
+  "old": "               if off[\"onlink\"] else", "new": "               if False else"}
+]

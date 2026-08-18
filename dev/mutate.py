@@ -63,6 +63,27 @@ def run_suite(tree):
     return sorted(set(FAILED.findall(res.stdout + res.stderr)))
 
 
+def does_not_import(tree):
+    """Does the mutant still import. Returns the reason it does not, or None.
+
+    The most dangerous way for this harness to be wrong. A mutation that breaks
+    the syntax stops the suite from loading at all, so no line beginning FAIL:
+    or ERROR: is ever printed - and zero failures reads as SURVIVED, which says
+    "nothing tests this rule" about a rule that is perfectly well tested. It
+    sends somebody to write tests that already exist.
+
+    branch_sweep.py learned this and checks its edits with `node --check`. This
+    did not, and reported two survivors that were both syntax errors.
+    """
+    res = subprocess.run([sys.executable, "-c", "import faultone"], cwd=tree,
+                         capture_output=True, text=True,
+                         env=dict(os.environ, SSH_CONNECTION=""), timeout=120)
+    if res.returncode == 0:
+        return None
+    last = (res.stderr.strip().splitlines() or ["did not import"])[-1]
+    return last[:70]
+
+
 def apply_one(tree, mutation, sources):
     """Write one mutation into the copy. Returns an error string, or None."""
     name = mutation.get("file", "faultone.py")
@@ -137,6 +158,11 @@ def main(argv):
             if problem:
                 bad.append((label, problem))
                 print("  %-46s BAD MUTATION  %s" % (label[:46], problem), flush=True)
+                continue
+            broken = does_not_import(tree)
+            if broken:
+                bad.append((label, broken))
+                print("  %-46s BAD MUTATION  %s" % (label[:46], broken), flush=True)
                 continue
             names = run_suite(tree)
             if names:

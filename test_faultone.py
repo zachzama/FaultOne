@@ -10042,6 +10042,102 @@ class TestTheClausesNoReportEverRendered(unittest.TestCase):
         self.assertIn("was the TLS handshake", found["message"])
 
 
+class TestTheClausesThatDescribeTheShapeOfAPath(unittest.TestCase):
+    """The six remaining conditional clauses, all needing a hand-built trace.
+
+    Each says something about the *shape* of the path rather than about how bad
+    it is - a fan-out, a second translation, a wall at the very first hop, a
+    destination that turns out to be on-link. The corpus traces are single-file
+    and none of them has any of those shapes, so this is the branch the report
+    can take and no report has taken.
+    """
+
+    def _run(self, mod, code, **kw):
+        args = dict(target="8.8.8.8", check_ports=None, baseline=None, quick=False)
+        args.update(kw)
+        r = mod.diagnose(**args)
+        return next((f for f in r["findings"] if f["code"] == code), None)
+
+    def test_two_private_hops_may_be_side_by_side_rather_than_in_series(self):
+        """Two routers answering the same hop is a load-balanced path, so the
+        two networks are not necessarily one behind the other - which is the
+        difference between a double NAT and two branches of the same one."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  10.0.1.1 (10.0.1.1)  2.0 ms\n"
+                 "    10.0.1.2 (10.0.1.2)  2.1 ms\n"
+                 " 3  203.0.113.9 (203.0.113.9)  9.0 ms\n")
+        found = self._run(m, "double_nat")
+        self.assertIsNotNone(found)
+        self.assertIn("more than one router answered at hop", found["message"])
+        self.assertIn("side by side on a load-balanced path", found["message"])
+
+    def test_a_single_file_path_says_none_of_that(self):
+        """The clause has to stay out when nothing fanned, or it is noise on
+        every double NAT there is."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  10.0.1.1 (10.0.1.1)  2.0 ms\n"
+                 " 3  203.0.113.9 (203.0.113.9)  9.0 ms\n")
+        found = self._run(m, "double_nat")
+        self.assertIsNotNone(found)
+        self.assertNotIn("more than one router answered", found["message"])
+
+    def test_a_wall_at_the_first_hop_is_said_differently(self):
+        """"Latency jumps 600ms at hop 1" reads as something happening on the
+        way out. It is the first thing on the way out."""
+        m = fresh()
+        trace(m, " 1  203.0.113.1 (203.0.113.1)  640.0 ms\n"
+                 " 2  203.0.113.9 (203.0.113.9)  645.0 ms\n")
+        found = self._run(m, "latency_wall")
+        self.assertIsNotNone(found)
+        self.assertIn("The very first hop is already", found["message"])
+
+    def test_a_wall_across_a_fanned_pair_says_the_times_may_be_two_routes(self):
+        """The jump is then the difference between two routes rather than the
+        cost of one link, and saying so is the difference between a ticket and
+        a shrug."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  203.0.113.1 (203.0.113.1)  8.0 ms\n"
+                 " 3  203.0.113.9 (203.0.113.9)  640.0 ms\n"
+                 "    203.0.113.10 (203.0.113.10)  641.0 ms\n"
+                 " 4  203.0.113.20 (203.0.113.20)  645.0 ms\n")
+        found = self._run(m, "latency_wall")
+        self.assertIsNotNone(found)
+        self.assertIn("More than one router answered across that pair of hops",
+                      found["message"])
+
+    def test_more_than_one_translation_is_counted(self):
+        """One translating device is ordinary. Two is a second thing to rule
+        out, and the count is the whole of that."""
+        m = fresh()
+        walked(m, [("10.0.0.1", "10.0.0.5"),
+                   ("203.0.113.1", "198.51.100.7"),
+                   ("203.0.113.9", "198.51.100.8")])
+        found = self._run(m, "nat_observed")
+        self.assertIsNotNone(found)
+        self.assertIn("It happens", found["message"])
+        self.assertIn("more than one translating device", found["message"])
+
+    def test_a_destination_on_link_has_no_router_to_name(self):
+        """The trace went through a router and the routing table says there is
+        nothing in between, which is a sharper disagreement than the trace
+        simply going somewhere else."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  10.0.0.90 (10.0.0.90)  2.0 ms\n")
+        # The real command merges the parsed route into its own result, so a
+        # stub that returns only stdout leaves `onlink` unset and the
+        # comparison quietly declines to make itself.
+        route = "10.0.0.90 dev eth0 src 10.0.0.5"
+        m.cmd_route_to = lambda t: dict({"ok": True, "cmd": "ip route get",
+                                         "stdout": route}, **m.parse_route_to(route))
+        found = self._run(m, "trace_took_another_route", target="10.0.0.90")
+        self.assertIsNotNone(found)
+        self.assertIn("with no router in the way", found["message"])
+
+
 class TestTheBranchThatMakesAFindingCritical(unittest.TestCase):
     """duplex_mismatch is a warning or a critical depending on one reading, and
     only one of the two was ever produced.

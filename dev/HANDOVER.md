@@ -7,7 +7,7 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Open: the clauses a report can say and no scenario produces
+## Settled: the clauses a report can say and no scenario produced
 
 A finding whose message contains an `if` has more than one thing to say, and
 the corpus keeps one scenario per finding - which asks whether a finding fires
@@ -30,11 +30,19 @@ unreachable - two fixtures rather than one. Both were first written as "assert
 if it fired", which passed while producing nothing. A test that proves nothing
 looks exactly like coverage, so they are out rather than green.
 
-**Six remain undriven**, all describing the shape of a path rather than a
-severity: two on `double_nat`, two on `latency_wall` (ECMP across a pair of
-hops, and the wall being at the very first hop), `nat_observed` seeing more
-than one translation, and `trace_took_another_route` finding the destination
-on-link with no router in the way. Each needs a hand-built trace.
+**All fifteen are driven now.** The last six needed hand-built traces: a hop
+with two responders for the fan-out clauses on `double_nat` and `latency_wall`,
+a wall at hop 1, a walk with two translations, and a route answer that says
+on-link while the trace went through a router.
+
+One of those exposed the worst defect this harness has had. `dev/mutate.py`
+reported two of them as SURVIVED when the mutation had broken the syntax: the
+module never imported, no line beginning FAIL: or ERROR: was printed, and zero
+failures reads as "nothing tests this rule" about a rule that is perfectly well
+tested. It sends somebody to write tests that already exist. Mutants are now
+checked for being importable before their result is believed - which is the
+same check `branch_sweep.py` has made with `node --check` since it was written,
+and the lesson did not travel.
 
 **Getting the sweep right took three attempts and that is the transferable
 part.** Stripping the placeholders out of a clause glues the fragments either

@@ -16585,6 +16585,93 @@ def _mark_target_hop(hops, findings):
         return
 
 
+def _check_against_the_last_visit(raw, findings, gw, arp_entries, baseline,
+                                  hops, path_source, target, target_kind,
+                                  neighbours, call_quality, path_insight):
+    """What changed since a previous visit, and what the change is worth.
+
+    Lifted out of diagnose() whole. It was sixty-five lines in the middle of
+    a four-hundred-line function and is the one part of it that answers a
+    different question from everything around it: not what is true now, but
+    what is true now and was not last time.
+
+    Returns the comparison, the previous path kept for the ribbon, and the
+    gateway MAC - which is context on its own and evidence once there are
+    two visits to compare.
+    """
+    # The hardware currently answering for the gateway, and what kind of thing
+    # it is. Both are context on their own and evidence once there are two
+    # visits to compare.
+    gateway_mac = next((e.get("mac") for e in (arp_entries or [])
+                        if e.get("ip") == gw and e.get("mac")), None)
+    virtual = virtual_router_mac(gateway_mac)
+    if virtual:
+        findings.append({
+            "severity": "ok",
+            "layer": 2,
+            "code": "gateway_is_virtual",
+            "message": f"The gateway {gw} answers from {gateway_mac}, which is a "
+                       f"{virtual[0]} address for group {virtual[1]}. It is a redundancy "
+                       f"pair rather than one router, so \"the gateway is down\" here would "
+                       f"more often mean a failover that did not complete than a box that "
+                       f"stopped. Two masters in one group share this address, so nothing "
+                       f"from a single run can tell them apart - compare against a "
+                       f"--baseline to see the address change hands.",
+        })
+    comparison = compare_reports({"detected_gateway": gw, "path_source": path_source,
+                                  "neighbours": neighbours, "raw": raw, "hops": hops,
+                                  "call_quality": call_quality,
+                                  # Without this the comparison could not tell
+                                  # whether both visits measured the same
+                                  # thing, and every target-dependent reading
+                                  # was silently dropped on every run.
+                                  "target": target,
+                                  "gateway_mac": gateway_mac,
+                                  "demarc_hop": path_insight.get("demarc_hop"),
+                                  # These two are compared and were being left
+                                  # out, so a version or interpreter change
+                                  # between visits could never be reported.
+                                  "version": __version__,
+                                  "python": platform.python_version(),
+                                  # Every check has run by here, so the fault
+                                  # list is complete. The verdict has not been
+                                  # built yet and is compared further down,
+                                  # where it exists.
+                                  "findings": findings,
+                                  "verdict": None}, baseline) if baseline else []
+    # The previous visit's path, kept only as far as it can be drawn: the hop
+    # number and how long the round trip to it took. Enough to lay the last
+    # visit under this one on the same scale, and nothing that was not needed
+    # for that - the addresses, names and counters stay in the report they
+    # came from. Absent unless --baseline was given, so a run without one
+    # carries nothing extra.
+    baseline_path = [{"hop": h.get("hop"), "avg_ms": h.get("avg_ms")}
+                     for h in ((baseline or {}).get("hops") or [])
+                     if h.get("avg_ms") is not None] or None
+    worse = [c for c in comparison if c["direction"] == "worse"]
+    if worse:
+        summary = "; ".join(f"{c['what']}: {c['before']} -> {c['after']}" for c in worse[:4])
+        findings.append({
+            "severity": "warning",
+            "layer": 2,
+            "code": "regression_since_baseline",
+            "message": f"{len(worse)} thing(s) got worse since the baseline report - {summary}"
+                       + ("; ..." if len(worse) > 4 else "")
+                       + ". A change since the last visit is usually a better lead than any "
+                         "absolute reading, because it dates the fault.",
+        })
+    elif comparison:
+        findings.append({
+            "severity": "ok",
+            "layer": 2,
+            "code": "baseline_changes",
+            "message": f"{len(comparison)} difference(s) from the baseline, none of them a "
+                       f"regression. See the comparison section.",
+        })
+
+    return comparison, baseline_path, gateway_mac
+
+
 def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
              progress=None, inventory=False, ports_speculative=False,
              uplink_mbps=None):
@@ -16772,75 +16859,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
 
     # What changed since a previous visit. Regressions become findings so they
     # can't be missed; everything else is reported as context.
-    # The hardware currently answering for the gateway, and what kind of thing
-    # it is. Both are context on their own and evidence once there are two
-    # visits to compare.
-    gateway_mac = next((e.get("mac") for e in (arp_entries or [])
-                        if e.get("ip") == gw and e.get("mac")), None)
-    virtual = virtual_router_mac(gateway_mac)
-    if virtual:
-        findings.append({
-            "severity": "ok",
-            "layer": 2,
-            "code": "gateway_is_virtual",
-            "message": f"The gateway {gw} answers from {gateway_mac}, which is a "
-                       f"{virtual[0]} address for group {virtual[1]}. It is a redundancy "
-                       f"pair rather than one router, so \"the gateway is down\" here would "
-                       f"more often mean a failover that did not complete than a box that "
-                       f"stopped. Two masters in one group share this address, so nothing "
-                       f"from a single run can tell them apart - compare against a "
-                       f"--baseline to see the address change hands.",
-        })
-    comparison = compare_reports({"detected_gateway": gw, "path_source": path_source,
-                                  "neighbours": neighbours, "raw": raw, "hops": hops,
-                                  "call_quality": call_quality,
-                                  # Without this the comparison could not tell
-                                  # whether both visits measured the same
-                                  # thing, and every target-dependent reading
-                                  # was silently dropped on every run.
-                                  "target": target,
-                                  "gateway_mac": gateway_mac,
-                                  "demarc_hop": path_insight.get("demarc_hop"),
-                                  # These two are compared and were being left
-                                  # out, so a version or interpreter change
-                                  # between visits could never be reported.
-                                  "version": __version__,
-                                  "python": platform.python_version(),
-                                  # Every check has run by here, so the fault
-                                  # list is complete. The verdict has not been
-                                  # built yet and is compared further down,
-                                  # where it exists.
-                                  "findings": findings,
-                                  "verdict": None}, baseline) if baseline else []
-    # The previous visit's path, kept only as far as it can be drawn: the hop
-    # number and how long the round trip to it took. Enough to lay the last
-    # visit under this one on the same scale, and nothing that was not needed
-    # for that - the addresses, names and counters stay in the report they
-    # came from. Absent unless --baseline was given, so a run without one
-    # carries nothing extra.
-    baseline_path = [{"hop": h.get("hop"), "avg_ms": h.get("avg_ms")}
-                     for h in ((baseline or {}).get("hops") or [])
-                     if h.get("avg_ms") is not None] or None
-    worse = [c for c in comparison if c["direction"] == "worse"]
-    if worse:
-        summary = "; ".join(f"{c['what']}: {c['before']} -> {c['after']}" for c in worse[:4])
-        findings.append({
-            "severity": "warning",
-            "layer": 2,
-            "code": "regression_since_baseline",
-            "message": f"{len(worse)} thing(s) got worse since the baseline report - {summary}"
-                       + ("; ..." if len(worse) > 4 else "")
-                       + ". A change since the last visit is usually a better lead than any "
-                         "absolute reading, because it dates the fault.",
-        })
-    elif comparison:
-        findings.append({
-            "severity": "ok",
-            "layer": 2,
-            "code": "baseline_changes",
-            "message": f"{len(comparison)} difference(s) from the baseline, none of them a "
-                       f"regression. See the comparison section.",
-        })
+    comparison, baseline_path, gateway_mac = _check_against_the_last_visit(
+        raw, findings, gw, arp_entries, baseline, hops, path_source,
+        target, target_kind, neighbours, call_quality, path_insight)
 
     _check_every_interface(findings, raw)
 

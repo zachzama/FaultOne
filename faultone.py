@@ -13633,32 +13633,15 @@ def _check_tcp(raw, findings, counter_window, tcp_baseline):
                        f"as slowness by every application on this box.",
         })
 
-def _check_flows(raw, findings):
-    """Split the retransmit picture by destination, and name what's blocking.
+def _check_returns_that_stopped(raw, findings, stats):
+    """A side that is being sent to and is acknowledging nothing.
 
-    This runs after _check_tcp on purpose: the host-wide rate is the headline,
-    and these say which destination it belongs to. Both share the `tcp` finding
-    family, so two views of the same retransmits can't corroborate each other
-    into false confidence.
+    Read before the loss shapes because it is a different fault with a
+    different owner: loss is a percentage of what came back, and this is
+    the case where the answer is none of it. A percentage cannot say which
+    direction stopped and this can, which is the whole reason it is
+    separate.
     """
-    raw["tcp_flows"] = cmd_tcp_flows((raw.get("sockets") or {}).get("listen_ports"))
-    stats = raw["tcp_flows"]
-    if not stats.get("ok"):
-        return
-    if stats.get("truncated"):
-        findings.append({
-            "severity": "warning",
-            "layer": 4,
-            "code": "tcp_flow_sample_partial",
-            "message": (f"This box has more open connections than one report can carry, so "
-                        f"only the first {stats['flows_seen']} were read. The per-destination "
-                        f"split below is drawn from that sample rather than every connection."),
-        })
-    shape = stats.get("shape")
-    worst = stats.get("worst_loss_pct")
-    basis = "segment counts" if stats.get("basis") == "segments" else "byte counts"
-    peers = ", ".join(stats.get("lossy_peers") or [])
-
     # A side gone quiet, before the loss shapes below and separate from them.
     # Emitted ahead of the returns further down rather than after, because those
     # exit the moment a side is found to be losing traffic - and a side can be
@@ -13703,38 +13686,17 @@ def _check_flows(raw, findings):
                                         "the clients using it"),
         })
 
-    # On a box that accepts connections, which side the loss is on decides who
-    # owns it, and that is a different question from how many destinations are
-    # affected. Answered first, because the direction-blind shapes below would
-    # otherwise call an internal segment "the provider or upstream".
-    side = stats.get("lossy_side")
-    if side in ("backend", "client"):
-        if side == "backend":
-            findings.append({
-                "severity": "critical" if (worst or 0) >= 5 else "warning",
-                "layer": 3,
-                "code": "tcp_flow_loss_backends",
-                "message": (f"Loss is on the connections this box opened, not on the ones "
-                            f"clients opened to it: {stats['backends_lossy']} backend "
-                            f"connection(s) losing traffic (worst {worst}% by {basis}, to "
-                            f"{peers}) while every client connection is clean. That puts it "
-                            f"between this box and what it connects out to"
-                            f"{_where_that_is(peers)}."),
-            })
-            return
-        findings.append({
-            "severity": "critical" if (worst or 0) >= 5 else "warning",
-            "layer": 3,
-            "code": "tcp_flow_loss_clients",
-            "message": (f"Loss is on the connections clients opened to this box, not on the "
-                        f"ones it opened to its backends: {stats['clients_lossy']} client "
-                        f"connection(s) losing traffic (worst {worst}% by {basis}) while "
-                        f"everything this box depends on is clean. The service and its "
-                        f"dependencies are fine; the path between here and the people using "
-                        f"it is not."),
-        })
-        return
 
+
+def _check_flow_delay(raw, findings, stats):
+    """Delay on the connections themselves, per side: queue and jitter.
+
+    Both read the same per-side statistics and both are about a path that
+    is slow rather than lossy, which is the distinction the loss shapes
+    below cannot draw. Kept together because they answer one question in
+    two units, and separated from the loss because a reader looking at
+    either is not looking at the other.
+    """
     # Queuing, before the loss shapes below. Latency that is queue rather than
     # distance has a different owner and a different fix, and every other
     # latency reading here - the ping, the per-hop deltas - can only say how
@@ -13800,6 +13762,68 @@ def _check_flows(raw, findings):
     # actually carrying. Context rather than a fault: a transfer limited by the
     # path is usually TCP working correctly, and the value is in being able to
     # say which of the three it is when somebody asks why something is slow.
+
+
+def _check_flows(raw, findings):
+    """Split the retransmit picture by destination, and name what's blocking.
+
+    This runs after _check_tcp on purpose: the host-wide rate is the headline,
+    and these say which destination it belongs to. Both share the `tcp` finding
+    family, so two views of the same retransmits can't corroborate each other
+    into false confidence.
+    """
+    raw["tcp_flows"] = cmd_tcp_flows((raw.get("sockets") or {}).get("listen_ports"))
+    stats = raw["tcp_flows"]
+    if not stats.get("ok"):
+        return
+    if stats.get("truncated"):
+        findings.append({
+            "severity": "warning",
+            "layer": 4,
+            "code": "tcp_flow_sample_partial",
+            "message": (f"This box has more open connections than one report can carry, so "
+                        f"only the first {stats['flows_seen']} were read. The per-destination "
+                        f"split below is drawn from that sample rather than every connection."),
+        })
+    shape = stats.get("shape")
+    worst = stats.get("worst_loss_pct")
+    basis = "segment counts" if stats.get("basis") == "segments" else "byte counts"
+    peers = ", ".join(stats.get("lossy_peers") or [])
+
+    _check_returns_that_stopped(raw, findings, stats)
+    # On a box that accepts connections, which side the loss is on decides who
+    # owns it, and that is a different question from how many destinations are
+    # affected. Answered first, because the direction-blind shapes below would
+    # otherwise call an internal segment "the provider or upstream".
+    side = stats.get("lossy_side")
+    if side in ("backend", "client"):
+        if side == "backend":
+            findings.append({
+                "severity": "critical" if (worst or 0) >= 5 else "warning",
+                "layer": 3,
+                "code": "tcp_flow_loss_backends",
+                "message": (f"Loss is on the connections this box opened, not on the ones "
+                            f"clients opened to it: {stats['backends_lossy']} backend "
+                            f"connection(s) losing traffic (worst {worst}% by {basis}, to "
+                            f"{peers}) while every client connection is clean. That puts it "
+                            f"between this box and what it connects out to"
+                            f"{_where_that_is(peers)}."),
+            })
+            return
+        findings.append({
+            "severity": "critical" if (worst or 0) >= 5 else "warning",
+            "layer": 3,
+            "code": "tcp_flow_loss_clients",
+            "message": (f"Loss is on the connections clients opened to this box, not on the "
+                        f"ones it opened to its backends: {stats['clients_lossy']} client "
+                        f"connection(s) losing traffic (worst {worst}% by {basis}) while "
+                        f"everything this box depends on is clean. The service and its "
+                        f"dependencies are fine; the path between here and the people using "
+                        f"it is not."),
+        })
+        return
+
+    _check_flow_delay(raw, findings, stats)
     limits = stats.get("limits") or {}
     if limits:
         lead = max((("the path between them", limits["path_pct"]),

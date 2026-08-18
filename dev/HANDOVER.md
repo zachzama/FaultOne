@@ -7,11 +7,103 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Open: where 2026-08-17 stopped
+## Open: four vocabularies we wrote ourselves where somebody maintains one
 
-Everything is committed, pushed and released. The suite is green at 1,671, the
-tree is clean, `python3 dev/counts.py --check` says nothing is stale, and all
-three demo sets are regenerated. Nothing is half-applied.
+Found by surveying all 44 module-level tables after the X.733 adoption, asking
+of each: is this a closed set of facts somebody else keeps, or a decision made
+here? The four below are the first kind and are copied incompletely. Each is
+independent of the others, so they can be taken one at a time.
+
+**The rule that came out of the survey, which matters more than the four.**
+Borrow a vocabulary when it is a closed set of *facts*; keep the manual list
+when it encodes a *decision*. X.733 probable causes are facts. "Ports worth
+probing" is a decision, and deriving `SERVING_PORTS` from the IANA registry
+would make it worse - 3000 is not registered for HTTP and is one of the most
+common ports a service actually listens on. Two sets that looked collapsible
+into the new classes are not: `HARDWARE_FINDINGS` (13) against `equipmentAlarm`
+(20) disagree on nine codes because `slow_link` and `duplex_mismatch` are
+settings rather than broken hardware, and that is a real distinction. And
+`perceivedSeverity` from the same X.733 was rejected on purpose: its shape is
+alarm lifecycle, `cleared` means an alarm that was raised and went away, and
+this tool has no alarm state.
+
+### 1. `MULTI_LABEL_TLDS` - the one with a live bug
+
+Seven hand-picked labels standing in for the Public Suffix List. `ptr_network`
+groups hops by network and collapses these to the public suffix instead:
+
+```
+core1.example.ne.jp  -> ne.jp     every Japanese ISP becomes one network
+edge.example.or.jp   -> or.jp
+r1.example.nhs.uk    -> nhs.uk
+h.example.sch.uk     -> sch.uk
+be-300.example.co.uk -> example.co.uk   (correct - `co` is in the list)
+```
+
+`ne.jp` is *the* ISP suffix in Japan. This is the failure the comment above the
+list says it exists to prevent, in the cases nobody listed.
+
+**Do not vendor the PSL.** It is ~230KB against a tool that must stay tiny and
+stdlib-only, and it would be the largest thing in the repository. Extend the
+list with the ~30 known ccTLD second-levels instead - still manual, several
+times better, no size cost - and write the test from the failures above.
+
+Worth knowing before deciding how much this matters: `asn` on a hop is the
+standard answer to the same question and is already collected, but only when
+mtr ran and could look it up, so this fallback carries real weight on the paths
+where it is wrong.
+
+### 2. `CHECK_MEANS` - HAProxy's own `check_status`
+
+Nine of about fourteen. Missing `L6OK`, `L7OKC`, and - the ones that matter -
+`INI`, `UNK` and `SOCKERR`, which are what a check reports *before it has run*.
+A freshly reloaded proxy therefore shows a status the report cannot explain.
+Complete it from HAProxy's management documentation.
+
+### 3. `DNS_RCODES` - the IANA DNS RCODEs registry
+
+Six of about twenty. It degrades rather than lies - the lookup falls back to
+printing the number - so `NotAuth` renders as `9`. Cheapest of the four.
+
+### 4. `TRACE_ANNOTATIONS` - ICMP unreachable codes, RFC 792 and RFC 1812
+
+Nine entries, missing `!V` (host precedence violation) and the numeric `!<N>`
+form traceroute prints for a code it has no letter for.
+
+### Already standard, and only unlabelled
+
+`TCP_STATES` is RFC 9293's eleven states exactly, `LAYERS` is OSI, and
+`TUNNEL_OVERHEAD` is RFC-derived header sizes. No work beyond a comment naming
+where each came from, so nobody improves them.
+
+## Open: where the laptop stopped, 2026-08-17 evening
+
+Picked up after pulling v1.21.0, so this continues the desktop session below
+rather than replacing it. Everything is committed and pushed, the suite is
+green at **1,689**, the tree is clean and `dev/counts.py --check` says nothing
+is stale. Nothing is half-applied.
+
+**Two things landed.** Every ranked finding now carries an ITU-T X.733 event
+type and probable cause - `dev/counts.py --kinds`, and `--deep` for how many of
+each can be the answer rather than only a symptom. And the audit that made
+possible immediately returned one gap, which is now built: `cpu_saturated`
+names this box's own run queue as the cause of a timing that had none.
+
+**The next work is the four vocabularies above.** They are independent, small,
+and each has a source to copy from rather than a judgement to make.
+
+**One thing to know before touching `cpu_saturated`.** It is gated on some
+other finding already describing something slow, because a test older than it
+says a busy box is not a network fault and that rule is right - a proxy at
+capacity doing what it was bought for must not be reported as broken. The gate
+reads the X.733 class rather than a list of codes, so a latency finding written
+later is covered the day it is classified. Do not remove the gate to "make it
+fire more".
+
+### The older stopping point, from the desktop
+
+The suite was green at 1,671 there, the tree clean, and all three demo sets
+regenerated.
 
 **The branch sweep is done and does not need re-running.** Both directions ran
 clean over all 88 sites on 2026-08-16 - 0 survivors, 0 edits that broke the

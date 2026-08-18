@@ -6931,6 +6931,14 @@ def translations_seen(hops, sent_from):
     return out
 
 
+#: How far apart two answers from the same address have to be before the path
+#: is circling rather than one device replying twice. Two: there has to be a
+#: hop in between for traffic to have gone anywhere and come back. Adjacent
+#: repeats are a device that does not decrement TTL like a router, which is
+#: ordinary on the appliances this tool is aimed at.
+LOOP_MIN_HOP_GAP = 2
+
+
 def balanced_hops(hops):
     """Hop numbers where more than one router answered.
 
@@ -7155,15 +7163,30 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
     # trace and the inference below carries on alone.
     translations = translations_seen(hops, sent_from)
 
-    # The same router answering at two hop numbers is a loop (or a path that
-    # doubles back), which stalls traffic well before it reaches the target.
-    seen, loop_at = {}, None
+    # The same router answering at two hop numbers, with at least one hop
+    # between them, is a loop - traffic went out and came back, which stalls it
+    # well before the target.
+    #
+    # With nothing between them it is not. One address answering at two
+    # consecutive TTLs is one device replying twice, which is ordinary on a
+    # firewall, a NAT, or an appliance that does not decrement TTL the way a
+    # router does. A real appliance reported exactly this: one address at hops
+    # 1 and 2, called a critical routing loop, made the headline, and sent its
+    # owner to the provider with two hop numbers to complain about. The path
+    # was two hops long and everything past it was filtered.
+    #
+    # `same_router_twice` says the shape instead, without blaming anyone.
+    seen, loop_at, repeated = {}, None, None
     for h in hops:
         host = h.get("host")
         if not host:
             continue
-        if host in seen and loop_at is None:
-            loop_at = {"host": host, "hops": [seen[host], h["hop"]]}
+        if host in seen:
+            gap = h["hop"] - seen[host]
+            if gap >= LOOP_MIN_HOP_GAP and loop_at is None:
+                loop_at = {"host": host, "hops": [seen[host], h["hop"]]}
+            elif repeated is None:
+                repeated = {"host": host, "hops": [seen[host], h["hop"]]}
         seen.setdefault(host, h["hop"])
 
     cgnat_hop = next((h["hop"] for h in hops if h.get("cgnat")), None)
@@ -7198,6 +7221,7 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
         "balanced_hops": balanced,
         "translations": translations,
         "loop_at": loop_at,
+        "repeated_hop": repeated,
         "cgnat_hop": cgnat_hop,
         "demarc_hop": demarc,
         "worst_jump": {"hop": worst["hop"], "delta_ms": worst["delta_ms"],
@@ -8246,6 +8270,9 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # working. It is reported so a 4xx in the evidence is not
                   # read as an error, and never ranked as one.
                   "own_service_demands_auth",
+                  # One device answering two probes. Context about the shape of
+                  # a trace, and the reason the loop finding did not fire.
+                  "same_router_twice",
                   "trace_took_another_route",
                   # What arrived on one side against what left on the other.
                   # A policy refusing requests and a box that stopped
@@ -14844,6 +14871,26 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                 f"before escalating it as a loop."),
         })
 
+    # The same address at two consecutive TTLs, which is not traffic circling.
+    # Said because a two-hop path with one address on both is an odd-looking
+    # trace and a reader who is not told why will reach for the loop reading
+    # themselves - which is where this check started.
+    rep = path_insight.get("repeated_hop")
+    if rep and not path_insight.get("loop_at"):
+        findings.append({
+            "severity": "ok",
+            "layer": 3,
+            "code": "same_router_twice",
+            "message": (
+                f"{rep['host']} answered at hop {rep['hops'][0]} and again at hop "
+                f"{rep['hops'][1]}, with nothing in between. That is one device "
+                f"replying to two probes rather than traffic going out and coming "
+                f"back: a firewall, a NAT, or an appliance that does not decrement "
+                f"TTL the way a router does will do this, and it is common on the "
+                f"first hop out of a site. It makes the path one hop shorter than it "
+                f"reads, and it is not a routing loop - those have a hop in between "
+                f"for the traffic to circle through."),
+        })
     if path_insight.get("translations"):
         seen = path_insight["translations"]
         first = seen[0]

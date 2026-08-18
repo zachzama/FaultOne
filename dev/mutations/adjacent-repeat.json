@@ -1,0 +1,10 @@
+[
+ {"label": "an adjacent repeat is a routing loop again",
+  "old": "            if gap >= LOOP_MIN_HOP_GAP and loop_at is None:",
+  "new": "            if gap >= 1 and loop_at is None:"},
+ {"label": "a real loop stops being one",
+  "old": "            if gap >= LOOP_MIN_HOP_GAP and loop_at is None:",
+  "new": "            if gap >= 99 and loop_at is None:"},
+ {"label": "the repeat is never explained",
+  "old": "    if rep and not path_insight.get(\"loop_at\"):", "new": "    if False:"}
+]

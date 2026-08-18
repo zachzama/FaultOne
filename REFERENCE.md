@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 190
+difference is which one it puts at the top, and that is the whole product: 191
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1380,11 +1380,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **190** | Distinct conclusions it can reach and state in plain language. 157 are faults; 33 are context, like which switch port you're on. |
+| **Findings** | **191** | Distinct conclusions it can reach and state in plain language. 157 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **157** | Findings the verdict knows how to rank and assign an owner to. |
 | **Automated tests** | **531** | 1722 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 190 findings are the useful figure** if you want to know what the tool can
+**The 191 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2244,6 +2244,7 @@ can say what the bar was rather than "the tool said so".
 | `LOAD_PER_CPU_WARN` | **2.0** | how deep the run queue has to be, per CPU, before this box's own load is offered as the reason something is slow. Higher than the 1.0 the context sentence beside it uses, and deliberately: that one only qualifies somebody else's finding - *the limit you hit is a setting, not a shortage* - where this is the finding, and a box at exactly one runnable task per CPU is fully used rather than in trouble. At two, work has been waiting as long as it has been running |
 | `LOAD_PER_CPU_BAD` | **8.0** | four times subscribed, where the wait dominates and every timing this tool takes is measuring the queue for a processor rather than the network. Above this the finding is critical rather than a warning |
 | `LOCAL_QUEUE_STANDING_PKTS` | **64** | how many packets have to be sitting in this box's own egress queue before the queue is the story rather than ordinary bursting. A queue exists to hold a burst, so a handful waiting is it working; a standing backlog is traffic being delayed here long enough for the connections above it to see it. Set where an `fq_codel` default of 10240 is plainly not coping rather than where it is merely busy. This is the one reading that turns a latency symptom into a cause: without it the report says traffic is being held up and which way it was going, and names the delay itself as the answer |
+| `LOOP_MIN_HOP_GAP` | **2** | how far apart two answers from the same address have to be before the path is circling rather than one device replying twice. There has to be a hop in between for traffic to have gone anywhere and come back. Adjacent repeats are a device that does not decrement TTL the way a router does, which is ordinary on a firewall or a NAT and common on the first hop out of a site - a real appliance reported one address at hops 1 and 2 and was told it had a critical routing loop, with the provider named as the owner |
 | `ASYMMETRIC_HOP_GAP` | **2** | how far the hop count out and the hop count back have to differ before the path is called asymmetric. The two are not measured the same way - one is walked hop by hop, the other inferred from the TTL of a single reply against an assumed starting value - so an off-by-one falls out of the method without anything being wrong. Two is a different route |
 | `CLOSER_THAN_PATH_PCT` | **40** | how much of the round trip a TCP handshake can take and still have plausibly made it. Below this share something nearer than the target answered. Generous on purpose: a legitimate cache or edge node really is closer than the name it serves, and the claim is only that something closer replied |
 | `CLOSER_THAN_PATH_FLOOR_MS` | **20** | and a floor under that share, because on a two-millisecond path every measurement is noise and a percentage of nothing means nothing |
@@ -3789,7 +3790,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 190 findings with readable rules instead of
+> way out - and who owns it. Ranks 191 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

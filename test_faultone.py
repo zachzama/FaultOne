@@ -15693,9 +15693,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 997),
-            "compressed": (len(gzip.compress(raw, 9)), 301),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 210),
+            "on disk": (len(raw), 1000),
+            "compressed": (len(gzip.compress(raw, 9)), 302),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 211),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -20912,6 +20912,14 @@ def _(nd):
     nd.cmd_traceroute_tcp = lambda t, port=443: {"ok": True, "cmd": "tcptraceroute", "tool": "tcptraceroute",
         "port": 443, "hops": nd.parse_traceroute_hops(
             " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  8.8.8.8 (8.8.8.8)  20.0 ms\n")}
+
+@scenario("same_router_twice")
+def _(nd):
+    """One address answering two consecutive TTLs, which is what a firewall or
+    a NAT on the first hop looks like - not traffic circling."""
+    trace(nd, " 1  10.0.0.1 (10.0.0.1)  0.5 ms\n"
+              " 2  10.0.0.1 (10.0.0.1)  0.5 ms\n"
+              " 3  203.0.113.9 (203.0.113.9)  9.0 ms\n")
 
 @scenario("loop")
 def _(nd): trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  10.0.0.2 (10.0.0.2)  2.0 ms\n"

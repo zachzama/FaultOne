@@ -1,0 +1,32 @@
+[
+ {
+  "label": "the source matrix asks with ping only again",
+  "old": "        tcp = _tcp_from_source(entry[\"address\"], target)",
+  "new": "        tcp = {\"state\": None, \"ms\": None, \"held\": None}"
+ },
+ {
+  "label": "a bind failure is counted as a path failure",
+  "old": "    absent = [r for r in rows if r.get(\"held\") is False]",
+  "new": "    absent = []"
+ },
+ {
+  "label": "TCP reaching does not count as reaching",
+  "old": "        return bool(r.get(\"reached\")) or r.get(\"tcp\") == \"open\"",
+  "new": "        return bool(r.get(\"reached\"))"
+ },
+ {
+  "label": "the source is assigned globally again, inside threads",
+  "old": "    chosen = source or SOURCE_ADDRESS",
+  "new": "    chosen = SOURCE_ADDRESS"
+ },
+ {
+  "label": "the interface grouping goes",
+  "old": "    whole = sorted(i for i in hurt if i not in fine and len(hurt[i]) > 1)",
+  "new": "    whole = []"
+ },
+ {
+  "label": "one address on an interface counts as every address on it",
+  "old": "if i not in fine and len(hurt[i]) > 1)",
+  "new": "if i not in fine)"
+ }
+]

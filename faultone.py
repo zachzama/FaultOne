@@ -1702,7 +1702,7 @@ def _source_for(family):
     return (SOURCE_ADDRESS, 0)
 
 
-def connect_from(address, port, timeout):
+def connect_from(address, port, timeout, source=None):
     """A TCP connection, leaving from SOURCE_ADDRESS when one was asked for.
 
     The bind is the cheapest real check in the tool. An address this box does
@@ -1717,14 +1717,19 @@ def connect_from(address, port, timeout):
     holding this address" is the finding, and it is the one a clean report on
     the wrong box hides.
     """
-    src = (SOURCE_ADDRESS, 0) if SOURCE_ADDRESS else None
+    # Passed in beats the global, and the caller that needs it says why: the
+    # source matrix probes every address at once, and assigning a global per
+    # probe would have them overwrite each other. The global stays for the
+    # ordinary run, where --source is set once for the whole thing.
+    chosen = source or SOURCE_ADDRESS
+    src = (chosen, 0) if chosen else None
     try:
         return socket.create_connection((address, port), timeout=timeout,
                                         source_address=src)
     except OSError as exc:
         if src and getattr(exc, "errno", None) in _NO_SUCH_ADDRESS:
             raise SourceAddressUnavailable(
-                "%s is not an address on this box" % SOURCE_ADDRESS)
+                "%s is not an address on this box" % chosen)
         raise
 
 
@@ -7485,6 +7490,12 @@ VERDICT_RULES = [
      "Check the service is running and bound as you think. If this box forwards in "
      "the kernel (IPVS, DNAT, direct return) there is no listener to find and this "
      "is expected."),
+    ("source_address_absent", "whatever should be configuring that address here, or its partner",
+     "An address this box is meant to send from is not configured on it",
+     "A bind from it fails in the kernel before any packet leaves, so nothing "
+     "measured from it means anything. On a box running several instances that "
+     "is an instance whose address is not here; on a pair it is the other node "
+     "holding it."),
     ("source_cannot_reach", "whatever routes or filters by source address",
      "One of this box's addresses cannot reach the target while others can",
      "The box is not the problem - the same routing table serves all of them. Look "
@@ -8560,6 +8571,7 @@ FINDING_SIDE.update({
     "service_address_unserved": "downstream",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
+    "source_address_absent": "local",
     "source_cannot_reach": "upstream",
     "clients_may_be_on_the_datagram_plane": "downstream",
     "no_clients_connected": "downstream",
@@ -8757,7 +8769,10 @@ STAGE_RULES = [
                  "target_is_discarded",
                  "source_address_not_held"},
      {"interfaces_unreadable", "routes_unreadable",
-      "neigh_table_full", "neigh_table_near_limit"}),
+      "neigh_table_full", "neigh_table_near_limit",
+      # A warning, so it warns the stage rather than failing it. One address of
+      # several being absent is not the addressing on this box being broken.
+      "source_address_absent"}),
     ("gateway", {"gw_unreachable"},
      {"gw_partial_loss", "gw_unknown", "gw_loss_unmeasured"}),
     # A routing loop means traffic never arrives, so it fails the stage rather
@@ -9680,6 +9695,7 @@ FINDING_CLASS = {
 "duplicate_ip": ("communicationsAlarm", "equipmentIdentifierDuplication"),
 "virtual_router_conflict": ("communicationsAlarm", "equipmentIdentifierDuplication"),
 "source_address_not_held": ("communicationsAlarm", "configurationOrCustomisationError"),
+"source_address_absent": ("communicationsAlarm", "configurationOrCustomisationError"),
 "source_cannot_reach": ("communicationsAlarm", "routingFailure"),
 "family_unreachable": ("communicationsAlarm", "routingFailure"),
 "nat_observed": ("communicationsAlarm", "informationModificationDetected"),
@@ -12929,6 +12945,24 @@ RELAY_MIN_BYTES = 10_000_000
 RELAY_RATIO = 20
 
 
+def _which_question_answered(reached, failed):
+    """Say which probe decided it, where the two disagree.
+
+    A source that answers a TCP connect and not a ping has not failed - it is
+    on a network filtering ICMP, which is most of them. Saying which question
+    was answered stops the reader treating a silent ping as a dead address, and
+    stops it reading as a contradiction when the row beside it shows a
+    handshake completing.
+    """
+    by_tcp = [r for r in reached if r.get("tcp") == "open" and not r.get("reached")]
+    if not by_tcp:
+        return ""
+    return (" %s answered a TCP connect and no ping, so what works there is "
+            "reachable and simply not answering ICMP - which is the ordinary "
+            "case on a filtered path rather than a fault."
+            % ", ".join(r["address"] for r in by_tcp[:3]))
+
+
 def _check_source_reachability(raw, findings):
     """One address on this box cannot reach what its neighbours can.
 
@@ -12947,12 +12981,62 @@ def _check_source_reachability(raw, findings):
     rows = raw.get("source_matrix") or []
     if len(rows) < 2:
         return
-    reached = [r for r in rows if r.get("reached")]
-    failed = [r for r in rows if not r.get("reached")]
+    # An address the kernel refused to bind is not a path problem and must not
+    # be counted as one. On a box running several instances it is the instance
+    # not being here at all - a different fault, with a different owner, and
+    # `source_address_not_held` is the finding that says so.
+    absent = [r for r in rows if r.get("held") is False]
+    rows = [r for r in rows if r.get("held") is not False]
+    if absent:
+        findings.append({
+            "severity": "warning",
+            "layer": 3,
+            "code": "source_address_absent",
+            "message": (
+                "%s %s configured on this box and the kernel will not send from "
+                "%s: a bind fails before any packet leaves. On a box running "
+                "several instances that is an instance whose address is not here "
+                "rather than a path that is not working, and the two look "
+                "identical from any check that only counts replies. Where the "
+                "address belongs to a pair, the other node is holding it."
+                % (", ".join(r["address"] for r in absent[:4]),
+                   "is" if len(absent) == 1 else "are",
+                   "it" if len(absent) == 1 else "them")),
+        })
+    # Reached by either question. Ping alone was the whole of this, and ICMP is
+    # filtered on these boxes more often than not - so a matrix built on it
+    # reported every address as unable to reach anything and said the same of a
+    # healthy instance and a dead one.
+    def got_out(r):
+        return bool(r.get("reached")) or r.get("tcp") == "open"
+    reached = [r for r in rows if got_out(r)]
+    failed = [r for r in rows if not got_out(r)]
     if not reached or not failed:
         return
+    # Grouped by the interface each address sits on, because that is the unit
+    # somebody acts on. A box running several instances carries an address per
+    # instance per job - management, and one or more the users' traffic lands
+    # on - and a flat list of four failures buries whether that is one instance
+    # gone or one job broken across all of them. The addresses already carry
+    # the interface; nothing new is read to say it.
+    def by_iface(rows):
+        out = {}
+        for r in rows:
+            out.setdefault(r.get("interface") or "?", []).append(r["address"])
+        return out
+    hurt, fine = by_iface(failed), by_iface(reached)
+    # More than one address on it, or the sentence is the single failure above
+    # restated with extra words - "every address on this interface failed" is
+    # only worth saying where "every" covers more than one.
+    whole = sorted(i for i in hurt if i not in fine and len(hurt[i]) > 1)
     where = ", ".join(r["address"] for r in failed[:4])
     ok = ", ".join(r["address"] for r in reached[:2])
+    scope = ("" if not whole else
+             " Every address on %s failed and none on %s did, so this is %s "
+             "rather than one address: whatever that interface carries is cut "
+             "off while the rest of the box is not."
+             % (", ".join(whole), ", ".join(sorted(fine)) or "the others",
+                "those interfaces" if len(whole) > 1 else "that interface"))
     findings.append({
         "severity": "critical",
         "layer": 3,
@@ -12964,7 +13048,9 @@ def _check_source_reachability(raw, findings):
                    f"policy route, a filter matched on source address, or an "
                    f"address this box holds and something upstream still sends "
                    f"elsewhere. A client using that address sees an outage that a "
-                   f"run from this box's own address does not.",
+                   f"run from this box's own address does not."
+                   + scope
+                   + _which_question_answered(reached, failed),
     })
 
 
@@ -14748,6 +14834,34 @@ def trace_one_peer(side, findings, quick=False):
     return column
 
 
+#: The port a source probe tries. 443 rather than the target's own, because
+#: this asks whether an address can get off the box at all, and 443 is the one
+#: port a security appliance's own traffic is certain to be allowed to use.
+SOURCE_PROBE_PORT = 443
+
+
+def _tcp_from_source(address, target):
+    """One TCP connect from a given address, and what it means.
+
+    Three answers rather than two. Not held is the kernel refusing to bind,
+    before anything leaves - on a box running several instances that is the
+    instance not being there, which reads nothing like a path problem and used
+    to be indistinguishable from one.
+    """
+    started = time.monotonic()
+    try:
+        connect_from(target, SOURCE_PROBE_PORT, 3, source=address).close()
+        return {"state": "open", "ms": round((time.monotonic() - started) * 1000, 1),
+                "held": True}
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.EADDRNOTAVAIL:
+            return {"state": "not held", "ms": None, "held": False}
+        return {"state": why_it_would_not_connect(exc) or "unreachable",
+                "ms": round((time.monotonic() - started) * 1000, 1), "held": True}
+    except ValueError:
+        return {"state": "unreachable", "ms": None, "held": True}
+
+
 def probe_each_source(target, addresses, count, wait):
     """Ask every address this box holds whether it can reach the target.
 
@@ -14779,6 +14893,18 @@ def probe_each_source(target, addresses, count, wait):
     def probe(entry):
         res = cmd_ping(target, count, wait, source=entry["address"])
         sent, lost = parse_ping_counts(res)
+        # And a TCP connect from the same address, because on the boxes this
+        # tool is aimed at the ping is the half most likely to return nothing.
+        # ICMP is filtered on them more often than not, so a matrix built on
+        # ping alone reports every address as unable to reach anything and
+        # says the same thing about a healthy instance and a dead one.
+        #
+        # It also answers a question ping cannot. `connect_from` binds before
+        # it sends, so an address this box does not hold fails in the kernel
+        # with EADDRNOTAVAIL - which on a box running several instances is the
+        # difference between "this instance cannot get out" and "this instance
+        # is not here".
+        tcp = _tcp_from_source(entry["address"], target)
         return {"address": entry["address"], "interface": entry.get("interface"),
                 "family": entry.get("family"),
                 # None rather than 0 where the counts could not be read: a ping
@@ -14786,7 +14912,8 @@ def probe_each_source(target, addresses, count, wait):
                 "sent": sent, "lost": lost,
                 "loss_pct": (round(100.0 * lost / sent) if sent else None),
                 "avg_ms": parse_ping_stats(res).get("avg_ms"),
-                "reached": bool(sent) and lost < sent}
+                "reached": bool(sent) and lost < sent,
+                "tcp": tcp["state"], "tcp_ms": tcp["ms"], "held": tcp["held"]}
     with concurrent.futures.ThreadPoolExecutor(
             max_workers=min(8, len(wanted))) as pool:
         return list(pool.map(probe, wanted))

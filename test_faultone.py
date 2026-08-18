@@ -10042,6 +10042,83 @@ class TestTheClausesNoReportEverRendered(unittest.TestCase):
         self.assertIn("was the TLS handshake", found["message"])
 
 
+class TestAskingEachInstanceRatherThanTheBox(unittest.TestCase):
+    """A box running several instances has an address per instance per job, and
+    every reading here was taken once and attributed to all of them.
+
+    The source matrix was the one exception and it asked with a ping, which is
+    filtered on these boxes more often than not - so the single per-instance
+    check reported every address as unable to reach anything, and said the same
+    of a healthy instance as of a dead one.
+    """
+
+    def _matrix(self, rows):
+        m = fresh()
+        m.PROBE_EVERY_SOURCE = True
+        m.probe_each_source = lambda t, a, c, w: rows
+        r = m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None)
+        return {f["code"]: f for f in r["findings"]}
+
+    def _row(self, addr, iface, reached=True, tcp="open", held=True):
+        return {"address": addr, "interface": iface, "family": "inet",
+                "sent": 4, "lost": 0, "loss_pct": 0, "avg_ms": 1.0,
+                "reached": reached, "tcp": tcp, "tcp_ms": 1.0, "held": held}
+
+    def test_an_address_that_answers_tcp_and_not_ping_has_reached(self):
+        """The whole reason for asking twice. ICMP filtered and TCP open is a
+        working instance on a filtered path, and calling it unreachable is the
+        report saying an outage where there is none."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="open")])
+        self.assertNotIn("source_cannot_reach", found)
+
+    def test_an_address_that_answers_neither_has_not(self):
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout")])
+        self.assertIn("source_cannot_reach", found)
+
+    def test_the_reader_is_told_which_question_answered(self):
+        """Otherwise a silent ping beside a completed handshake reads as the
+        report contradicting itself."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0", reached=False, tcp="open"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout")])
+        self.assertIn("answered a TCP connect and no ping",
+                      found["source_cannot_reach"]["message"])
+
+    def test_a_whole_interface_failing_is_said_as_one_thing(self):
+        """Which is the unit somebody acts on. Four addresses failing on one
+        interface is one instance cut off, not four faults."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout"),
+            self._row("10.0.1.11", "ixla1", reached=False, tcp="timeout")])
+        self.assertIn("Every address on ixla1 failed",
+                      found["source_cannot_reach"]["message"])
+
+    def test_addresses_failing_across_interfaces_are_not(self):
+        """One address on each of two interfaces is not an interface being cut
+        off, and saying so would point at the wrong thing entirely."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout"),
+            self._row("10.0.1.11", "ixla1"),
+            self._row("10.0.2.10", "ixla2", reached=False, tcp="timeout")])
+        self.assertNotIn("Every address on", found["source_cannot_reach"]["message"])
+
+    def test_an_address_the_kernel_will_not_bind_is_a_different_fault(self):
+        """A bind that fails before a packet leaves is the address not being
+        here - an instance that is not present, or a partner holding it - and
+        counting it as a path failure blames the network for a box."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="not held", held=False)])
+        self.assertIn("source_address_absent", found)
+        self.assertNotIn("source_cannot_reach", found)
+
+
 class TestWhatARealApplianceReported(unittest.TestCase):
     """Three defects found in one report from a production box.
 
@@ -15794,9 +15871,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1004),
-            "compressed": (len(gzip.compress(raw, 9)), 303),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 211),
+            "on disk": (len(raw), 1010),
+            "compressed": (len(gzip.compress(raw, 9)), 305),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 212),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -20560,6 +20637,19 @@ def _(nd):
                            timers=(10, 9000, 9000)),
                 sided_sock("10.0.0.90", "44120", sent=30_000_000, port="5432",
                            timers=(10, 10, 10)))
+
+@scenario("source_address_absent")
+def _(nd):
+    """Two addresses in the matrix, one of which the kernel will not bind -
+    which on a box running several instances is an instance that is not here."""
+    nd.PROBE_EVERY_SOURCE = True
+    nd.probe_each_source = lambda target, addrs, count, wait: [
+        {"address": "10.0.0.5", "interface": "igb0", "family": "inet",
+         "sent": 4, "lost": 0, "loss_pct": 0, "avg_ms": 1.0, "reached": True,
+         "tcp": "open", "tcp_ms": 1.2, "held": True},
+        {"address": "10.0.0.200", "interface": "ixla1", "family": "inet",
+         "sent": 0, "lost": 0, "loss_pct": None, "avg_ms": None, "reached": False,
+         "tcp": "not held", "tcp_ms": None, "held": False}]
 
 @scenario("source_cannot_reach")
 def _(nd):

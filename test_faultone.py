@@ -9912,6 +9912,53 @@ class TestTheNameTheRunWasAimedAt(unittest.TestCase):
                       [f for f in [verdict.get("detail", "")]][0] or "")
 
 
+class TestTheBranchThatMakesAFindingCritical(unittest.TestCase):
+    """duplex_mismatch is a warning or a critical depending on one reading, and
+    only one of the two was ever produced.
+
+    The corpus has one scenario per finding, which asks "does this fire" and
+    cannot ask "does it fire both ways". `severity` here is
+    `"critical" if coll else "warning"`, so the scenario with no collisions
+    exercised the warning and nothing exercised the other - on a finding
+    already listed in COARSER_ON_THE_STRIP with "critical only once collisions
+    are counted" as the stated reason.
+
+    Found by sweeping every conditional clause in every finding's message and
+    asking which ones no scenario renders. Eighteen never do; this is the one
+    where the unrendered clause marks a change of severity.
+    """
+
+    def _run(self, collisions):
+        m = fresh()
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": 1000, "duplex": "half",
+             "mtu": 1500, "carrier": True}]}
+        counters(m, collisions=collisions)
+        r = m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None)
+        return next((f for f in r["findings"] if f["code"] == "duplex_mismatch"), None)
+
+    def test_half_duplex_alone_is_a_warning(self):
+        """The negotiation is wrong and nothing has been lost to it yet."""
+        found = self._run(0)
+        self.assertIsNotNone(found)
+        self.assertEqual(found["severity"], "warning")
+        self.assertNotIn("collisions recorded", found["message"])
+
+    def test_half_duplex_with_collisions_is_critical(self):
+        """Frames are being lost to it now, which is a different answer and had
+        never been produced."""
+        found = self._run(4200)
+        self.assertIsNotNone(found)
+        self.assertEqual(found["severity"], "critical")
+        self.assertIn("collisions recorded", found["message"])
+
+    def test_the_count_reaches_the_message(self):
+        """Not just that the clause appears - the number in it is the evidence,
+        and a clause that says "collisions recorded" without one is worse than
+        no clause."""
+        self.assertIn("4,200", self._run(4200)["message"])
+
+
 class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
     """Four tables that are closed sets of facts, copied incompletely.
 

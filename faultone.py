@@ -14672,167 +14672,15 @@ def collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles, paralle
         return {name: f.result() for name, f in futures.items()}
 
 
-def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
-                trace=None):
-    """The path to the target: trace it, read what the shape of it means, and
-    check whether full-size packets survive it.
+def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
+    """The largest packet that survives the path, and what it costs.
 
-    Returns the hops, the derived path insight, and which tool produced them.
+    A separate question from where the packets go, asked with separate
+    probes and skipped under --quick for the same reason the trace is: it
+    is several more round trips. It sat in the middle of the path checks
+    because it needs the same target, which is not a reason to read it
+    there.
     """
-    if quick:
-        # The trace is the expensive part - skip it, and say so in the report
-        # so the UI and the text output don't imply an empty path was measured.
-        hops = []
-        path_source = None
-        path_insight = {"demarc_hop": None, "worst_jump": None,
-                        "networks_crossed": [], "double_nat": [], "loop_at": None,
-                        "cgnat_hop": None}
-    else:
-        # mtr sends many cycles per hop, so it yields real per-hop loss where
-        # traceroute yields a single sample. Use it when present; the hop shape
-        # is identical either way, so everything downstream is unchanged.
-        trace = trace or collect_trace(target, mtr_cycles)
-        raw["path_trace"] = trace["raw"]
-        hops = trace["hops"]
-        path_source = trace["source"]
-        mtr_res = trace["mtr"]
-        # If the probes stopped short but the target answers ping, the path is
-        # probably fine and the probes are being filtered. A TCP trace to a
-        # port that's actually open usually walks straight through, and the
-        # difference between "the path is broken" and "the probes are dropped"
-        # is worth the extra few seconds.
-        # Reachable by anything already established, not by ping alone.
-        # _check_internet sets inet_loss to None in exactly one case - TCP
-        # reached a target that would not answer a ping - so keying the retry
-        # on ping switched the TCP trace off in the one situation that had
-        # already proved TCP gets through, and left it on only where ping was
-        # working anyway. A target that answered nothing at all is still left
-        # alone: there is no evidence to act on, and the extra trace would be
-        # spent establishing that there is none.
-        reach = raw.get("reachability_tcp") or {}
-        answered = (inet_loss is not None and inet_loss < 100) or bool(reach.get("ok"))
-        # `not quick` was tested here and is always true - this is the else of
-        # `if quick` a few lines above.
-        if not trace_reached(hops, target) and answered:
-            # The port something already reached, rather than an assumption.
-            # Under --target auto the target is the backend this box leans on
-            # most, and 443 is usually shut on a database - the trace would
-            # fail for a reason that has nothing to do with the path. A port
-            # that refused the connection serves as well as one that accepted:
-            # an RST is a completed round trip, which is all a hop needs to
-            # answer.
-            tcp_res = cmd_traceroute_tcp(target, port=int(reach.get("port") or 443))
-            if tcp_res and trace_reached(tcp_res["hops"], target):
-                raw["path_trace_icmp"] = raw["path_trace"]
-                raw["path_trace"] = tcp_res
-                # "stopped at hop 1" would be a lie on a box where the
-                # only hop came from the routing table and nothing was
-                # ever walked.
-                stalled_at = ("the first hop" if not hops
-                              or path_source == "route table"
-                              else hops[-1]["hop"])
-                hops = tcp_res["hops"]
-                path_source = f"{tcp_res['tool']} (TCP/{tcp_res['port']})"
-                findings.append({
-                    "severity": "ok",
-                    "layer": 3,
-                    "code": "icmp_filtered",
-                    "message": f"The standard trace stopped at hop {stalled_at}, but a TCP probe "
-                               f"to port {tcp_res['port']} reached {target} - so the path is "
-                               f"fine and something along it simply doesn't answer traceroute "
-                               f"probes. Worth knowing before escalating a path that isn't "
-                               f"actually broken.",
-                })
-            elif tcp_res:
-                path_source += " (TCP probe also stopped short)"
-
-        # The walk records what it sent from, which is what a translation
-        # is a difference against. Absent on every other trace.
-        # Before anything is concluded from the hops: whether they are the
-        # route this box would actually use. Everything below reads differently
-        # if they are not.
-        raw["route_to"] = cmd_route_to(target)
-        _check_discard_route(raw, findings, target)
-        _check_route_agrees(raw, findings, hops, target)
-        path_insight = annotate_hops(
-            hops, gw, target,
-            sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")
-            if isinstance(((trace or {}).get("raw") or {}).get("walk"), dict) else None)
-
-        # Per-hop loss is only meaningful with mtr's repeated probes. Read it
-        # from the destination backwards: loss at an intermediate hop that
-        # clears later is ICMP rate limiting on that router, not a fault.
-        lossy = [h for h in hops if (h.get("loss_pct") or 0) >= 5]
-        final_loss = hops[-1].get("loss_pct") if hops else None
-        if lossy and final_loss is not None and final_loss >= 5:
-            first = lossy[0]
-            findings.append({
-                "severity": "critical" if final_loss >= 20 else "warning",
-                "layer": 3,
-                "code": "path_loss",
-                "message": f"Packet loss along the path to {target}: {final_loss:.0f}% at the "
-                           f"destination, first appearing at hop {first['hop']} "
-                           f"({first.get('display')}) over {mtr_res['cycles'] if mtr_res else '?'} probes "
-                           f"per hop. "
-                           f"Loss that persists to the final hop is real loss, not a router "
-                           f"declining to answer probes.",
-            })
-        elif lossy and final_loss is not None and final_loss < 5:
-            # Marked on the hops themselves, not only said in the message. The
-            # chain colours a hop from its own loss figure, so 40% at a router
-            # that is rate-limiting replies was drawn as a critical hop directly
-            # beneath a verdict reading "no fault found". The report had already
-            # decided this loss means nothing; the picture had not been told.
-            for lossy_hop in lossy:
-                lossy_hop["cosmetic"] = True
-            findings.append({
-                "severity": "ok",
-                "layer": 3,
-                "code": "path_loss_cosmetic",
-                "message": f"Some intermediate hops report loss but the destination shows "
-                           f"{final_loss:.0f}%, so the path is fine - those routers are rate-"
-                           f"limiting ICMP replies rather than dropping traffic.",
-            })
-    # A hop that refused and said why. The distinction that matters is whether
-    # the path still completed: a policy device that declines traceroute probes
-    # while forwarding traffic is normal and common, and the same annotation on
-    # the hop where the path stops is a firewall standing in the way. Only the
-    # second is a fault, and it has an owner a silent path does not - somebody
-    # configured this, so there is a person to ask rather than a carrier.
-    refused = [h for h in hops
-               if any(f in TRACE_PROHIBITED for f in (h.get("flags") or []))]
-    if refused and not trace_reached(hops, target):
-        hop = refused[-1]
-        reasons = sorted({annotation_means(f) for f in hop["flags"]
-                          if f in TRACE_PROHIBITED})
-        findings.append({
-            "severity": "critical",
-            "layer": 3,
-            "code": "path_admin_prohibited",
-            "message": f"The path stops at hop {hop['hop']} ({hop['display']}), and that hop "
-                       f"said why: {', '.join(reasons)}. This is not a broken path or a "
-                       f"router that has stopped answering - it is a device that received "
-                       f"the traffic, decided against forwarding it, and reported the "
-                       f"decision. Somebody configured that, so there is a policy to read "
-                       f"and a person to ask rather than a carrier to open a ticket with.",
-        })
-    stalled = [h for h in hops if h["timed_out"]] if not quick else []
-    if stalled and hops and not stalled[-1]["hop"] == hops[-1]["hop"]:
-        # a timeout in the middle of the path, with hops succeeding after it, usually just
-        # means that hop doesn't reply to traceroute probes (common/benign) - only flag a
-        # run of timeouts that goes all the way to the last hop we saw.
-        pass
-    if hops and all(h["timed_out"] for h in hops[-3:]) and len(hops) >= 3:
-        findings.append({
-            "severity": "warning",
-            "code": "trace_stalls",
-            "layer": 3,
-            "message": f"The path to {target} stops responding around hop {hops[-3]['hop']} and never "
-                       "reaches the destination in the trace. The break is likely at or just after that "
-                       "hop (could also be a router that silently drops traceroute probes but still "
-                       "forwards real traffic - check the ping result above to tell them apart).",
-        })
-
     # Path MTU. Skipped in quick mode (it's several more pings) and pointless
     # if the target never answered at all.
     if not quick and inet_loss is not None and inet_loss < 100:
@@ -14886,6 +14734,20 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                            f"different limit, and the return path is not tested at all.",
             })
 
+
+
+def _findings_from_the_walk(findings, hops, path_insight, target):
+    """What the trace noticed, turned into findings.
+
+    A loop, a translation, two NATs in series, a carrier NAT layer, and the
+    single hop that adds most of the delay. Everything here reads the walk
+    and appends; none of it probes, and none of it decides anything the
+    walk did not already establish.
+
+    Separated from the walking because they are different jobs done in one
+    place: above this, the path is being obtained and may be retried three
+    ways. Below it, the path is a fact and this is reading it.
+    """
     if path_insight.get("loop_at"):
         lp = path_insight["loop_at"]
         # A router answering twice is a loop, or it is one router that two
@@ -15060,6 +14922,171 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                    "of one link, and the size of it is real either way."
                    if fanned else "")),
         })
+
+
+def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
+                trace=None):
+    """The path to the target: trace it, read what the shape of it means, and
+    check whether full-size packets survive it.
+
+    Returns the hops, the derived path insight, and which tool produced them.
+    """
+    if quick:
+        # The trace is the expensive part - skip it, and say so in the report
+        # so the UI and the text output don't imply an empty path was measured.
+        hops = []
+        path_source = None
+        path_insight = {"demarc_hop": None, "worst_jump": None,
+                        "networks_crossed": [], "double_nat": [], "loop_at": None,
+                        "cgnat_hop": None}
+    else:
+        # mtr sends many cycles per hop, so it yields real per-hop loss where
+        # traceroute yields a single sample. Use it when present; the hop shape
+        # is identical either way, so everything downstream is unchanged.
+        trace = trace or collect_trace(target, mtr_cycles)
+        raw["path_trace"] = trace["raw"]
+        hops = trace["hops"]
+        path_source = trace["source"]
+        mtr_res = trace["mtr"]
+        # If the probes stopped short but the target answers ping, the path is
+        # probably fine and the probes are being filtered. A TCP trace to a
+        # port that's actually open usually walks straight through, and the
+        # difference between "the path is broken" and "the probes are dropped"
+        # is worth the extra few seconds.
+        # Reachable by anything already established, not by ping alone.
+        # _check_internet sets inet_loss to None in exactly one case - TCP
+        # reached a target that would not answer a ping - so keying the retry
+        # on ping switched the TCP trace off in the one situation that had
+        # already proved TCP gets through, and left it on only where ping was
+        # working anyway. A target that answered nothing at all is still left
+        # alone: there is no evidence to act on, and the extra trace would be
+        # spent establishing that there is none.
+        reach = raw.get("reachability_tcp") or {}
+        answered = (inet_loss is not None and inet_loss < 100) or bool(reach.get("ok"))
+        # `not quick` was tested here and is always true - this is the else of
+        # `if quick` a few lines above.
+        if not trace_reached(hops, target) and answered:
+            # The port something already reached, rather than an assumption.
+            # Under --target auto the target is the backend this box leans on
+            # most, and 443 is usually shut on a database - the trace would
+            # fail for a reason that has nothing to do with the path. A port
+            # that refused the connection serves as well as one that accepted:
+            # an RST is a completed round trip, which is all a hop needs to
+            # answer.
+            tcp_res = cmd_traceroute_tcp(target, port=int(reach.get("port") or 443))
+            if tcp_res and trace_reached(tcp_res["hops"], target):
+                raw["path_trace_icmp"] = raw["path_trace"]
+                raw["path_trace"] = tcp_res
+                # "stopped at hop 1" would be a lie on a box where the
+                # only hop came from the routing table and nothing was
+                # ever walked.
+                stalled_at = ("the first hop" if not hops
+                              or path_source == "route table"
+                              else hops[-1]["hop"])
+                hops = tcp_res["hops"]
+                path_source = f"{tcp_res['tool']} (TCP/{tcp_res['port']})"
+                findings.append({
+                    "severity": "ok",
+                    "layer": 3,
+                    "code": "icmp_filtered",
+                    "message": f"The standard trace stopped at hop {stalled_at}, but a TCP probe "
+                               f"to port {tcp_res['port']} reached {target} - so the path is "
+                               f"fine and something along it simply doesn't answer traceroute "
+                               f"probes. Worth knowing before escalating a path that isn't "
+                               f"actually broken.",
+                })
+            elif tcp_res:
+                path_source += " (TCP probe also stopped short)"
+
+        # The walk records what it sent from, which is what a translation
+        # is a difference against. Absent on every other trace.
+        # Before anything is concluded from the hops: whether they are the
+        # route this box would actually use. Everything below reads differently
+        # if they are not.
+        raw["route_to"] = cmd_route_to(target)
+        _check_discard_route(raw, findings, target)
+        _check_route_agrees(raw, findings, hops, target)
+        path_insight = annotate_hops(
+            hops, gw, target,
+            sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")
+            if isinstance(((trace or {}).get("raw") or {}).get("walk"), dict) else None)
+
+        # Per-hop loss is only meaningful with mtr's repeated probes. Read it
+        # from the destination backwards: loss at an intermediate hop that
+        # clears later is ICMP rate limiting on that router, not a fault.
+        lossy = [h for h in hops if (h.get("loss_pct") or 0) >= 5]
+        final_loss = hops[-1].get("loss_pct") if hops else None
+        if lossy and final_loss is not None and final_loss >= 5:
+            first = lossy[0]
+            findings.append({
+                "severity": "critical" if final_loss >= 20 else "warning",
+                "layer": 3,
+                "code": "path_loss",
+                "message": f"Packet loss along the path to {target}: {final_loss:.0f}% at the "
+                           f"destination, first appearing at hop {first['hop']} "
+                           f"({first.get('display')}) over {mtr_res['cycles'] if mtr_res else '?'} probes "
+                           f"per hop. "
+                           f"Loss that persists to the final hop is real loss, not a router "
+                           f"declining to answer probes.",
+            })
+        elif lossy and final_loss is not None and final_loss < 5:
+            # Marked on the hops themselves, not only said in the message. The
+            # chain colours a hop from its own loss figure, so 40% at a router
+            # that is rate-limiting replies was drawn as a critical hop directly
+            # beneath a verdict reading "no fault found". The report had already
+            # decided this loss means nothing; the picture had not been told.
+            for lossy_hop in lossy:
+                lossy_hop["cosmetic"] = True
+            findings.append({
+                "severity": "ok",
+                "layer": 3,
+                "code": "path_loss_cosmetic",
+                "message": f"Some intermediate hops report loss but the destination shows "
+                           f"{final_loss:.0f}%, so the path is fine - those routers are rate-"
+                           f"limiting ICMP replies rather than dropping traffic.",
+            })
+    # A hop that refused and said why. The distinction that matters is whether
+    # the path still completed: a policy device that declines traceroute probes
+    # while forwarding traffic is normal and common, and the same annotation on
+    # the hop where the path stops is a firewall standing in the way. Only the
+    # second is a fault, and it has an owner a silent path does not - somebody
+    # configured this, so there is a person to ask rather than a carrier.
+    refused = [h for h in hops
+               if any(f in TRACE_PROHIBITED for f in (h.get("flags") or []))]
+    if refused and not trace_reached(hops, target):
+        hop = refused[-1]
+        reasons = sorted({annotation_means(f) for f in hop["flags"]
+                          if f in TRACE_PROHIBITED})
+        findings.append({
+            "severity": "critical",
+            "layer": 3,
+            "code": "path_admin_prohibited",
+            "message": f"The path stops at hop {hop['hop']} ({hop['display']}), and that hop "
+                       f"said why: {', '.join(reasons)}. This is not a broken path or a "
+                       f"router that has stopped answering - it is a device that received "
+                       f"the traffic, decided against forwarding it, and reported the "
+                       f"decision. Somebody configured that, so there is a policy to read "
+                       f"and a person to ask rather than a carrier to open a ticket with.",
+        })
+    stalled = [h for h in hops if h["timed_out"]] if not quick else []
+    if stalled and hops and not stalled[-1]["hop"] == hops[-1]["hop"]:
+        # a timeout in the middle of the path, with hops succeeding after it, usually just
+        # means that hop doesn't reply to traceroute probes (common/benign) - only flag a
+        # run of timeouts that goes all the way to the last hop we saw.
+        pass
+    if hops and all(h["timed_out"] for h in hops[-3:]) and len(hops) >= 3:
+        findings.append({
+            "severity": "warning",
+            "code": "trace_stalls",
+            "layer": 3,
+            "message": f"The path to {target} stops responding around hop {hops[-3]['hop']} and never "
+                       "reaches the destination in the trace. The break is likely at or just after that "
+                       "hop (could also be a router that silently drops traceroute probes but still "
+                       "forwards real traffic - check the ping result above to tell them apart).",
+        })
+
+    _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu)
+    _findings_from_the_walk(findings, hops, path_insight, target)
     return hops, path_insight, path_source
 
 

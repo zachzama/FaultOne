@@ -3,6 +3,8 @@
 
     python3 dev/counts.py            # rewrite README.md and REFERENCE.md
     python3 dev/counts.py --check    # say what is stale, change nothing
+    python3 dev/counts.py --kinds    # the X.733 coverage table, change nothing
+    python3 dev/counts.py --kinds --deep   # ...and how many can be the answer
 
 Six numbers are quoted about this tool - findings, of which faults, ranked
 causes, tests, and three file sizes - across two documents, and every one of
@@ -116,8 +118,73 @@ def rewrite(text, want, patterns=None):
     return text, changed
 
 
+def kinds(deep=False):
+    """The coverage table: how many rules of each X.733 kind, and - with
+    --deep - how many of them can be the answer rather than only a symptom.
+
+    This is the question a borrowed vocabulary exists to answer. "What have we
+    got" can be read off the finding list; "what have we not got" needs a
+    closed set drawn by somebody with no view of this codebase. The table was
+    kept by hand in a note for a day and was wrong by the next release, which
+    is the same failure the rest of this file exists to stop.
+
+    The cause column is behind a flag because it is the only part that cannot
+    be read off a table: there is no static list of which findings are
+    symptoms. It is measured by raising each finding in its own scenario and
+    asking whether the verdict names it or hands off to something else, which
+    means running the corpus. Do not shorten that with --quick - the sampling
+    windows are skipped and findings that need one report as symptoms, which
+    reads as a coverage hole that is not there.
+    """
+    import collections
+    import faultone as nd
+    rows = collections.defaultdict(lambda: [0, 0])
+    causes = collections.defaultdict(set)
+    heads = set()
+    if deep:
+        import test_faultone as T
+        for code in nd.FINDING_CLASS:
+            if code not in T.S:
+                continue
+            setup, kw = T.S[code]
+            mod = T.fresh()
+            setup(mod)
+            try:
+                report = mod.diagnose(**T.scenario_kwargs(kw))
+            except Exception:
+                continue
+            if (report["verdict"].get("based_on") or [None])[0] == code:
+                heads.add(code)
+    for code, (event, cause) in nd.FINDING_CLASS.items():
+        rows[event][0] += 1
+        rows[event][1] += code in heads
+        causes[event].add(cause)
+    width = max(len(e) for e in rows)
+    head = "%-*s %6s" % (width, "kind", "rules")
+    print("\n" + head + ("%7s" % "answer" if deep else "") + "  probable causes")
+    for event in sorted(rows, key=lambda e: -rows[e][0]):
+        total, answered = rows[event]
+        line = "%-*s %6d" % (width, event, total)
+        if deep:
+            line += "%7d" % answered
+        print(line + "  " + ", ".join(sorted(causes[event])))
+    total = sum(r[0] for r in rows.values())
+    line = "%-*s %6d" % (width, "total", total)
+    if deep:
+        line += "%7d" % sum(r[1] for r in rows.values())
+    print(line)
+    unused = sorted(nd.X733_CAUSES - {c for _e, c in nd.FINDING_CLASS.values()})
+    print("\ncauses carried with no finding: %s" % (", ".join(unused) or "none"))
+    if not deep:
+        print("run with --kinds --deep for how many of each can be the answer")
+    return 0
+
+
 def main(argv=None):
-    check = "--check" in (ARGS if argv is None else argv)
+    args = ARGS if argv is None else argv
+    if "--kinds" in args:
+        return kinds(deep="--deep" in args)
+    check = "--check" in args
     want = measured()
     print("  ".join("%s=%s" % (k, v) for k, v in sorted(want.items())))
     stale = 0

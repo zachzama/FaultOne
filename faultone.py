@@ -9322,6 +9322,236 @@ def build_path_legs(raw=None, sides=None):
 
 # The headline per finding, for the zone that has to say which finding it owns
 # rather than repeat the measurement taken on the other side of the box.
+
+
+# ---------------------------------------------------------------------------
+# What kind of fault each finding is, in somebody else's vocabulary.
+#
+# ITU-T X.733 with the security types from X.736, as registered
+# machine-readably in the IANA ITU Alarm MIB and carried into RFC 8632. Two
+# levels, which is why it fits: the event type is coarse enough to group 155
+# rules into a handful of buckets, and the probable cause is fine enough that
+# each rule gets its own without inventing one.
+#
+# Borrowed rather than invented on purpose. A vocabulary somebody else
+# maintains can be audited against - "which applicable causes have no finding"
+# is a question a home-grown list cannot answer, because it was drawn around
+# what already exists. The first time this was asked it returned CPU
+# saturation, which this box reads every run and has never named.
+#
+# Neither field is shown to a reader today. They exist to be counted.
+# ---------------------------------------------------------------------------
+
+# The eight of X.733's eleven event types that a network diagnostic can raise.
+# The three left out are physicalViolation (tamper), timeDomainViolation
+# (out-of-hours activity) and other - the first two need a sensor this does not
+# have, and the third is what a taxonomy says when it has given up.
+X733_EVENT_TYPES = frozenset((
+    "communicationsAlarm",          # getting there, and back
+    "qualityOfServiceAlarm",        # it works, badly
+    "processingErrorAlarm",         # this box ran out of something
+    "equipmentAlarm",               # the hardware, the optic, the cable
+    "environmentalAlarm",           # the room, not the network
+    "integrityViolation",           # something changed the traffic
+    "operationalViolation",         # refused on purpose, by somebody
+    "securityServiceOrMechanismViolation",   # credentials and certificates
+))
+
+# Spelled as the IANA registry spells them, including where that differs from
+# ordinary English: `configurationOrCustomisationError` and
+# `underlayingResourceUnavailable` are the registered names. A corrected
+# spelling here would look tidier and would stop matching the vocabulary, which
+# is the only reason to borrow one.
+X733_CAUSES = frozenset((
+    "applicationSubsystemFailure", "authenticationFailure",
+    "bandwidthReduced", "breachOfConfidentiality",
+    "configurationOrCustomisationError", "congestion",
+    "connectionEstablishmentError", "corruptData", "degradedSignal",
+    "denialOfService", "dteDceInterfaceError",
+    "equipmentIdentifierDuplication", "equipmentMalfunction",
+    "excessiveErrorRate", "excessiveResponseTime",
+    "excessiveRetransmissionRate", "framingError", "highTemperature",
+    "informationModificationDetected", "informationOutOfSequence",
+    "invalidMessageReceived", "keyExpired", "lanError",
+    "localNodeTransmissionError", "lossOfRedundancy", "lossOfSignal",
+    "lossOfSynchronisation", "outOfMemory", "performanceDegraded",
+    "queueSizeExceeded", "receiveFailure", "receiverFailure",
+    "reducedLoggingCapability", "remoteNodeTransmissionError",
+    "resourceAtOrNearingCapacity", "routingFailure", "softwareError",
+    "systemResourcesOverload", "thresholdCrossed", "timeoutExpired",
+    "timingProblem", "transmissionError", "unavailable",
+    "underlayingResourceUnavailable"
+))
+
+
+FINDING_CLASS = {
+# --- equipmentAlarm: the hardware, the optic, the cable ---------------------
+"optics_alarm": ("equipmentAlarm", "receiverFailure"),
+"optics_rx_low": ("equipmentAlarm", "receiverFailure"),
+"optics_rx_marginal": ("equipmentAlarm", "degradedSignal"),
+"optics_warning": ("equipmentAlarm", "degradedSignal"),
+"nic_reset_logged": ("equipmentAlarm", "equipmentMalfunction"),
+"nic_ring_overruns": ("equipmentAlarm", "receiveFailure"),
+"link_errors_live": ("equipmentAlarm", "excessiveErrorRate"),
+"link_errors_historical": ("equipmentAlarm", "excessiveErrorRate"),
+"frame_length_errors": ("equipmentAlarm", "framingError"),
+"collisions": ("equipmentAlarm", "lanError"),
+"duplex_mismatch": ("equipmentAlarm", "dteDceInterfaceError"),
+"link_flapping": ("equipmentAlarm", "lossOfSignal"),
+"link_flapping_live": ("equipmentAlarm", "lossOfSignal"),
+"link_flapping_logged": ("equipmentAlarm", "lossOfSignal"),
+"slow_link": ("equipmentAlarm", "bandwidthReduced"),
+"negotiated_below_capacity": ("equipmentAlarm", "bandwidthReduced"),
+"bond_degraded": ("equipmentAlarm", "lossOfRedundancy"),
+"fault_on_every_interface": ("equipmentAlarm", "equipmentMalfunction"),
+"tcp_checksum_errors": ("equipmentAlarm", "corruptData"),
+"udp_datagrams_corrupt": ("equipmentAlarm", "corruptData"),
+# --- environmentalAlarm: the room, not the network --------------------------
+"cpu_throttled_live": ("environmentalAlarm", "highTemperature"),
+"cpu_throttled_historical": ("environmentalAlarm", "highTemperature"),
+# --- communicationsAlarm: getting there and back ----------------------------
+"no_ipv4": ("communicationsAlarm", "configurationOrCustomisationError"),
+"no_gateway": ("communicationsAlarm", "configurationOrCustomisationError"),
+"gw_unreachable": ("communicationsAlarm", "lossOfSignal"),
+"gw_unknown": ("communicationsAlarm", "unavailable"),
+"gw_partial_loss": ("communicationsAlarm", "transmissionError"),
+"gw_loss_unmeasured": ("communicationsAlarm", "transmissionError"),
+"inet_unreachable": ("communicationsAlarm", "routingFailure"),
+"inet_partial_loss": ("communicationsAlarm", "transmissionError"),
+"inet_loss_unmeasured": ("communicationsAlarm", "transmissionError"),
+"path_loss": ("communicationsAlarm", "transmissionError"),
+"loop": ("communicationsAlarm", "routingFailure"),
+"no_route_to_target": ("communicationsAlarm", "routingFailure"),
+"target_is_discarded": ("communicationsAlarm", "routingFailure"),
+"routes_unreadable": ("communicationsAlarm", "underlayingResourceUnavailable"),
+"interfaces_unreadable": ("communicationsAlarm", "underlayingResourceUnavailable"),
+"port_host_unreachable": ("communicationsAlarm", "routingFailure"),
+"trace_stalls": ("communicationsAlarm", "unavailable"),
+"destination_unresponsive": ("communicationsAlarm", "remoteNodeTransmissionError"),
+"answered_closer_than_the_path": ("communicationsAlarm", "invalidMessageReceived"),
+"path_asymmetric": ("communicationsAlarm", "routingFailure"),
+"shared_hop_degraded": ("communicationsAlarm", "transmissionError"),
+"duplicate_ip": ("communicationsAlarm", "equipmentIdentifierDuplication"),
+"virtual_router_conflict": ("communicationsAlarm", "equipmentIdentifierDuplication"),
+"source_address_not_held": ("communicationsAlarm", "configurationOrCustomisationError"),
+"source_cannot_reach": ("communicationsAlarm", "routingFailure"),
+"family_unreachable": ("communicationsAlarm", "routingFailure"),
+"nat_observed": ("communicationsAlarm", "informationModificationDetected"),
+"double_nat": ("communicationsAlarm", "informationModificationDetected"),
+"cgnat": ("communicationsAlarm", "informationModificationDetected"),
+"pmtu_blackhole": ("communicationsAlarm", "transmissionError"),
+"pmtu_unmeasurable": ("communicationsAlarm", "unavailable"),
+"mtu_nonstandard": ("communicationsAlarm", "configurationOrCustomisationError"),
+"tunnel_payload_short": ("communicationsAlarm", "configurationOrCustomisationError"),
+"fragments_lost": ("communicationsAlarm", "transmissionError"),
+"transport_fell_back": ("communicationsAlarm", "unavailable"),
+"egress_blocked": ("communicationsAlarm", "unavailable"),
+"port_timeout": ("communicationsAlarm", "timeoutExpired"),
+"port_refused": ("communicationsAlarm", "connectionEstablishmentError"),
+"connect_failures_high": ("communicationsAlarm", "connectionEstablishmentError"),
+"syn_sent_backlog": ("communicationsAlarm", "connectionEstablishmentError"),
+"syn_retrans_high": ("communicationsAlarm", "connectionEstablishmentError"),
+"connections_reset_by_peer": ("communicationsAlarm", "remoteNodeTransmissionError"),
+"resets_sent_high": ("communicationsAlarm", "localNodeTransmissionError"),
+"tcp_return_stalled_backends": ("communicationsAlarm", "receiveFailure"),
+"tcp_return_stalled_clients": ("communicationsAlarm", "receiveFailure"),
+"no_traffic_at_all": ("communicationsAlarm", "unavailable"),
+"no_clients_connected": ("communicationsAlarm", "unavailable"),
+"service_address_idle": ("communicationsAlarm", "unavailable"),
+"regression_since_baseline": ("communicationsAlarm", "thresholdCrossed"),
+# --- DNS is a communications failure with its own causes --------------------
+"dns_no_resolvers": ("communicationsAlarm", "configurationOrCustomisationError"),
+"resolvers_unreadable": ("communicationsAlarm", "underlayingResourceUnavailable"),
+"dns_all_resolvers_down": ("communicationsAlarm", "unavailable"),
+"dns_resolver_down": ("communicationsAlarm", "unavailable"),
+"dns_fail": ("communicationsAlarm", "unavailable"),
+"dns_disagree": ("communicationsAlarm", "invalidMessageReceived"),
+"dns_hijack": ("integrityViolation", "informationModificationDetected"),
+"dns_resolver_slow": ("qualityOfServiceAlarm", "excessiveResponseTime"),
+# --- qualityOfServiceAlarm: it works, badly ---------------------------------
+"latency_high": ("qualityOfServiceAlarm", "excessiveResponseTime"),
+"latency_wall": ("qualityOfServiceAlarm", "excessiveResponseTime"),
+"tls_handshake_slow": ("qualityOfServiceAlarm", "excessiveResponseTime"),
+"path_jitter_backends": ("qualityOfServiceAlarm", "performanceDegraded"),
+"path_jitter_clients": ("qualityOfServiceAlarm", "performanceDegraded"),
+"call_quality_bad": ("qualityOfServiceAlarm", "performanceDegraded"),
+"call_quality_degraded": ("qualityOfServiceAlarm", "performanceDegraded"),
+"queuing_delay": ("qualityOfServiceAlarm", "congestion"),
+"queuing_delay_backends": ("qualityOfServiceAlarm", "congestion"),
+"queuing_delay_clients": ("qualityOfServiceAlarm", "congestion"),
+"queue_standing_here": ("qualityOfServiceAlarm", "queueSizeExceeded"),
+"link_saturated": ("qualityOfServiceAlarm", "bandwidthReduced"),
+"uplink_saturated": ("qualityOfServiceAlarm", "bandwidthReduced"),
+"link_busy": ("qualityOfServiceAlarm", "thresholdCrossed"),
+"uplink_busy": ("qualityOfServiceAlarm", "thresholdCrossed"),
+"saturation_bursts": ("qualityOfServiceAlarm", "congestion"),
+"tcp_retransmits": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"retrans_spurious": ("qualityOfServiceAlarm", "informationOutOfSequence"),
+"tcp_flow_loss_all_peers": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_loss_some_peers": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_loss_one_peer": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_loss_unclear": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_loss_backends": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_loss_clients": ("qualityOfServiceAlarm", "excessiveRetransmissionRate"),
+"tcp_flow_receiver_limited": ("qualityOfServiceAlarm", "performanceDegraded"),
+"drops_live": ("qualityOfServiceAlarm", "congestion"),
+"nic_drops_live": ("qualityOfServiceAlarm", "congestion"),
+"nic_drops_historical": ("qualityOfServiceAlarm", "congestion"),
+# --- processingErrorAlarm: this box ran out of something --------------------
+"rcv_buffer_pruned": ("processingErrorAlarm", "outOfMemory"),
+"aborts_on_memory": ("processingErrorAlarm", "outOfMemory"),
+"udp_recv_buffer_full": ("processingErrorAlarm", "queueSizeExceeded"),
+"udp_queue_standing": ("processingErrorAlarm", "queueSizeExceeded"),
+"tcp_flow_sendbuf_limited": ("processingErrorAlarm", "queueSizeExceeded"),
+"accept_overflow_live": ("processingErrorAlarm", "queueSizeExceeded"),
+"accept_overflow_historical": ("processingErrorAlarm", "queueSizeExceeded"),
+"syncookies_live": ("processingErrorAlarm", "queueSizeExceeded"),
+"syncookies_historical": ("processingErrorAlarm", "queueSizeExceeded"),
+"syn_recv_backlog": ("processingErrorAlarm", "queueSizeExceeded"),
+"reqq_full_drops": ("processingErrorAlarm", "queueSizeExceeded"),
+"ephemeral_ports_low": ("processingErrorAlarm", "resourceAtOrNearingCapacity"),
+"fd_pressure": ("processingErrorAlarm", "resourceAtOrNearingCapacity"),
+"tcp_orphans_high": ("processingErrorAlarm", "resourceAtOrNearingCapacity"),
+"conntrack_near_limit": ("processingErrorAlarm", "resourceAtOrNearingCapacity"),
+"conntrack_drops_live": ("processingErrorAlarm", "systemResourcesOverload"),
+"conntrack_drops_historical": ("processingErrorAlarm", "systemResourcesOverload"),
+"neigh_table_full": ("processingErrorAlarm", "systemResourcesOverload"),
+"neigh_table_near_limit": ("processingErrorAlarm", "resourceAtOrNearingCapacity"),
+"close_wait_backlog": ("processingErrorAlarm", "softwareError"),
+"aborts_on_timeout": ("processingErrorAlarm", "timeoutExpired"),
+"clock_skewed": ("processingErrorAlarm", "timingProblem"),
+"clock_unsynced": ("processingErrorAlarm", "lossOfSynchronisation"),
+# --- the service this box runs, and the one it depends on -------------------
+"service_address_unserved": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"service_endpoint_idle": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"own_service_not_accepting": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"own_service_silent": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"own_service_erroring": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"own_service_not_http": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"own_service_upstream_error": ("processingErrorAlarm", "underlayingResourceUnavailable"),
+"proxy_unreachable": ("communicationsAlarm", "unavailable"),
+"proxy_backend_down": ("processingErrorAlarm", "underlayingResourceUnavailable"),
+"log_egress_stalled": ("processingErrorAlarm", "reducedLoggingCapability"),
+# --- policy: refused on purpose, by somebody -------------------------------
+"inbound_filtered_here": ("operationalViolation", "denialOfService"),
+"path_admin_prohibited": ("operationalViolation", "denialOfService"),
+"proxy_denies_this_box": ("securityServiceOrMechanismViolation", "authenticationFailure"),
+# --- confidentiality and certificates ---------------------------------------
+"broker_leg_in_the_clear": ("integrityViolation", "breachOfConfidentiality"),
+"log_egress_plaintext": ("integrityViolation", "breachOfConfidentiality"),
+"tls_intercepted": ("integrityViolation", "informationModificationDetected"),
+"tls_expired": ("securityServiceOrMechanismViolation", "keyExpired"),
+"tls_expiring": ("securityServiceOrMechanismViolation", "keyExpired"),
+"tls_not_yet_valid": ("securityServiceOrMechanismViolation", "keyExpired"),
+"tls_untrusted": ("securityServiceOrMechanismViolation", "authenticationFailure"),
+"tls_handshake_failed": ("securityServiceOrMechanismViolation", "authenticationFailure"),
+"own_tls_expired": ("securityServiceOrMechanismViolation", "keyExpired"),
+"own_tls_expiring": ("securityServiceOrMechanismViolation", "keyExpired"),
+"own_tls_untrusted": ("securityServiceOrMechanismViolation", "authenticationFailure"),
+"own_tls_handshake_failed": ("securityServiceOrMechanismViolation", "authenticationFailure"),
+}
+
+
 HEADLINE = {code: head for code, _o, head, _n in VERDICT_RULES}
 
 
@@ -16419,6 +16649,20 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
             f["relation"] = relation
         if f.get("code") in HARDWARE_FINDINGS:
             f["kind"] = "hardware"
+        # What kind of fault this is, in X.733's vocabulary rather than this
+        # tool's. Carried in the export and drawn nowhere: a reader already has
+        # a sentence naming the fault and a stage strip saying where on the
+        # path it sits, and a third label would say the same thing a third
+        # time. What it is for is counting - across releases, and against a
+        # vocabulary this project does not control.
+        kind = FINDING_CLASS.get(f.get("code"))
+        # Checked against the vocabulary on the way out, not only in a test.
+        # The single reason to borrow somebody else's names is that a reader on
+        # the other end knows them, so a value that is nearly one - a typo, a
+        # tidied spelling - is worse than no value: it exports as though it
+        # were standard and matches nothing.
+        if kind and kind[0] in X733_EVENT_TYPES and kind[1] in X733_CAUSES:
+            f["event_type"], f["probable_cause"] = kind
     _retarget_verdict(verdict, raw)
     _qualify_upstream_verdict(verdict, raw, uplink_mbps)
     if neighbours and verdict.get("based_on") and verdict["based_on"][0] in PORT_RELEVANT_CODES:

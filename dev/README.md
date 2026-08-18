@@ -249,7 +249,25 @@ find out a release was one finding further along.
 python3 dev/counts.py            # rewrite them
 python3 dev/counts.py --check    # say what is stale, change nothing
 python3 dev/counts.py --self-test
+python3 dev/counts.py --kinds    # the X.733 coverage table
+python3 dev/counts.py --kinds --deep    # ...and how many can be the answer
 ```
+
+`--kinds` answers the question the finding list cannot: **what have we not
+got.** Every ranked rule carries an ITU-T X.733 event type and probable cause,
+which is a vocabulary this project does not control, so the causes with no
+finding behind them are visible instead of being defined out of existence by a
+list drawn around what already exists. The first run of it returned CPU
+saturation - `cpuCyclesLimitExceeded`, which this box reads the load average
+for on every run and has never named.
+
+`--deep` adds how many rules of each kind can *be* the answer rather than only
+a symptom of one, and it costs a run of the scenario corpus because there is no
+static list of which findings are symptoms - it is measured by raising each one
+and asking whether the verdict names it. Do not shorten that with `--quick`:
+the sampling windows are skipped, findings that need one report as symptoms,
+and the table grows a coverage hole that is not there. That mistake was made
+while writing this and briefly showed nine.
 
 It rewrites the pins inside `test_faultone.py` as well as the prose, because
 moving one without the other leaves the red suite this exists to prevent. That

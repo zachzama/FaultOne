@@ -3952,6 +3952,93 @@ class TestThePathSummaryAgreesWithTheFinding(unittest.TestCase):
         self.assertIn("182ms", line)
 
 
+class TestEveryFindingHasAKind(unittest.TestCase):
+    """Each ranked finding is classified in ITU-T X.733's vocabulary, so the
+    188 outcomes can be counted by kind rather than read one at a time.
+
+    The point of borrowing a vocabulary instead of inventing one is that it can
+    be audited *against*. A list drawn around what already exists answers
+    "what have we got"; a closed one somebody else maintains answers "what have
+    we not got", which is the question worth asking. These tests keep the
+    mapping total and inside the vocabulary, because a partial map silently
+    answers the second question wrong.
+    """
+
+    def test_every_ranked_finding_is_classified(self):
+        missing = [c for c, *_ in nd.VERDICT_RULES if c not in nd.FINDING_CLASS]
+        self.assertEqual(missing, [], "ranked findings with no X.733 class: %r" % missing)
+
+    def test_nothing_is_classified_that_is_not_a_finding(self):
+        """A code that stops being ranked leaves its row behind, and the row
+        then counts towards a coverage table describing a finding that no
+        longer fires."""
+        ranked = {c for c, *_ in nd.VERDICT_RULES}
+        stale = sorted(set(nd.FINDING_CLASS) - ranked)
+        self.assertEqual(stale, [], "classified but not ranked: %r" % stale)
+
+    def test_exactly_one_kind_each(self):
+        """One class per finding, not a list. A finding in two buckets stops
+        the count answering the question the buckets exist for."""
+        for code, value in nd.FINDING_CLASS.items():
+            with self.subTest(code=code):
+                self.assertIsInstance(value, tuple)
+                self.assertEqual(len(value), 2)
+
+    def test_both_halves_come_from_the_vocabulary(self):
+        """Invented values are the failure mode here: they read like the
+        standard, count like the standard, and cannot be compared with anything
+        outside this repository."""
+        for code, (event, cause) in nd.FINDING_CLASS.items():
+            with self.subTest(code=code):
+                self.assertIn(event, nd.X733_EVENT_TYPES)
+                self.assertIn(cause, nd.X733_CAUSES)
+
+    def test_the_cause_list_carries_nothing_unused(self):
+        """A cause nobody uses is either a finding waiting to be written or a
+        line to delete, and both are worth surfacing rather than carrying."""
+        used = {c for _e, c in nd.FINDING_CLASS.values()}
+        unused = sorted(nd.X733_CAUSES - used)
+        self.assertEqual(unused, [], "causes in the vocabulary with no finding: %r" % unused)
+
+    def test_a_report_carries_the_kind_of_each_finding(self):
+        """The classification is for counting, and nothing can count it if it
+        stops at the module. It rides in the export, where a reader on the
+        other end of an X.733 vocabulary can group by it."""
+        setup, kw = S["dns_hijack"]
+        mod = fresh()
+        setup(mod)
+        report = mod.diagnose(**scenario_kwargs(kw))
+        classified = [f for f in report["findings"] if f.get("event_type")]
+        self.assertTrue(classified, "no finding in the report carried its kind")
+        for f in classified:
+            with self.subTest(code=f["code"]):
+                self.assertIn(f["event_type"], nd.X733_EVENT_TYPES)
+                self.assertIn(f["probable_cause"], nd.X733_CAUSES)
+
+    def test_a_kind_outside_the_vocabulary_never_reaches_a_report(self):
+        """A tidied spelling exports as though it were standard and matches
+        nothing on the far side, which is worse than exporting no kind at all.
+        Checked on the way out rather than only here."""
+        setup, kw = S["dns_hijack"]
+        mod = fresh()
+        setup(mod)
+        mod.FINDING_CLASS = dict(mod.FINDING_CLASS,
+                                 dns_hijack=("integrityViolation", "informationModificationDetectd"))
+        report = mod.diagnose(**scenario_kwargs(kw))
+        hijack = next(f for f in report["findings"] if f["code"] == "dns_hijack")
+        self.assertNotIn("probable_cause", hijack)
+
+    def test_no_kind_swallows_the_whole_table(self):
+        """A taxonomy where one bucket holds most of the rules has not
+        classified anything. Held loosely - the threshold is a smell test, not
+        a rule about networks."""
+        import collections
+        counts = collections.Counter(e for e, _c in nd.FINDING_CLASS.values())
+        worst, n = counts.most_common(1)[0]
+        self.assertLess(n, len(nd.FINDING_CLASS) * 0.5,
+                        "%r holds %d of %d rules" % (worst, n, len(nd.FINDING_CLASS)))
+
+
 class TestTheSuiteDoesNotBreakItsOwnClock(unittest.TestCase):
     """`nd.time` is not a copy of anything - it is the `time` module, shared by
     every module in the process. So `nd.time.sleep = ...` disables sleeping
@@ -15086,9 +15173,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 964),
-            "compressed": (len(gzip.compress(raw, 9)), 292),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 204),
+            "on disk": (len(raw), 980),
+            "compressed": (len(gzip.compress(raw, 9)), 295),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 206),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

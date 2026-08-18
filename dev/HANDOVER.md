@@ -141,16 +141,52 @@ answers the same on every platform.
 scenario found whatever the build box had bound - datagram findings on Windows,
 none here. Stubbed.
 
-**The open part: twenty-eight other collectors are still live in `fresh()`.**
+**The open part: twenty-six other collectors are still live in `fresh()`.**
 The list is hand-written, which is the staleness `DiagnoseHarness` was fixed for
 by deriving it, and `fresh()` never got that fix. Every scenario in the corpus
 runs through it.
 
-Deriving it is the right fix and it is not small: blanket-stubbing them stops
-**forty-four scenarios producing their finding**, because those scenarios were
-written against what a Mac happens to return - mostly Linux files that are
-simply absent here. That is a real dependence on the host and deserves its own
-session rather than being buried in a CI fix.
+Two of the twenty-eight are now stubbed, and both were live faults rather than
+tidiness. `_read_load_average` returned the real run queue of whichever machine
+the suite was on, and `_check_cpu_load` fires `cpu_saturated` off load over
+CPUs: pinning it to a saturated box fails **fifty-six tests**, so the corpus was
+one busy build runner away from that, and two finding messages quoted the
+number verbatim. `_read_resolvers` returned this laptop's home router, and the
+neighbour-inventory fixture only exercised the naming path *because* a resolver
+happened to be configured.
+
+**The earlier claim that blanket-stubbing stops forty-four scenarios firing was
+wrong, and it is worth knowing why.** The blanket stub returned `None`. Almost
+every `_read_*` here returns `{}` on a Mac and its callers do `.get()`, so the
+scenarios were not losing a finding, they were raising `AttributeError`. Blank
+each collector one at a time with the shape it really returns and the picture is
+much smaller. Measured that way, this is the whole of it:
+
+| collector | scenarios whose findings change |
+|---|---|
+| `cmd_kernel_drops`, `_read_kernel_drops` | 28 each |
+| `cmd_tcp_flows` | 22 |
+| `cmd_link_stats` | 14 |
+| `_read_uptime_seconds` | 6 |
+| `cmd_udp_tunnels` | 4 |
+| `cmd_proxy_config` | 3 |
+| `cmd_kernel_log`, `cmd_clock_sync` | 2 each |
+| `cmd_tcp_health`, `cmd_route_to`, `cmd_qdisc`, `cmd_firewall_counters` | 1 each |
+| the seven `/proc` and `/sys` readers, `_read_neigh_table`, `_read_sysfs_names`, `cmd_socket_owners`, `cmd_ethtool`, `_read_text`, `_read_link_drivers_linux` | 0 |
+
+Everything in the last row can be stubbed today and nothing moves. The rows
+above it are scenarios that lean on the collector rather than saying what they
+mean, and each wants its own fixture - which is the work, and it is a list now
+rather than a number. The script that produces this table is in the session
+scratchpad; it blanks one collector, re-runs all 192 scenarios, and diffs the
+finding codes.
+
+`fresh()` keeps `AS_WRITTEN`, every collector as the module wrote it, captured
+before anything replaces one. A test of a collector's own behaviour needs the
+real function bound to the copy whose `open` and `OS_NAME` it patched, and
+stubbing a collector takes that away - which it did to
+`test_list_resolvers_says_why_it_found_nothing` immediately. Use it when adding
+each baseline.
 
 ```bash
 python3 - <<'EOF'

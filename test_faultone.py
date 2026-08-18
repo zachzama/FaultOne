@@ -15005,6 +15005,8 @@ class TestVerdict(unittest.TestCase):
             raise OSError(13, "Permission denied", "/etc/resolv.conf")
         m.open = boom
         m.OS_NAME = "Linux"
+        # The collector itself, not the baseline fresh() puts over it.
+        m._read_resolvers = m.AS_WRITTEN["_read_resolvers"]
         found, reason = m._read_resolvers(with_reason=True)
         self.assertEqual(found, [])
         self.assertIn("Permission denied", reason)
@@ -15816,6 +15818,12 @@ class TestNeighbourInventory(unittest.TestCase):
     def run_inventory(self, resolve=None):
         m = fresh()
         m.cmd_arp = lambda: {"ok": True, "cmd": "ip neigh", "stdout": self.ARP}
+        # Named here rather than taken from the machine. The lookup below only
+        # runs when a resolver is configured, so borrowing this box's meant the
+        # naming path was covered on a laptop and skipped on anything without
+        # one - and the address it borrowed was a real home router.
+        m._read_resolvers = lambda with_reason=False: (
+            (["10.0.0.53"], None) if with_reason else ["10.0.0.53"])
         # build_inventory looks names up against the first configured resolver,
         # in a thread pool, over the network. Every other test of it passes
         # resolve_names=False; a run through diagnose() cannot, so the lookup
@@ -20252,6 +20260,15 @@ def fresh():
     # a sampling window would take an hour - but `mod.time.sleep = ...` reaches
     # every module in the process, because `mod.time` *is* `time`. Rebinding
     # the name on this module copy keeps the change where it belongs.
+    # Every collector as the module wrote it, kept before anything below
+    # replaces one. A test of a collector's *own* behaviour needs the real
+    # function bound to this module copy - it patches `open` and `OS_NAME` on
+    # the copy and expects the reader to see them - and once fresh() has
+    # overwritten the name there is no way back to it. Twenty-eight collectors
+    # are still unstubbed here; each one that gets a baseline will take a test
+    # like that with it, so the door has to exist before the stubbing does.
+    mod.AS_WRITTEN = {n: getattr(mod, n) for n in dir(mod)
+                      if n.startswith(("cmd_", "_read_")) and callable(getattr(mod, n))}
     quiet_time = types.ModuleType("time")
     quiet_time.__dict__.update(time.__dict__)
     quiet_time.sleep = lambda s: None
@@ -20267,6 +20284,19 @@ def fresh():
     mod.cmd_udp_sockets = lambda: {"ok": False, "cmd": "ss -uan",
                                    "applicable": False,
                                    "error": "not stubbed by this scenario"}
+    # Idle, and fixed. This reads the real run queue of whatever machine the
+    # suite is on, and `_check_cpu_load` fires `cpu_saturated` off load over
+    # CPUs - so fifty-seven scenarios were one busy build box away from a
+    # finding nobody wrote them to produce. It is also quoted verbatim into two
+    # messages, which made those scenarios' text different on every run. The
+    # `cpu_saturated` scenario sets its own; this is the baseline it overrides.
+    mod._read_load_average = lambda: (0.42, 8)
+    # The resolvers this machine actually uses. Nothing in the corpus reads it
+    # today, which is the only reason a home router's address was not turning
+    # up in scenario output. Empty is what "this scenario said nothing about
+    # resolvers" should look like.
+    mod._read_resolvers = lambda with_reason=False: (
+        ([], "not stubbed by this scenario") if with_reason else [])
     # The kernel's own answer to "which address would this box leave from".
     # It sends nothing - connect() on a datagram socket fixes a destination
     # rather than transmitting - but the answer comes from this machine's

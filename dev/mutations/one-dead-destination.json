@@ -1,0 +1,37 @@
+[
+ {
+  "label": "one dead destination is a dead uplink again",
+  "old": "            elif _egress_still_carries(raw, target):",
+  "new": "            elif False:"
+ },
+ {
+  "label": "the tool's own default choice is graded as a critical fault",
+  "old": "                    \"severity\": \"warning\" if chose == \"this tool\" else \"critical\",",
+  "new": "                    \"severity\": \"critical\","
+ },
+ {
+  "label": "nobody records who picked the target",
+  "old": "    raw[\"target_chosen_by\"] = (\"the operator\"\n                               if target and (target or \"\").strip().lower() != \"auto\"\n                               else \"this tool\")",
+  "new": "    raw[\"target_chosen_by\"] = \"the operator\""
+ },
+ {
+  "label": "the witness list is unbounded, so this becomes a scanner",
+  "old": "    return out[:EGRESS_WITNESSES]",
+  "new": "    return out"
+ },
+ {
+  "label": "the target is allowed to be its own witness",
+  "old": "    seen, out = {target}, []",
+  "new": "    seen, out = set(), []"
+ },
+ {
+  "label": "loopback and link-local peers count as traffic leaving the site",
+  "old": "        if peer and peer not in seen and not _flow_is_local(peer):",
+  "new": "        if peer and peer not in seen:"
+ },
+ {
+  "label": "a witness that never answered is reported as the one that did",
+  "old": "        if port:\n            # The same object the export carries, so the sentence and the\n            # evidence cannot describe different witnesses.\n            raw[\"egress_witnesses\"] = asked\n            return asked[-1]",
+  "new": "        raw[\"egress_witnesses\"] = asked\n        return asked[-1]"
+ }
+]

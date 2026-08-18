@@ -7654,6 +7654,14 @@ VERDICT_RULES = [
      "carrying traffic. What is not answering is the host itself, or something "
      "filtering directly in front of it. Do not escalate this to whoever owns "
      "the path - it is not theirs."),
+    ("target_alone_unreachable", "that one destination, not the way out",
+     "Traffic leaves this site and this destination alone does not answer",
+     "Something this box actually depends on was asked the same question and "
+     "answered, so the uplink carries traffic and nothing upstream of this site "
+     "is implicated. If nobody named this target, the tool picked it - and the "
+     "address it picks is not one every network carries traffic to. Point "
+     "--target at something this box is supposed to reach before reading "
+     "anything into it."),
     ("inet_unreachable", "the provider",
      "The gateway answers but nothing beyond it does - the site's uplink is down",
      "This device and the local network are fine. Escalate to whoever owns the "
@@ -8655,6 +8663,7 @@ FINDING_SIDE.update({
     "egress_blocked": "upstream",
     "inet_unreachable": "upstream",
     "destination_unresponsive": "upstream",
+    "target_alone_unreachable": "upstream",
     "inet_partial_loss": "upstream",
     "inet_loss_unmeasured": "upstream",
     "inet_icmp_filtered": "upstream",
@@ -8786,7 +8795,8 @@ STAGE_RULES = [
      {"gw_partial_loss", "gw_unknown", "gw_loss_unmeasured"}),
     # A routing loop means traffic never arrives, so it fails the stage rather
     # than merely warning it.
-    ("internet", {"inet_unreachable", "destination_unresponsive", "loop",
+    ("internet", {"inet_unreachable", "destination_unresponsive",
+                  "target_alone_unreachable", "loop",
                   # One address failing while its neighbours succeed is a
                   # failure of this stage for whoever uses that address, even
                   # though the run's own probe reached the target.
@@ -8878,6 +8888,9 @@ RAW_STAGE = {
     # The fallback when ping is filtered: reaching the target the way an
     # application would, before calling a site's uplink down.
     "reachability_tcp": "internet",
+    # The box's own peers, asked whether traffic leaves this site at all before
+    # one dead destination is allowed to read as a dead uplink.
+    "egress_witnesses": "internet",
     "proxy": "internet",
     # Kept when the TCP path is used instead, so both attempts are on record.
     "path_trace_icmp": "internet",
@@ -8920,7 +8933,7 @@ RAW_STAGE = {
     # Not a stage of the chain, and deliberately so - see _check_clock.
     "clock": None,
     # Provenance for everything else, and a few bytes each.
-    "target": None, "target_kind": None,
+    "target": None, "target_kind": None, "target_chosen_by": None,
 }
 
 # One raw entry per checked port, named for the port, so it cannot be a key in
@@ -9698,6 +9711,7 @@ FINDING_CLASS = {
 "port_host_unreachable": ("communicationsAlarm", "routingFailure"),
 "trace_stalls": ("communicationsAlarm", "unavailable"),
 "destination_unresponsive": ("communicationsAlarm", "remoteNodeTransmissionError"),
+"target_alone_unreachable": ("communicationsAlarm", "remoteNodeTransmissionError"),
 "answered_closer_than_the_path": ("communicationsAlarm", "invalidMessageReceived"),
 "path_asymmetric": ("communicationsAlarm", "routingFailure"),
 "shared_hop_degraded": ("communicationsAlarm", "transmissionError"),
@@ -16204,7 +16218,7 @@ def _is_ipv6_literal(host):
     return ":" in (host or "")
 
 
-def _reachable_over_tcp(host, timeout=3):
+def _reachable_over_tcp(host, timeout=3, ports=REACHABILITY_PORTS):
     """Did anything reach `host` and come back, ICMP aside?
 
     A refusal proves it as well as an accept does: an RST is a completed round
@@ -16215,13 +16229,78 @@ def _reachable_over_tcp(host, timeout=3):
     serves traffic all day was being reported as a critical uplink outage
     purely for not answering ping.
     """
-    for port in REACHABILITY_PORTS:
+    for port in ports:
         res = cmd_check_port(host, port, timeout=timeout)
         if res.get("ok"):
             return port, "answered"
         if res.get("reason") == "refused":
             return port, "refused the connection"
     return None, None
+
+
+# How many of this box's own peers to ask before concluding. Two is enough to
+# separate "nothing gets off this site" from "this one destination does not
+# answer", and this must not become a scan of anything.
+EGRESS_WITNESSES = 2
+
+
+def _witnesses_from_the_box(raw, target):
+    """Addresses this box demonstrably uses, to check a dead target against.
+
+    Every "the internet is unreachable" this tool has ever printed rested on
+    one address. A destination can be unreachable on its own - blackholed
+    somewhere upstream, moved, or simply down - and the verdict that came out
+    of a single failure named the carrier for all of them.
+
+    The second opinion is taken from the box rather than from a constant, and
+    that is the whole design. Any address written here is a guess about where
+    this box sits: a box that cannot reach one foreign public resolver very
+    often reaches everything it actually depends on, and a second hardcoded
+    address would share the first one's fate. Its own resolvers and its own
+    busiest peers are reachable by definition on a working box, wherever in the
+    world it is - and asking them sends nothing it does not already send.
+
+    Resolvers first: every box has one, it is contacted constantly, and it is
+    the cheapest thing here to be sure about.
+    """
+    seen, out = {target}, []
+    for addr in (_read_resolvers() or []):
+        if addr and addr not in seen and not _flow_is_local(addr):
+            seen.add(addr)
+            out.append((addr, "a resolver this box is configured to use"))
+    counts = {}
+    for peer, _local in ((raw.get("sockets") or {}).get("peers") or []):
+        if peer and peer not in seen and not _flow_is_local(peer):
+            counts[peer] = counts.get(peer, 0) + 1
+    # Busiest first, ties broken by address so two runs ask the same questions.
+    for peer, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        out.append((peer, "a peer this box has connections open to"))
+    return out[:EGRESS_WITNESSES]
+
+
+def _egress_still_carries(raw, target):
+    """The first of this box's own peers that answers, or None.
+
+    TCP, not ping: ICMP is filtered on these boxes more often than not, and a
+    witness that cannot answer proves nothing about the witness.
+    """
+    asked = []
+    for addr, what in _witnesses_from_the_box(raw, target):
+        # Ask a resolver on 53 first. The default order starts at 443, and a
+        # DNS server that does not serve HTTPS spends two timeouts saying so
+        # before the one port it certainly answers on is tried.
+        ports = (("53",) + REACHABILITY_PORTS if "resolver" in what
+                 else REACHABILITY_PORTS)
+        port, how = _reachable_over_tcp(addr, timeout=2, ports=ports)
+        asked.append({"address": addr, "what": what, "port": port,
+                      "how": how, "reached": bool(port)})
+        if port:
+            # The same object the export carries, so the sentence and the
+            # evidence cannot describe different witnesses.
+            raw["egress_witnesses"] = asked
+            return asked[-1]
+    raw["egress_witnesses"] = asked or None
+    return None
 
 
 def _gateway_answers_arp(arp_entries, gw):
@@ -16650,6 +16729,42 @@ def _check_internet(raw, findings, target, probes):
                                f"immediately in front of it. Nothing upstream of this site "
                                f"explains it.",
                 })
+            elif _egress_still_carries(raw, target):
+                # One dead destination is not a dead uplink. This is the case
+                # that made the tool wrong in the most confident way it can be:
+                # the default target is a foreign public resolver, and there
+                # are whole countries where reaching it is not something a box
+                # is expected to do. The report named the carrier, marked it
+                # critical, and sent its reader to an ISP about a destination
+                # that was never going to answer from where they were sitting.
+                #
+                # Nothing here knows or needs to know why. The box reaches what
+                # it depends on and does not reach this one address, which is a
+                # statement about the address.
+                witness = raw["egress_witnesses"][-1]
+                chose = raw.get("target_chosen_by")
+                findings.append({
+                    # A fault this tool invented by picking the target itself is
+                    # not a critical fault about the network. It is worth saying
+                    # and it is not the headline.
+                    "severity": "warning" if chose == "this tool" else "critical",
+                    "code": "target_alone_unreachable",
+                    "layer": 3,
+                    "message": f"{target} answers nothing - no ping, no TCP on "
+                               f"{', '.join(REACHABILITY_PORTS)} - and traffic is leaving this "
+                               f"site: {witness['address']}, {witness['what']}, "
+                               f"{witness['how']} on port {witness['port']}. So this is that "
+                               f"one destination rather than the uplink, and nothing upstream "
+                               f"of this site is implicated."
+                               + (f" {target} is the address this tool aims at when nobody "
+                                  f"says otherwise, and it is not something every box is "
+                                  f"expected to reach - some networks do not carry traffic to "
+                                  f"it at all. Point --target at something this box is "
+                                  f"supposed to reach before reading anything into this."
+                                  if chose == "this tool" else
+                                  " Ask whoever owns that destination, or whatever sits in "
+                                  "front of it."),
+                })
             else:
                 findings.append({
                     "severity": "critical",
@@ -17056,6 +17171,12 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     findings = []
     raw = {}
     _survey_this_box(raw, findings)
+    # Who picked it. The tool falls back to a target of its own choosing, then
+    # graded the result as if somebody had asked for it - so a destination this
+    # box was never meant to reach produced a critical fault about the network.
+    raw["target_chosen_by"] = ("the operator"
+                               if target and (target or "").strip().lower() != "auto"
+                               else "this tool")
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
     # The resolved address, kept so a route prefix can be matched against it.

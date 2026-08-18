@@ -1,6 +1,6 @@
 # FaultOne
 
-**192 findings it can reach. One line saying which one to fix first.**
+**193 findings it can reach. One line saying which one to fix first.**
 
 ```bash
 python3 faultone.py --report                    # what's wrong, in this terminal
@@ -93,8 +93,8 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 1014 KB of
-repetitive text: it goes over the wire at 306 KB with compression on, for the
+`-C` because OpenSSH doesn't compress by default, and the file is 1021 KB of
+repetitive text: it goes over the wire at 308 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -103,11 +103,11 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 213 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 214 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine; the box still only needs 3.7.
-Stripped and compressed together it's 213 KB instead of 1014. That is 79%
+Stripped and compressed together it's 214 KB instead of 1021. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
@@ -292,8 +292,8 @@ directions.
 
 ### What it actually checks
 
-**41 things are inspected**, and **192 distinct conclusions** can come out of
-them: 158 are faults, 34 are context.
+**41 things are inspected**, and **193 distinct conclusions** can come out of
+them: 159 are faults, 34 are context.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -387,7 +387,7 @@ separate programs, never linked or copied in.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1741 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1748 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

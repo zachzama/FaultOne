@@ -15957,9 +15957,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1014),
-            "compressed": (len(gzip.compress(raw, 9)), 306),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 213),
+            "on disk": (len(raw), 1021),
+            "compressed": (len(gzip.compress(raw, 9)), 308),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 214),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19663,6 +19663,102 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
             self.assertNotIn(gone, nd.VIEWER_TEMPLATE, f"{gone} outlived the server")
 
 
+class TestOneDeadDestinationIsNotADeadUplink(unittest.TestCase):
+    """The most confidently wrong report this tool could produce.
+
+    `inet_unreachable` is critical, names the carrier, and rested entirely on
+    one address - the one this tool picks when nobody says otherwise. That
+    address is a foreign public resolver, and there are networks that do not
+    carry traffic to it at all. A box sitting on one of them got a critical
+    fault about its provider's circuit, at the top of a report, for a
+    destination it was never expected to reach.
+
+    Nothing here detects that, and nothing should: no list of what is blocked
+    where, no guess about which country a box is in. The box is asked whether
+    traffic leaves this site using peers it demonstrably already uses, and one
+    dead destination stops being evidence about the uplink.
+    """
+
+    def run_it(self, target, witness_answers):
+        mod = fresh()
+        setup, kwargs = S["target_alone_unreachable"]
+        setup(mod)
+        if not witness_answers:
+            mod.cmd_check_port = lambda h, p, timeout=5: {
+                "ok": False, "cmd": "tcp connect", "reason": "timeout",
+                "error": "timed out"}
+        kw = dict(kwargs); kw["target"] = target
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kw))
+        return rep, [f["code"] for f in rep["findings"]]
+
+    def test_a_witness_that_answers_moves_the_owner_off_the_carrier(self):
+        rep, codes = self.run_it(None, True)
+        self.assertIn("target_alone_unreachable", codes)
+        self.assertNotIn("inet_unreachable", codes)
+        self.assertEqual(rep["verdict"]["based_on"][0], "target_alone_unreachable")
+        self.assertNotIn("provider", rep["verdict"]["owner"])
+
+    def test_with_no_witness_the_uplink_verdict_still_stands(self):
+        """The point is not to stop saying it. A site that reaches nothing at
+        all has a dead uplink, and this must still be that."""
+        _rep, codes = self.run_it(None, False)
+        self.assertIn("inet_unreachable", codes)
+        self.assertNotIn("target_alone_unreachable", codes)
+
+    def test_a_target_nobody_asked_for_is_not_a_critical_fault(self):
+        """The tool picked this address. Grading its own default choice as a
+        critical network fault is the tool manufacturing the headline."""
+        rep, _ = self.run_it(None, True)
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "target_alone_unreachable")
+        self.assertEqual(found["severity"], "warning")
+        self.assertIn("nobody", found["message"] + "".join(
+            r[3] for r in nd.VERDICT_RULES if r[0] == "target_alone_unreachable"))
+
+    def test_a_target_somebody_asked_for_is(self):
+        """Somebody named this destination, so it is something they expect to
+        reach and its being dead is a real fault - just not the carrier's."""
+        rep, _ = self.run_it("203.0.113.77", True)
+        found = next(f for f in rep["findings"]
+                     if f["code"] == "target_alone_unreachable")
+        self.assertEqual(found["severity"], "critical")
+        self.assertEqual(rep["raw"]["target_chosen_by"], "the operator")
+
+    def test_the_witnesses_come_from_the_box_and_not_from_a_constant(self):
+        """Any address written into this function is a guess about where the
+        box is, and would share the target's fate on the network that made this
+        necessary."""
+        import ast, re
+        src = inspect.getsource(nd._witnesses_from_the_box)
+        literals = [n.value for n in ast.walk(ast.parse(src.lstrip()))
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        self.assertEqual([v for v in literals
+                          if re.match(r"^\d+\.\d+\.\d+\.\d+$", v)], [],
+                         "an address is hardcoded as a witness")
+
+    def test_it_asks_a_bounded_number_of_peers(self):
+        """A diagnostic that starts connecting to everything it saw in the
+        socket table is a scanner. Two is enough to answer the question."""
+        mod = fresh()
+        mod._read_resolvers = lambda with_reason=False: (
+            ([], None) if with_reason else [])
+        raw = {"sockets": {"peers": [("203.0.113.%d" % i, 40000 + i)
+                                     for i in range(50)]}}
+        self.assertEqual(len(mod._witnesses_from_the_box(raw, "8.8.8.8")),
+                         mod.EGRESS_WITNESSES)
+
+    def test_the_target_and_the_local_plumbing_are_never_witnesses(self):
+        """Asking the target whether the target is reachable proves nothing,
+        and loopback is not the network under test."""
+        mod = fresh()
+        mod._read_resolvers = lambda with_reason=False: (
+            (["127.0.0.53"], None) if with_reason else ["127.0.0.53"])
+        raw = {"sockets": {"peers": [("8.8.8.8", 40001), ("169.254.1.1", 40002),
+                                     ("203.0.113.9", 40003)]}}
+        picked = [a for a, _what in mod._witnesses_from_the_box(raw, "8.8.8.8")]
+        self.assertEqual(picked, ["203.0.113.9"])
+
+
 class DiagnoseHarness(unittest.TestCase):
     """Characterization tests for diagnose().
 
@@ -20781,6 +20877,27 @@ def _(nd):
 def _(nd):
     ping_map(nd, inet_loss=100)
     unreachable(nd, arp=True)
+    path_dies_short(nd)
+
+@scenario("target_alone_unreachable", target=None)
+def _(nd):
+    """The tool's own default target is dead and everything this box depends on
+    works. A box on a network that does not carry traffic to that address at
+    all looks exactly like this, and the report used to name the carrier.
+
+    `target=None` on purpose: nobody asked for this target, which is half of
+    what the finding says.
+    """
+    ping_map(nd, inet_loss=100)
+    nd.cmd_arp = lambda: {"ok": True, "cmd": "ip neigh",
+                          "stdout": "10.0.0.1 dev eth0 lladdr 00:11:22:33:44:55 REACHABLE\n"}
+    nd._read_resolvers = lambda with_reason=False: (
+        (["10.0.0.53"], None) if with_reason else ["10.0.0.53"])
+    # The witness answers and the target does not, which is the whole fixture.
+    nd.cmd_check_port = lambda h, p, timeout=5: (
+        {"ok": True, "cmd": f"tcp connect {h}:{p}"} if h == "10.0.0.53" else
+        {"ok": False, "cmd": f"tcp connect {h}:{p}", "reason": "timeout",
+         "error": "timed out"})
     path_dies_short(nd)
 
 @scenario("destination_unresponsive")

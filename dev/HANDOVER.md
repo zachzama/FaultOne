@@ -7,36 +7,40 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Open: where 2026-08-16 stopped, and the one job left running
+## Open: where 2026-08-17 stopped
 
-Everything is committed and pushed - `origin/main` is at "Measure the viewer's
-coverage instead of counting how its tests are written", the tree is clean and
-the suite is green at 1,575. Nothing is half-applied and nothing needs undoing.
+Everything is committed, pushed and released. The suite is green at 1,671, the
+tree is clean, `python3 dev/counts.py --check` says nothing is stale, and all
+three demo sets are regenerated. Nothing is half-applied.
 
-**The job that did not survive the machine.** `dev/branch_sweep.py true` was
-thirteen sites into fifty-four with no survivors when this stopped. It lives in
-a scratch directory, not the repo, so it is gone - re-run it rather than looking
-for it. About forty minutes, and the number that matters is the survivor list at
-the end:
+**The branch sweep is done and does not need re-running.** Both directions ran
+clean over all 88 sites on 2026-08-16 - 0 survivors, 0 edits that broke the
+syntax, every forced branch noticed by at least two tests. The regex that found
+54 of them was replaced: conditions are forced by *inserting* `|| true` or
+`&& false` before the operator rather than by finding where the condition
+begins, which needs no extent and cannot cross a template boundary. Re-run it
+only when the viewer's branching changes.
 
-```bash
-python3 dev/branch_sweep.py true     # else-sides; false ran clean on 2026-08-16
-```
+**The one sweep never yet run as a whole:** `python3 dev/mutate.py
+dev/mutations` - 25 mutations across seven files, about an hour. Each set has
+been run on its own as it was written and every one came back clean, but the
+whole thing has not gone through in a single pass. Run `--anchors` first; it
+takes a second and tells you whether any of them still apply.
 
-**Then the thing neither direction covers.** The sweep reads ternaries only. The
-thirteen `&&` guards in `VIEWER_TEMPLATE` have never been forced either way, and
-each of them decides whether a piece of markup is drawn at all. Widening the
-regex in that script is the whole job.
+**Three things worth knowing before trusting any mutation run.** Copy the whole
+tree, not the two Python files - sixteen documentation tests error for want of
+a README and an error counts the same as a failure. Run a control first, always;
+a suite that fails before anything is mutated makes every result behind it
+noise, which happened and was not noticed for three runs. And nothing in `dev/`
+is covered by the suite, so a mutation there correctly survives - which is why
+`counts.py` and `mutate.py` self-test, and why `demos.py` checks its own pages.
 
-**Two limits worth knowing before trusting a run of it.** Forcing false only
-tests then-sides, which is why the true direction exists - the `setFavicon`
-fallback that no test noticed was an else-side. And run it against a full tree:
-a scratch copy of only the two Python files makes about sixteen documentation
-tests error for want of a README, and an error counts the same as a failure when
-you are grepping for either.
-
-The parser review that filled most of that day is recorded under "every parser
-was read" below. Nothing from it is outstanding.
+**The one place a reading can still be invisible.** The suite proves a finding
+fires; `test_every_ranked_finding_can_be_the_answer_somewhere` proves it can
+headline, so a page can exist for it. Neither proves a *detail inside* a finding
+ever renders - the AS numbers shipped tested and unseen on forty pages for a
+week for exactly that reason. `dev/demos.py` now fails if no hop on a page
+carries an AS, which closes that one case and not the general one.
 
 ## Closed: the flaky test, and the half of it the first fix missed
 
@@ -331,9 +335,11 @@ neighbouring finding implying an answer would undercut it.
 ## Open: the resume card quotes numbers that moved again
 
 `zachzama/zachzama.github.io` carries a FaultOne project card with the finding
-and test counts on it. The tests are **1,559** as of 2026-08-16 and the card
-still says 965. Nothing checks it, and every release makes it staler. Either
-update it with the release or stop quoting the numbers.
+and test counts on it. As of 2026-08-17 the tool has **188 findings and 1,671
+tests**; the card still says 153 and 965. Nothing checks it, and every release
+makes it staler - it has now been wrong across eight of them. Either update it
+with the release or stop quoting the numbers, and the second is the one that
+stops this recurring. `python3 dev/counts.py` prints the current figures.
 
 ## Settled: every parser was read, and one mistake accounted for most of them
 

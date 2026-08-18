@@ -114,7 +114,7 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
-## Open: twenty-eight collectors still read the machine inside fresh()
+## Settled: the suite no longer reads the machine it runs on
 
 CI was red on every push from 2026-08-16 to 2026-08-18 - all four jobs, for
 three different reasons - while the suite passed here every time. It was never
@@ -141,54 +141,55 @@ answers the same on every platform.
 scenario found whatever the build box had bound - datagram findings on Windows,
 none here. Stubbed.
 
-**The open part: four collectors are still live in `fresh()`.** Twenty-four
-were, and this is what closing most of it looked like.
+**This is closed, and not by stubbing the last four.** They were not reading
+the host. They were being driven through readers the scenarios stub, and the
+one host input left in them was the platform.
 
-Two of them were live faults rather than tidiness. `_read_load_average`
-returned the real run queue of whichever machine the suite was on, and
-`_check_cpu_load` fires `cpu_saturated` off load over CPUs: pinning it to a
-saturated box fails **fifty-six tests**, so the corpus was one busy build
-runner away from that, and two finding messages quoted the number verbatim.
-`_read_resolvers` returned this laptop's home router, and the
-neighbour-inventory fixture only exercised the naming path *because* a resolver
-happened to be configured.
+`OS_NAME = platform.system()` is the largest host input the tool has. Nearly
+every collector branches on it, so the same scenario walked a different path on
+each of the three platforms CI builds on - which is most of why a suite green
+on a Mac was red on Ubuntu and red in a third way on Windows. `fresh()` pins it
+to Linux, because that is what the corpus describes; 25 tests already set it by
+hand and the ones that mean something else say so after the line. Nothing else
+had to change.
 
-The other twenty-two answer the way they answer when the file or the tool is
-not there, which is what a Mac already returns - so nothing moved here, and
-Linux was made to agree. That is the whole point. "Changes nothing on this
-machine" is not the same as "changes nothing", and for these two facts it is
-the reason to stub them rather than a reason not to.
+The evidence is the suite run three times with `platform.system()` lying -
+Windows, Darwin, Linux - all identical. Keep that trick; it is two lines and it
+answers a question no amount of reading can:
 
-**Two earlier numbers here were wrong, and both were wrong the same way.** The
-claim that blanket-stubbing stops forty-four scenarios firing came from a blank
-that returned `None`; almost every `_read_*` returns `{}` and its callers do
-`.get()`, so those scenarios were raising, not losing a finding. And blanking a
-collector *unconditionally* overwrites the stub a scenario set for itself,
-which counts "this scenario configures the collector" as "this scenario reads
-the host". Measure it by blanking one collector at a time, with the shape it
-really returns, and only where the scenario left it live. Then the whole of
-what is left is:
+```python
+import platform; platform.system = lambda: "Windows"
+```
 
-| collector | scenarios that lean on this machine |
-|---|---|
-| `cmd_kernel_drops` | 28 |
-| `cmd_link_stats` | 13 |
-| `cmd_kernel_log` | 2 |
-| `cmd_tcp_health` | 1 |
+The guard is static, because the failure cannot be reproduced here:
+`platform.system()` must be called exactly once, nothing may read `sys.platform`
+or `os.name` sideways, and `fresh().OS_NAME` must be Linux whatever this machine
+is. A second call, a sideways read, and an unpinned `fresh()` were each checked
+to fail it.
 
-Those 44 scenarios say what they mean through whatever the build box happens to
-report, and each collector needs a fixture before it can be baselined. That is
-the remaining work, and it is a list now rather than a number.
+**Two earlier numbers here were wrong, and both the same way: each counted
+something the scenario configures as something the scenario reads.** The claim
+that blanket-stubbing stops forty-four scenarios firing came from a blank
+returning `None` where almost every `_read_*` returns `{}` and its callers do
+`.get()` - those scenarios were raising, not losing a finding. The claim that
+`cmd_kernel_drops` had 28 scenarios leaning on the machine came from blanking
+the collector on top of the `_read_kernel_drops` fixture those scenarios set
+for it. To measure this properly: blank one collector at a time, with the shape
+it really returns, only where the scenario left it live, and remember that a
+scenario driving a real collector through a stubbed reader is the corpus
+working rather than a leak.
 
 `fresh()` keeps `AS_WRITTEN`, every collector as the module wrote it, captured
 before anything replaces one. A test of a collector's *own* behaviour needs the
 real function bound to the copy whose `open` and `OS_NAME` it patched, and
 stubbing the collector takes that away - which it did to fifteen tests at once.
 Each of them names the collector it is testing now, which is an improvement on
-receiving it by accident. Use `AS_WRITTEN` when baselining the last four.
+receiving it by accident.
 
-The script that produced the table is in the session scratchpad: it blanks one
-collector, re-runs all 192 scenarios, and diffs the finding codes.
+Four collectors are still the module's own inside `fresh()` - `cmd_kernel_drops`,
+`cmd_link_stats`, `cmd_kernel_log`, `cmd_tcp_health` - and that is correct.
+Every input they have is stubbed, so they are the code under test rather than a
+hole. The snippet below counts them; four is the expected answer, not a debt.
 
 ```bash
 python3 - <<'EOF'

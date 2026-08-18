@@ -19925,6 +19925,42 @@ class DiagnoseHarness(unittest.TestCase):
                          "these reach the host and are not named as collectors, "
                          "so nothing stubs them")
 
+    def test_the_operating_system_is_asked_once_and_read_from_one_name(self):
+        """`OS_NAME = platform.system()` is the largest host input in the tool.
+        Nearly every collector branches on it, so the same scenario walked a
+        different path on each of the three platforms CI builds on - which is
+        most of why a suite green on a Mac was red on Ubuntu and red in a third
+        way on Windows.
+
+        `fresh()` pins it, and that only holds while `OS_NAME` is the single
+        place the answer enters. A second `platform.system()` call, or a check
+        reading `sys.platform` or `os.name` directly, would go straight past
+        the pin and take the platform difference with it. Asked of the source,
+        because the failure it guards against cannot be reproduced here.
+        """
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        asked, sideways = [], []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "system"
+                    and getattr(node.func.value, "id", None) == "platform"):
+                asked.append(node.lineno)
+            if (isinstance(node, ast.Attribute) and node.attr in ("platform", "name")
+                    and getattr(node.value, "id", None) in ("sys", "os")
+                    and not (node.value.id == "os" and node.attr == "name"
+                             and isinstance(getattr(node, "ctx", None), ast.Store))):
+                sideways.append("%s.%s at line %d" % (node.value.id, node.attr,
+                                                      node.lineno))
+        self.assertEqual(len(asked), 1,
+                         "platform.system() is called %d times; OS_NAME must be "
+                         "the only place the answer enters" % len(asked))
+        self.assertEqual(sideways, [],
+                         "these read the platform without going through OS_NAME")
+        # And the pin itself, whatever this machine really is.
+        self.assertEqual(fresh().OS_NAME, "Linux")
+
     def test_the_harness_replaces_every_collector_the_module_has(self):
         """The thing this class claims about itself, asserted rather than
         stated. It used to name seventeen collectors in a tuple while the tool
@@ -20277,6 +20313,14 @@ def fresh():
     quiet_time.__dict__.update(time.__dict__)
     quiet_time.sleep = lambda s: None
     mod.time = quiet_time
+    # The largest host input there is. `OS_NAME = platform.system()` decides
+    # which branch of nearly every collector runs, so the same scenario took a
+    # different path on the three platforms CI builds on - which is the whole
+    # of why a suite green on a Mac was red on Ubuntu and red differently on
+    # Windows. Pinned, because the corpus describes Linux appliances: 25 tests
+    # already set this by hand, and the ones that mean something else say so
+    # after this line.
+    mod.OS_NAME = "Linux"
     mod.which = lambda c: False
     # Unavailable unless a scenario says otherwise. Left live, this reads the
     # machine - so the no_clients_connected scenario found whatever the build

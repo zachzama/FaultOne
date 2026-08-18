@@ -16585,6 +16585,50 @@ def _mark_target_hop(hops, findings):
         return
 
 
+def _survey_this_box(raw, findings):
+    """Everything read before a target is chosen, because choosing one
+    depends on it.
+
+    Named `_survey_` and not `_read_`. That prefix is load-bearing: the test
+    harness stubs every `cmd_*` and `_read_*` name to seal the process, on the
+    reasoning that those are the functions which reach the host. This one
+    orchestrates collectors rather than being one, and calling it `_read_...`
+    had the harness replace it wholesale - so the socket table never arrived
+    and the target could not be chosen.
+
+    These are the readings a box makes about itself rather than about
+    anywhere else, and they come first for one reason: aiming at the backend
+    a box depends on most means reading its socket table before deciding
+    what the run is even about. The rest follow it because they describe
+    the same box and are cheap once that table is in hand.
+    """
+    # The socket table has to be read before the target is chosen rather than
+    # with the rest of the device checks, because choosing a backend to aim at
+    # is the first thing that depends on it. Read once and reused below.
+    raw["sockets"] = cmd_socket_states()
+    # The other plane. A box can carry its user traffic over datagrams while its
+    # control plane is TCP, and every other socket reading here is TCP - without
+    # this the busiest half of such a box is simply absent from the report.
+    raw["udp_sockets"] = cmd_udp_sockets()
+    # And how many tunnels are arriving at them, which the socket table cannot
+    # say and the connection tracking table can. Counted, never listed.
+    raw["udp_tunnels"] = cmd_udp_tunnels(raw)
+    # Who holds them, read beside the table itself so every finding built from
+    # that table can name a process instead of saying "an application".
+    raw["socket_owners"] = cmd_socket_owners()
+    # What this box's own egress queues are doing, for the three findings that
+    # otherwise offer three candidates and can eliminate none of them.
+    raw["qdisc"] = cmd_qdisc()
+    # And whether they are the reason anything above them is slow. Read here
+    # rather than with the late checks so it lands below the layer-3 findings
+    # it explains, which is what makes it the cause of them rather than a
+    # second opinion beside them.
+    _check_local_queue(raw, findings)
+    # PROTOTYPE: what the proxy on this box believes about its own backends,
+    # if there is one and it is willing to say. Absent on almost every box.
+    raw["proxy_stats"] = cmd_haproxy_stats()
+
+
 def _check_against_the_last_visit(raw, findings, gw, arp_entries, baseline,
                                   hops, path_source, target, target_kind,
                                   neighbours, call_quality, path_insight):
@@ -16685,31 +16729,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     check_ports = check_ports or []
     findings = []
     raw = {}
-    # The socket table has to be read before the target is chosen rather than
-    # with the rest of the device checks, because choosing a backend to aim at
-    # is the first thing that depends on it. Read once and reused below.
-    raw["sockets"] = cmd_socket_states()
-    # The other plane. A box can carry its user traffic over datagrams while its
-    # control plane is TCP, and every other socket reading here is TCP - without
-    # this the busiest half of such a box is simply absent from the report.
-    raw["udp_sockets"] = cmd_udp_sockets()
-    # And how many tunnels are arriving at them, which the socket table cannot
-    # say and the connection tracking table can. Counted, never listed.
-    raw["udp_tunnels"] = cmd_udp_tunnels(raw)
-    # Who holds them, read beside the table itself so every finding built from
-    # that table can name a process instead of saying "an application".
-    raw["socket_owners"] = cmd_socket_owners()
-    # What this box's own egress queues are doing, for the three findings that
-    # otherwise offer three candidates and can eliminate none of them.
-    raw["qdisc"] = cmd_qdisc()
-    # And whether they are the reason anything above them is slow. Read here
-    # rather than with the late checks so it lands below the layer-3 findings
-    # it explains, which is what makes it the cause of them rather than a
-    # second opinion beside them.
-    _check_local_queue(raw, findings)
-    # PROTOTYPE: what the proxy on this box believes about its own backends,
-    # if there is one and it is willing to say. Absent on almost every box.
-    raw["proxy_stats"] = cmd_haproxy_stats()
+    _survey_this_box(raw, findings)
     target, target_kind = _choose_target(target, raw["sockets"], findings)
     raw["target_kind"] = target_kind
     # The resolved address, kept so a route prefix can be matched against it.

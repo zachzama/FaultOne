@@ -3576,13 +3576,13 @@ class TestAVirtualNicCannotFailAPhysicalCheck(unittest.TestCase):
                 target = os.path.join(base, "_drivers", drv)
                 os.makedirs(target, exist_ok=True)
                 os.symlink(target, os.path.join(base, name, "device", "driver"))
-        got = nd._link_drivers_linux(base)
+        got = nd._read_link_drivers_linux(base)
         self.assertEqual(got.get("eth0"), "virtio_net")
         self.assertEqual(got.get("eth1"), "ixgbe")
         self.assertNotIn("bond0", got, "an interface with no device behind it has no driver")
 
     def test_no_sysfs_tree_yields_nothing(self):
-        self.assertEqual(nd._link_drivers_linux("/nonexistent/path"), {})
+        self.assertEqual(nd._read_link_drivers_linux("/nonexistent/path"), {})
 
     def test_the_driver_reaches_the_interface_summary(self):
         """Reading the symlink and putting the answer where the check looks are
@@ -4653,7 +4653,7 @@ class TestUdpAndFragments(unittest.TestCase):
         builtins.open = lambda p, *a, **k: (real(path, *a, **k)
                                             if p == "/proc/net/snmp" else real(p, *a, **k))
         try:
-            c = nd._snmp_counters_linux()
+            c = nd._read_snmp_counters_linux()
         finally:
             builtins.open = real
         self.assertEqual(c["InCsumErrors"], 0)
@@ -4670,7 +4670,7 @@ class TestUdpAndFragments(unittest.TestCase):
         builtins.open = lambda p, *a, **k: (real(path, *a, **k)
                                             if p == "/proc/net/snmp" else real(p, *a, **k))
         try:
-            c = nd._snmp_counters_linux()
+            c = nd._read_snmp_counters_linux()
         finally:
             builtins.open = real
         self.assertEqual(c["MaxConn"], -1)
@@ -14346,7 +14346,7 @@ class TestServerLimits(unittest.TestCase):
         higher-ranked one the ordering would decide this anyway and the test
         would pass whether or not the finding was latent."""
         m = fresh()
-        m._uptime_seconds = lambda: 30 * 86400
+        m._read_uptime_seconds = lambda: 30 * 86400
         kernel_drops(m, {"SyncookiesSent": 90_000})
         ping_map(m, inet_loss=9, avg=400.0, mdev=120.0, sent=20)
         rep = m.diagnose("8.8.8.8", None, quick=False)
@@ -14511,7 +14511,7 @@ class TestKernelLog(unittest.TestCase):
     def test_journalctl_is_used_when_dmesg_is_restricted(self):
         m = fresh()
         m.OS_NAME = "Linux"
-        m._uptime_seconds = lambda: 100_000
+        m._read_uptime_seconds = lambda: 100_000
         m.which = lambda c: c in ("dmesg", "journalctl")
         calls = []
         def run(cmd, timeout=15):
@@ -14963,11 +14963,11 @@ class TestVerdict(unittest.TestCase):
             raise OSError(13, "Permission denied", "/etc/resolv.conf")
         m.open = boom
         m.OS_NAME = "Linux"
-        found, reason = m.list_resolvers(with_reason=True)
+        found, reason = m._read_resolvers(with_reason=True)
         self.assertEqual(found, [])
         self.assertIn("Permission denied", reason)
         # and the plain call still returns a bare list for its other caller
-        self.assertEqual(m.list_resolvers(), [])
+        self.assertEqual(m._read_resolvers(), [])
 
     def test_the_same_fault_is_always_worded_the_same_way(self):
         """The disagreeing answers were joined in set order, and string hashing
@@ -19838,6 +19838,39 @@ class DiagnoseHarness(unittest.TestCase):
 
     # ---- the scenarios ---------------------------------------------------
 
+    def test_every_function_that_reads_the_host_is_named_so(self):
+        """The seal reports what crosses the boundary; the prefix decides what
+        gets stubbed. A function that reads the host and is named neither
+        `cmd_` nor `_read_` is one the seal catches and nothing prevents.
+
+        That ran green here for two days and failed every Linux CI job.
+        `_sysfs_names` walked /sys/class/net for four readers, two of them
+        reached straight from a check - and there is no /sys on a Mac, so the
+        branch never ran and the harness never saw it. This asks the source
+        rather than the machine, which is the whole point of it.
+        """
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        HOST = {"listdir", "readlink", "getloadavg"}
+        missed = []
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            if fn.name.startswith(("cmd_", "_read_")):
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Attribute) and node.attr in HOST
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "os"):
+                    missed.append("%s (os.%s)" % (fn.name, node.attr))
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "open" and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and str(node.args[0].value).startswith(("/proc", "/sys", "/etc"))):
+                    missed.append("%s (open %s)" % (fn.name, node.args[0].value))
+        self.assertEqual(sorted(set(missed)), [],
+                         "these reach the host and are not named as collectors, "
+                         "so nothing stubs them")
+
     def test_the_harness_replaces_every_collector_the_module_has(self):
         """The thing this class claims about itself, asserted rather than
         stated. It used to name seventeen collectors in a tuple while the tool
@@ -20182,6 +20215,16 @@ def fresh():
     quiet_time.sleep = lambda s: None
     mod.time = quiet_time
     mod.which = lambda c: False
+    # Unavailable unless a scenario says otherwise. Left live, this reads the
+    # machine - so the no_clients_connected scenario found whatever the build
+    # box had bound and produced datagram findings on Windows while producing
+    # none here, which is why every CI job was red for days on a suite that
+    # passes locally. Twenty-eight other collectors are still live the same
+    # way; see HANDOVER.md, because stubbing them all stops forty-four
+    # scenarios firing and is its own piece of work.
+    mod.cmd_udp_sockets = lambda: {"ok": False, "cmd": "ss -uan",
+                                   "applicable": False,
+                                   "error": "not stubbed by this scenario"}
     # The kernel's own answer to "which address would this box leave from".
     # It sends nothing - connect() on a datagram socket fixes a destination
     # rather than transmitting - but the answer comes from this machine's
@@ -20397,7 +20440,7 @@ def flows(nd, *sockets, **kw):
 def klog(nd, text, uptime=90 * 86400, tool="dmesg", code=0):
     """Stand in for the kernel ring buffer, through the real collector."""
     nd.OS_NAME = "Linux"
-    nd._uptime_seconds = lambda: uptime
+    nd._read_uptime_seconds = lambda: uptime
     nd.which = lambda c: c == tool
     nd.run = lambda cmd, timeout=15, limit=None: {"ok": True, "cmd": " ".join(cmd), "stdout": text,
                                       "stderr": "", "code": code}
@@ -20929,7 +20972,7 @@ def _(nd):
 
 @scenario("syncookies_historical")
 def _(nd):
-    nd._uptime_seconds = lambda: 30 * 86400
+    nd._read_uptime_seconds = lambda: 30 * 86400
     kernel_drops(nd, {"SyncookiesSent": 90_000})
 
 @scenario("ephemeral_ports_low")
@@ -21323,7 +21366,7 @@ def _(nd): kernel_drops(nd, {"ct_count": 55_000, "ct_max": 65_536})
 @scenario("conntrack_drops_historical")
 def _(nd):
     kernel_drops(nd, {"ct_count": 100, "ct_max": 65_536, "ct_insert_failed": 9_000})
-    nd._uptime_seconds = lambda: 10 * 86400          # about 900 a day
+    nd._read_uptime_seconds = lambda: 10 * 86400          # about 900 a day
 
 @scenario("retrans_spurious")
 def _(nd): kernel_drops(nd, {"TCPDSACKRecv": 0, "RetransSegs": 0, "TCPSACKReorder": 0},
@@ -21774,7 +21817,7 @@ def _(nd): kernel_drops(nd, {"ListenOverflows": 10}, {"ListenOverflows": 14})
 @scenario("accept_overflow_historical")
 def _(nd):
     kernel_drops(nd, {"ListenOverflows": 5_000})
-    nd._uptime_seconds = lambda: 10 * 86400          # about 500 a day
+    nd._read_uptime_seconds = lambda: 10 * 86400          # about 500 a day
 
 @scenario("link_flapping_live")
 def _(nd): counters(nd, carrier_changes=9, d_carrier_changes=2)
@@ -21782,7 +21825,7 @@ def _(nd): counters(nd, carrier_changes=9, d_carrier_changes=2)
 @scenario("link_flapping")
 def _(nd):
     counters(nd, carrier_changes=64)          # 62 beyond the boot baseline...
-    nd._uptime_seconds = lambda: 10 * 86400   # ...over ten days is 6.2 a day
+    nd._read_uptime_seconds = lambda: 10 * 86400   # ...over ten days is 6.2 a day
 
 @scenario("resolvers_unreadable")
 def _(nd): nd.cmd_dns_health = lambda check_hijack=True: {
@@ -23105,9 +23148,9 @@ class TestEveryFindingFires(unittest.TestCase):
 
     def test_the_shared_helper_still_refuses_a_freshly_booted_box(self):
         mod = fresh()
-        mod._uptime_seconds = lambda: 120          # two minutes
+        mod._read_uptime_seconds = lambda: 120          # two minutes
         self.assertEqual(mod._per_day_since_boot(500), (None, None))
-        mod._uptime_seconds = lambda: 10 * 86400
+        mod._read_uptime_seconds = lambda: 10 * 86400
         rate, days = mod._per_day_since_boot(500)
         self.assertEqual(round(rate), 50)
         self.assertEqual(round(days), 10)
@@ -23119,14 +23162,14 @@ class TestEveryFindingFires(unittest.TestCase):
         the check says nothing rather than guessing."""
         mod = fresh()
         counters(mod, carrier_changes=64)
-        mod._uptime_seconds = lambda: None
+        mod._read_uptime_seconds = lambda: None
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertNotIn("link_flapping", [f.get("code") for f in report["findings"]])
 
     def test_a_long_lived_box_with_few_flaps_is_not_a_fault(self):
         mod = fresh()
         counters(mod, carrier_changes=8)          # 6 beyond the boot baseline
-        mod._uptime_seconds = lambda: 400 * 86400  # over more than a year
+        mod._read_uptime_seconds = lambda: 400 * 86400  # over more than a year
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertNotIn("link_flapping", [f.get("code") for f in report["findings"]])
 
@@ -23134,7 +23177,7 @@ class TestEveryFindingFires(unittest.TestCase):
         """None is not zero. A NIC without the counter hasn't said "no flaps"."""
         mod = fresh()
         counters(mod, carrier_changes=None)
-        mod._uptime_seconds = lambda: 10 * 86400
+        mod._read_uptime_seconds = lambda: 10 * 86400
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         codes = [f.get("code") for f in report["findings"]]
         self.assertNotIn("link_flapping", codes)
@@ -23145,7 +23188,7 @@ class TestEveryFindingFires(unittest.TestCase):
         we just watched would be the same fault stated twice."""
         mod = fresh()
         counters(mod, carrier_changes=64, d_carrier_changes=3)
-        mod._uptime_seconds = lambda: 10 * 86400
+        mod._read_uptime_seconds = lambda: 10 * 86400
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         codes = [f.get("code") for f in report["findings"]]
         self.assertIn("link_flapping_live", codes)

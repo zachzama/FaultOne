@@ -114,6 +114,50 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
+## Open: twenty-eight collectors still read the machine inside fresh()
+
+CI was red on every push from 2026-08-16 to 2026-08-18 - all four jobs, for
+three different reasons - while the suite passed here every time. It was never
+checked, which is the first lesson: **local green is not green.**
+
+Two causes are fixed. `_sysfs_names` walked /sys/class/net without the `_read_`
+prefix, so nothing stubbed it and the seal reported it on every Linux job;
+there is no /sys on a Mac, so the branch never ran here. Four more host readers
+had the same naming problem and are renamed. A static guard now asks the
+*source* which functions reach the host without a collector's name, so it
+answers the same on every platform.
+
+`cmd_udp_sockets` was left live inside `fresh()`, so the `no_clients_connected`
+scenario found whatever the build box had bound - datagram findings on Windows,
+none here. Stubbed.
+
+**The open part: twenty-eight other collectors are still live in `fresh()`.**
+The list is hand-written, which is the staleness `DiagnoseHarness` was fixed for
+by deriving it, and `fresh()` never got that fix. Every scenario in the corpus
+runs through it.
+
+Deriving it is the right fix and it is not small: blanket-stubbing them stops
+**forty-four scenarios producing their finding**, because those scenarios were
+written against what a Mac happens to return - mostly Linux files that are
+simply absent here. That is a real dependence on the host and deserves its own
+session rather than being buried in a CI fix.
+
+```bash
+python3 - <<'EOF'
+import os, sys; sys.path.insert(0, "."); sys.argv = ["x"]
+os.environ.pop("SSH_CONNECTION", None)
+import test_faultone as T
+m = T.fresh()
+live = [n for n in dir(m)
+        if (n.startswith("cmd_") or n.startswith("_read_")) and callable(getattr(m, n))
+        and os.path.basename(getattr(getattr(m, n), "__code__", None).co_filename)
+            == "faultone.py"]
+print(len(live), "collectors still read the machine"); print("\n".join(live))
+EOF
+```
+
+Two things that cost time finding this, both worth not repeating. `"test_faultone.py".endswith("faultone.py")` is true, so the first version of that check reported all fifty-three as live. And the two readers that answer with a pair need different blanks - `_read_link_stats` gives `({}, source)` and `_read_load_average` gives `(None, None)` - so one shared stub fails at the unpack or at the arithmetic.
+
 ## Settled: four vocabularies borrowed, and the rule that found them
 
 All four are done, 2026-08-18. What is worth keeping is the rule the survey

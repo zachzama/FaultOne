@@ -1224,7 +1224,7 @@ def parse_resolvers(text):
     return servers
 
 
-def list_resolvers(with_reason=False):
+def _read_resolvers(with_reason=False):
     found, seen, reason = [], set(), None
     if OS_NAME == "Windows":
         res = run(["ipconfig", "/all"], timeout=10)
@@ -1266,7 +1266,7 @@ def _answer_summary(answers, keep=3):
 
 def cmd_dns_health(probe_name="google.com", check_hijack=True):
     """Query each configured resolver individually and compare them."""
-    resolvers, unreadable = list_resolvers(with_reason=True)
+    resolvers, unreadable = _read_resolvers(with_reason=True)
     if not resolvers:
         # An empty list means two different things. "Nothing is configured" is
         # a fault on this device; "the configuration couldn't be read" is a gap
@@ -3756,7 +3756,7 @@ def find_arp_conflicts(entries):
 # traffic, and reading it needs no privileges and records nothing.
 # ---------------------------------------------------------------------------
 
-def _snmp_counters_linux():
+def _read_snmp_counters_linux():
     """The counters in /proc/net/snmp, by protocol.
 
     The file was already being opened and only the Tcp: line read out of it,
@@ -3794,7 +3794,7 @@ def _snmp_counters_linux():
 
 def _tcp_counters_linux():
     """Kept as the name the BSD twin is paired with."""
-    return _snmp_counters_linux()
+    return _read_snmp_counters_linux()
 
 
 def _tcp_counters_bsd():
@@ -4099,8 +4099,17 @@ def _proc_stat_rows(path):
     return rows
 
 
-def _sysfs_names(base):
+def _read_sysfs_names(base):
     """Interface names under a sysfs directory, or nothing if it is not there.
+
+    Named `_read_` because it reaches the host, which is what that prefix is
+    for: the test harness derives its stub list from it, so a collector called
+    anything else is one the seal reports and nothing stubs. This was
+    `_sysfs_names`, and four Linux readers reach it - two of them straight from
+    a check rather than through a collector - so every run of the diagnose
+    harness on Linux read /sys/class/net for real. It passed on a Mac, where
+    there is no /sys and the branch never runs, and failed every CI job on
+    Linux for two days.
 
     Four readers walk /sys/class/net and each opened with the same four lines.
     Nothing rather than an error, because a box without sysfs - a Mac, a
@@ -4207,7 +4216,7 @@ def _bond_members_linux(base="/sys/class/net"):
     fail takes the box off the network.
     """
     out = {}
-    names = _sysfs_names(base)
+    names = _read_sysfs_names(base)
     for name in names:
         bdir = os.path.join(base, name, "bonding")
         if not os.path.isdir(bdir):
@@ -4563,7 +4572,7 @@ def cmd_kernel_log():
         return {"ok": False, "cmd": "dmesg", "error": "kernel log reading is Linux-only",
                 "applicable": False}
 
-    res, uptime, epoch_now = None, _uptime_seconds(), time.time()
+    res, uptime, epoch_now = None, _read_uptime_seconds(), time.time()
     if which("dmesg"):
         res = run(["dmesg"], timeout=10)
         # Restricted rings exit non-zero with "Operation not permitted", and
@@ -5432,7 +5441,7 @@ LINK_FLAP_PER_DAY = 2
 LINK_FLAP_BASELINE = 2
 
 
-def _uptime_seconds():
+def _read_uptime_seconds():
     """How long this box has been up, or None where that isn't readable.
 
     A lifetime flap count means nothing on its own - 40 transitions across two
@@ -5487,7 +5496,7 @@ VIRTUAL_NIC_DRIVERS = {
 }
 
 
-def _link_drivers_linux(base="/sys/class/net"):
+def _read_link_drivers_linux(base="/sys/class/net"):
     """The kernel driver behind each interface, from the sysfs symlink.
 
     `base` is a parameter for the same reason its neighbours take one: so the
@@ -5495,7 +5504,7 @@ def _link_drivers_linux(base="/sys/class/net"):
     above.
     """
     out = {}
-    names = _sysfs_names(base)
+    names = _read_sysfs_names(base)
     for name in names:
         link = os.path.join(base, name, "device", "driver")
         try:
@@ -5514,7 +5523,7 @@ def _link_stats_linux(base="/sys/class/net"):
     should pass it.
     """
     stats = {}
-    names = _sysfs_names(base)
+    names = _read_sysfs_names(base)
     for name in names:
         sdir = os.path.join(base, name, "statistics")
         if not os.path.isdir(sdir):
@@ -5883,8 +5892,8 @@ def _link_modes_linux(base="/sys/class/net"):
     was never exercised at all.
     """
     modes = {}
-    drivers = _link_drivers_linux(base)
-    names = _sysfs_names(base)
+    drivers = _read_link_drivers_linux(base)
+    names = _read_sysfs_names(base)
     for name in names:
         idir = os.path.join(base, name)
         if not os.path.isdir(idir):
@@ -10677,7 +10686,7 @@ def _per_day_since_boot(total):
     differently - one inverted the guard, and one borrowed a threshold named
     after a different check.
     """
-    uptime = _uptime_seconds()
+    uptime = _read_uptime_seconds()
     if not total or not uptime or uptime < 3600:
         return None, None
     days = uptime / 86400.0
@@ -17112,7 +17121,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     inventory_data = None
     if inventory:
         say("listing neighbours already known to this device")
-        inventory_data = build_inventory(arp_entries, list_resolvers())
+        inventory_data = build_inventory(arp_entries, _read_resolvers())
         raw["inventory"] = {
             "ok": True, "cmd": "neighbour table (passive - nothing was probed)",
             "code": 0, "stderr": "",

@@ -67,14 +67,26 @@ def invariants(verdict, findings, where):
     check(based[0] not in explains if based else True,
           f"{where}: the cause explains itself", str(based[:1]))
 
-    # Consequences run upward. A cause cannot produce a fault beneath it.
+    # Consequences run upward, with one case level with the cause: a transport
+    # symptom from another family, which is the shape a fault produces at its
+    # own layer rather than a second opinion agreeing with it. Loss past the
+    # gateway and unusable calls are both layer 3 and the calls are what the
+    # loss does. Beneath the cause there is no case at all.
     by_code = {f.get("code"): f for f in findings}
     if based:
         cause_layer = (by_code.get(based[0]) or {}).get("layer") or 0
+        cause_family = nd._finding_family(based[0])
         for code in explains:
             layer = (by_code.get(code) or {}).get("layer") or 0
-            check(layer > cause_layer, f"{where}: a consequence sits below its cause",
-                  f"{based[0]} L{cause_layer} explains {code} L{layer}")
+            detail = f"{based[0]} L{cause_layer} explains {code} L{layer}"
+            if layer == cause_layer:
+                check(code in nd.TRANSPORT_SYMPTOMS
+                      and nd._finding_family(code) != cause_family,
+                      f"{where}: a consequence level with its cause is neither a "
+                      f"transport symptom nor from another family", detail)
+                continue
+            check(layer > cause_layer,
+                  f"{where}: a consequence sits below its cause", detail)
 
     # Direction is absolute: a fault facing one way cannot explain one facing
     # the other, whatever the layers say.

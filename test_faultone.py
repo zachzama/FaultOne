@@ -9842,6 +9842,30 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         self.assertLess(src.index("trace_each_side("), src.index("build_verdict("),
                         "the walk is back behind the verdict and cannot be a cause")
 
+    def test_it_fires_on_both_sides_and_only_one_row_is_the_cause(self):
+        """This is the first rule that can be the answer and be measured twice,
+        and it broke a rule the whole report rests on: one fault, one cause.
+
+        Asymmetry toward the clients and toward the backends are two findings
+        with two owners, which is right - but `finding_relation` matches on the
+        code, so both rows came back labelled "cause" while build_verdict had
+        reasoned about exactly one of them, down to whose scope decided what
+        could corroborate it. Found by `dev/audit.py`, which checks this across
+        every finding and 500 combinations of them and is the only thing that
+        was ever going to notice.
+        """
+        mod = fresh()
+        setup, kwargs = S["path_asymmetric"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        asym = [f for f in rep["findings"] if f["code"] == "path_asymmetric"]
+        self.assertEqual(sorted(f.get("scope") for f in asym), ["backend", "client"])
+        self.assertEqual(rep["verdict"]["based_on"][0], "path_asymmetric")
+        causes = [f for f in rep["findings"] if f.get("relation") == "cause"]
+        self.assertEqual(len(causes), 1, [f["code"] for f in causes])
+        # The first of them, because that is the one build_verdict read.
+        self.assertIs(causes[0], asym[0])
+
     def test_the_sides_are_rebuilt_after_the_walk(self):
         """The sides summarise the findings, and the walk adds some. Built once
         only, the panel showed nothing lit under a verdict this finding had
@@ -13964,14 +13988,32 @@ class TestOwnServiceAnswers(unittest.TestCase):
         _res, codes = self.ask(self._reply(b"+OK POP3 ready\r\n"))
         self.assertEqual(codes, ["own_service_not_http"])
 
-    def test_a_closed_port_says_nothing(self):
+    def test_a_port_nothing_is_listening_on_is_not_an_answer(self):
+        """The round trip: a real connection to a port nothing holds comes back
+        as a refusal the classifier recognises, rather than as a reply.
+
+        Which refusal is the operating system's to decide and is not asserted.
+        This test used to require "refused" and got a timeout on the Windows
+        runner, where the port it had just closed did not answer at all - so it
+        was asking the host what a closed port looks like while claiming to
+        test what this tool does with the answer. What it can require is that
+        the two are told apart: `refusal` being None would mean an error this
+        check has no sentence for, which is the state the test wants to catch.
+        """
         import socket as _socket
         spare = _socket.socket(); spare.bind(("127.0.0.1", 0))
         port = spare.getsockname()[1]; spare.close()
         res = nd.cmd_own_http(port, timeout=1)
-        found = []
-        nd._own_service_findings(res, port, found)
         self.assertIn("unreachable_locally", res)
+        self.assertIn(res.get("refusal"), ("refused", "timeout", "no such address"))
+
+    def test_a_closed_port_says_nothing(self):
+        """Nothing listening is `service_address_unserved`'s to say, with the
+        address check's evidence behind it, so this one stays quiet."""
+        found = []
+        nd._own_service_findings(
+            {"unreachable_locally": "[Errno 61] Connection refused",
+             "refusal": "refused"}, 8080, found)
         self.assertEqual(found, [])
 
     def test_only_http_shaped_ports_are_asked(self):
@@ -15903,7 +15945,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1013),
+            "on disk": (len(raw), 1014),
             "compressed": (len(gzip.compress(raw, 9)), 306),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 213),
         }

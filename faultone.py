@@ -17232,8 +17232,21 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # result. Cheap: it reads the findings list and probes nothing.
     _sides = build_sides(findings, raw)
     verdict = build_verdict(findings, quick=quick, raw=raw)
+    named_the_cause = False
     for f in findings:
         relation = finding_relation(f.get("code"), verdict)
+        if relation == "cause":
+            # The verdict names a code, and one code can be measured twice: an
+            # asymmetric path toward the clients and toward the backends is one
+            # rule firing on two sides, and both rows came back labelled the
+            # cause. build_verdict reasoned about the first of them - its
+            # severity, its layer, and the scope that decided what could
+            # corroborate it - so that is the row the label belongs on. The
+            # others stay in the report as findings rather than each claiming
+            # to be the answer to a question with one.
+            if named_the_cause:
+                relation = None
+            named_the_cause = True
         if relation:
             f["relation"] = relation
         if f.get("code") in HARDWARE_FINDINGS:

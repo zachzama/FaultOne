@@ -9858,6 +9858,90 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         self.assertIn("weaker of the two", found[0]["message"])
 
 
+class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
+    """Four tables that are closed sets of facts, copied incompletely.
+
+    The rule they came from matters more than the four: borrow a vocabulary
+    when it is a closed set of *facts*, keep the hand-written list when it
+    encodes a *decision*. These are the first kind, so being short of the
+    source is a defect rather than a choice - and each one was short in the
+    places that actually turn up.
+    """
+
+    # The failures the survey found, and the reason this list is not the
+    # Public Suffix List: that is ~230KB against a tool that has to stay one
+    # small stdlib-only file. Manual and much longer beats vendored here.
+    def test_a_japanese_isp_is_not_the_whole_of_japan(self):
+        """`ne.jp` is *the* ISP suffix in Japan, so every Japanese provider on
+        a path collapsed into one network called "ne.jp" - which is the exact
+        failure the comment above that list says it exists to prevent."""
+        self.assertEqual(nd.ptr_network("core1.example.ne.jp", "192.0.2.1"),
+                         "example.ne.jp")
+        self.assertEqual(nd.ptr_network("edge.example.or.jp", "192.0.2.1"),
+                         "example.or.jp")
+
+    def test_two_large_british_networks_are_not_one(self):
+        for name in ("r1.example.nhs.uk", "h.example.sch.uk"):
+            with self.subTest(name=name):
+                self.assertEqual(nd.ptr_network(name, "192.0.2.1"),
+                                 "example." + name.split(".", 2)[2])
+
+    def test_the_cases_that_already_worked_still_do(self):
+        self.assertEqual(nd.ptr_network("be-300.example.co.uk", "192.0.2.1"),
+                         "example.co.uk")
+        self.assertEqual(nd.ptr_network("a.b.example.com", "192.0.2.1"), "example.com")
+        self.assertEqual(nd.ptr_network("host.example.net", "192.0.2.1"), "example.net")
+
+    def test_a_check_that_has_not_run_is_not_a_check_that_failed(self):
+        """INI, UNK and SOCKERR are what a proxy reports before a check has
+        run, so a freshly reloaded one showed a status the report could not
+        explain - at the moment somebody is most likely to be looking."""
+        for status in ("INI", "UNK", "SOCKERR"):
+            with self.subTest(status=status):
+                self.assertIn(status, nd.CHECK_MEANS)
+                self.assertTrue(nd.CHECK_MEANS[status].strip())
+
+    def test_the_two_success_statuses_that_were_missing(self):
+        for status in ("L6OK", "L7OKC"):
+            self.assertIn(status, nd.CHECK_MEANS)
+
+    def test_a_resolver_rcode_reads_as_a_name_not_a_number(self):
+        """It degraded rather than lied - the lookup printed the number - so
+        NotAuth rendered as "9", which is still something to go and look up in
+        the middle of an incident."""
+        self.assertEqual(nd.DNS_RCODES.get(9), "NOTAUTH")
+        self.assertEqual(nd.DNS_RCODES.get(10), "NOTZONE")
+        self.assertEqual(nd.DNS_RCODES.get(23), "BADCOOKIE")
+
+    def test_the_registry_is_covered_without_inventing_gaps(self):
+        """6 through 11 and 16 through 23 are assigned; 12 to 15 are not, and
+        claiming them would be worse than the number."""
+        for code in list(range(0, 12)) + list(range(16, 24)):
+            with self.subTest(rcode=code):
+                self.assertIn(code, nd.DNS_RCODES)
+        for code in range(12, 16):
+            self.assertNotIn(code, nd.DNS_RCODES)
+
+    def test_a_precedence_violation_has_a_name(self):
+        self.assertEqual(nd.annotation_means("!V"), "host precedence violation")
+
+    def test_a_code_with_no_letter_is_said_rather_than_shown(self):
+        """traceroute prints the bare number when the router sent a code it has
+        no letter for. It fell through as the raw token, and an unreachable
+        nobody can name is still a router refusing on purpose."""
+        self.assertEqual(nd.annotation_means("!13"),
+                         "an ICMP unreachable, code 13")
+
+    def test_something_that_is_neither_is_returned_as_it_came(self):
+        """Better than guessing at it, and it keeps the caller's fallback
+        behaviour for anything this does not recognise."""
+        self.assertEqual(nd.annotation_means("!zz"), "!zz")
+
+    def test_the_named_ones_are_unchanged(self):
+        self.assertEqual(nd.annotation_means("!X"), "administratively prohibited")
+        self.assertEqual(nd.annotation_means("!F"), "fragmentation needed")
+
+
 class TestWhoOwnsEachHop(unittest.TestCase):
     """The AS a hop belongs to, which is the escalation question.
 
@@ -15254,8 +15338,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 986),
-            "compressed": (len(gzip.compress(raw, 9)), 297),
+            "on disk": (len(raw), 990),
+            "compressed": (len(gzip.compress(raw, 9)), 299),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 208),
         }
         for label, (measured, quoted) in claims.items():

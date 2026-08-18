@@ -7,74 +7,45 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Open: four vocabularies we wrote ourselves where somebody maintains one
+## Settled: four vocabularies borrowed, and the rule that found them
 
-Found by surveying all 44 module-level tables after the X.733 adoption, asking
-of each: is this a closed set of facts somebody else keeps, or a decision made
-here? The four below are the first kind and are copied incompletely. Each is
-independent of the others, so they can be taken one at a time.
+All four are done, 2026-08-18. What is worth keeping is the rule the survey
+produced, not the four: **borrow a vocabulary when it is a closed set of
+facts; keep the hand-written list when it encodes a decision.** X.733 probable
+causes are facts. "Ports worth probing" is a decision, and deriving
+`SERVING_PORTS` from IANA would make it worse - 3000 is not registered for HTTP
+and is one of the commonest ports a service actually listens on.
 
-**The rule that came out of the survey, which matters more than the four.**
-Borrow a vocabulary when it is a closed set of *facts*; keep the manual list
-when it encodes a *decision*. X.733 probable causes are facts. "Ports worth
-probing" is a decision, and deriving `SERVING_PORTS` from the IANA registry
-would make it worse - 3000 is not registered for HTTP and is one of the most
-common ports a service actually listens on. Two sets that looked collapsible
-into the new classes are not: `HARDWARE_FINDINGS` (13) against `equipmentAlarm`
-(20) disagree on nine codes because `slow_link` and `duplex_mismatch` are
-settings rather than broken hardware, and that is a real distinction. And
-`perceivedSeverity` from the same X.733 was rejected on purpose: its shape is
-alarm lifecycle, `cleared` means an alarm that was raised and went away, and
-this tool has no alarm state.
+`MULTI_LABEL_TLDS` had the live bug and is the one to understand. Seven
+hand-picked labels standing in for the Public Suffix List, which is **not
+vendored on purpose**: ~230KB against a tool that has to stay one small
+stdlib-only file, and it would be the largest thing here by several times. So
+it stays manual and stays incomplete - the question is only whether it is
+incomplete where it matters. It was: `ne.jp` is *the* ISP suffix in Japan, so
+every Japanese provider on a path collapsed into one network called "ne.jp",
+which is the exact failure the comment above that list has always claimed to
+prevent. `nhs.uk` and `sch.uk` did it to two of the larger British networks.
+Now ~40 entries grouped by country so a gap is visible.
 
-### 1. `MULTI_LABEL_TLDS` - the one with a live bug
+`CHECK_MEANS` gained `INI`, `UNK` and `SOCKERR` - what a check reports *before
+it has run*, so a freshly reloaded proxy no longer shows a status the report
+cannot explain, at the moment somebody is most likely to be looking at it.
+Plus `L6OK` and `L7OKC`.
 
-Seven hand-picked labels standing in for the Public Suffix List. `ptr_network`
-groups hops by network and collapses these to the public suffix instead:
+`DNS_RCODES` is the IANA registry: 0-11 and 16-23, with 12-15 deliberately
+absent because they are unassigned and claiming them would be worse than
+printing the number.
 
-```
-core1.example.ne.jp  -> ne.jp     every Japanese ISP becomes one network
-edge.example.or.jp   -> or.jp
-r1.example.nhs.uk    -> nhs.uk
-h.example.sch.uk     -> sch.uk
-be-300.example.co.uk -> example.co.uk   (correct - `co` is in the list)
-```
+`TRACE_ANNOTATIONS` gained `!V`, and the numeric `!<N>` form now goes through
+`annotation_means()` rather than falling through raw. An unreachable nobody
+can name is still a router refusing on purpose, and the number is what
+somebody looks up.
 
-`ne.jp` is *the* ISP suffix in Japan. This is the failure the comment above the
-list says it exists to prevent, in the cases nobody listed.
+Six mutations in `dev/mutations/borrowed-vocabularies.json`, none survived.
 
-**Do not vendor the PSL.** It is ~230KB against a tool that must stay tiny and
-stdlib-only, and it would be the largest thing in the repository. Extend the
-list with the ~30 known ccTLD second-levels instead - still manual, several
-times better, no size cost - and write the test from the failures above.
-
-Worth knowing before deciding how much this matters: `asn` on a hop is the
-standard answer to the same question and is already collected, but only when
-mtr ran and could look it up, so this fallback carries real weight on the paths
-where it is wrong.
-
-### 2. `CHECK_MEANS` - HAProxy's own `check_status`
-
-Nine of about fourteen. Missing `L6OK`, `L7OKC`, and - the ones that matter -
-`INI`, `UNK` and `SOCKERR`, which are what a check reports *before it has run*.
-A freshly reloaded proxy therefore shows a status the report cannot explain.
-Complete it from HAProxy's management documentation.
-
-### 3. `DNS_RCODES` - the IANA DNS RCODEs registry
-
-Six of about twenty. It degrades rather than lies - the lookup falls back to
-printing the number - so `NotAuth` renders as `9`. Cheapest of the four.
-
-### 4. `TRACE_ANNOTATIONS` - ICMP unreachable codes, RFC 792 and RFC 1812
-
-Nine entries, missing `!V` (host precedence violation) and the numeric `!<N>`
-form traceroute prints for a code it has no letter for.
-
-### Already standard, and only unlabelled
-
-`TCP_STATES` is RFC 9293's eleven states exactly, `LAYERS` is OSI, and
-`TUNNEL_OVERHEAD` is RFC-derived header sizes. No work beyond a comment naming
-where each came from, so nobody improves them.
+**Still unlabelled and still fine:** `TCP_STATES` is RFC 9293's eleven states
+exactly, `LAYERS` is OSI, `TUNNEL_OVERHEAD` is RFC-derived header sizes. Each
+now wants a comment naming its source so nobody improves them.
 
 ## Open: where the laptop stopped, 2026-08-17 evening
 

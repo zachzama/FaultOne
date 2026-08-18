@@ -1,0 +1,15 @@
+[
+ {"label": "a Japanese ISP suffix collapses the country again",
+  "old": "    \"ne\", \"or\", \"ad\", \"ed\", \"go\", \"gr\", \"lg\",", "new": ""},
+ {"label": "the British health and school suffixes go back",
+  "old": "    \"nhs\", \"sch\", \"police\", \"plc\", \"ltd\", \"me\",", "new": ""},
+ {"label": "a check that has not run looks like one that failed",
+  "old": "    \"UNK\": \"the check has not reported yet, so this says nothing either way\",", "new": ""},
+ {"label": "a resolver rcode prints as a number again",
+  "old": "              8: \"NXRRSET\", 9: \"NOTAUTH\", 10: \"NOTZONE\", 11: \"DSOTYPENI\",\n              16: \"BADVERS\", 17: \"BADKEY\", 18: \"BADTIME\", 19: \"BADMODE\",\n              20: \"BADNAME\", 21: \"BADALG\", 22: \"BADTRUNC\", 23: \"BADCOOKIE\"}",
+  "new": "              }"},
+ {"label": "an unreachable code with no letter falls through raw",
+  "old": "    if flag.startswith(\"!\") and flag[1:].isdigit():\n        return \"an ICMP unreachable, code %s\" % flag[1:]\n", "new": ""},
+ {"label": "a precedence violation loses its name",
+  "old": "    \"!V\": \"host precedence violation\",\n", "new": ""}
+]

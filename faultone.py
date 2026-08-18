@@ -1092,8 +1092,15 @@ def cmd_ethtool(iface):
 # startup. UDP only, one packet per query, no dependencies.
 # ---------------------------------------------------------------------------
 
+# The IANA DNS RCODE registry. Six of these were here and the lookup fell back
+# to printing the number, so a resolver answering NotAuth reported "9" - which
+# degrades rather than lies, and is still a number somebody has to go and look
+# up in the middle of an incident.
 DNS_RCODES = {0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN",
-              4: "NOTIMP", 5: "REFUSED"}
+              4: "NOTIMP", 5: "REFUSED", 6: "YXDOMAIN", 7: "YXRRSET",
+              8: "NXRRSET", 9: "NOTAUTH", 10: "NOTZONE", 11: "DSOTYPENI",
+              16: "BADVERS", 17: "BADKEY", 18: "BADTIME", 19: "BADMODE",
+              20: "BADNAME", 21: "BADALG", 22: "BADTRUNC", 23: "BADCOOKIE"}
 
 # .invalid is reserved by RFC 6761 and can never resolve, so a NOERROR answer
 # for it means something in the path is inventing replies.
@@ -6716,7 +6723,24 @@ TRACE_ANNOTATIONS = {
     "!S": "source route failed",
     "!C": "precedence cutoff",
     "!T": "communication with destination network administratively prohibited",
+    "!V": "host precedence violation",
 }
+
+
+def annotation_means(flag):
+    """What a traceroute annotation says, in words.
+
+    Every letter in RFC 792 and RFC 1812 has one. What does not is the numeric
+    form traceroute prints when the router sent a code it has no letter for -
+    "!13" - which fell through as the raw token. An unreachable nobody can name
+    is still a router refusing on purpose, and the number is the thing somebody
+    looks up, so it is said rather than shown.
+    """
+    if flag in TRACE_ANNOTATIONS:
+        return TRACE_ANNOTATIONS[flag]
+    if flag.startswith("!") and flag[1:].isdigit():
+        return "an ICMP unreachable, code %s" % flag[1:]
+    return flag
 TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]|!\d{1,3})(?=\s|$)")
 # A deliberate refusal by a policy device, as opposed to a path that is broken
 # or silent. Different owner entirely: somebody configured this.
@@ -6947,8 +6971,35 @@ def is_private_ip(ip):
 
 
 # Second-level suffixes where the registrable name needs three labels, so
-# "bt.co.uk" doesn't collapse to "co.uk".
-MULTI_LABEL_TLDS = {"co", "com", "net", "org", "ac", "gov", "edu"}
+# "bt.co.uk" does not collapse to "co.uk".
+#
+# This stands in for the Public Suffix List, which is the maintained answer and
+# is not vendored on purpose: ~230KB against a tool that has to stay one small
+# stdlib-only file, and it would be the largest thing in the repository by
+# several times. So this is a manual list and will always be incomplete - the
+# question is only whether it is incomplete in the places that matter.
+#
+# Seven entries were, badly. `ne.jp` is *the* ISP suffix in Japan and `or.jp`
+# is the one beside it, so every Japanese provider on a path collapsed into a
+# single network called "ne.jp" - which is exactly the failure the comment
+# above this list has always said it exists to prevent. `nhs.uk` and `sch.uk`
+# did the same to two of the larger networks in Britain.
+#
+# The second-level names below are the ones that carry real numbers of hosts.
+# Grouped by the country that uses them so a gap is obvious, and sorted so a
+# future addition is easy to place.
+MULTI_LABEL_TLDS = {
+    # The generic pattern, which most ccTLDs follow.
+    "co", "com", "net", "org", "ac", "gov", "edu", "mil", "int",
+    # Japan, where these are the ISP and organisation suffixes.
+    "ne", "or", "ad", "ed", "go", "gr", "lg",
+    # Britain, beyond co/ac/gov.
+    "nhs", "sch", "police", "plc", "ltd", "me",
+    # Australia, New Zealand, South Africa, India and Brazil, which between
+    # them account for most of the rest a traceroute crosses.
+    "asn", "id", "csiro", "govt", "iwi", "web", "art", "nom", "eng",
+    "firm", "gen", "ind", "res", "psi", "esp", "etc", "tur", "srv",
+}
 
 
 def ptr_network(display, host):
@@ -11508,7 +11559,20 @@ def _check_discard_route(raw, findings, target):
 # What each check status means, in the words a reader needs rather than the
 # code. Taken from the proxy's own vocabulary because it is a good one: it
 # separates faults that look identical from outside the box.
+# HAProxy's own check_status values, from its management documentation. A
+# closed set somebody else maintains, so it is copied rather than judged.
+#
+# The three that were missing are the ones a check reports *before it has run* -
+# INI, UNK and SOCKERR - so a freshly reloaded proxy showed a status the report
+# could not explain, at exactly the moment somebody is most likely to be looking
+# at it. "Not yet known" and "failing" are different answers and the second one
+# is the one that gets acted on.
 CHECK_MEANS = {
+    "UNK": "the check has not reported yet, so this says nothing either way",
+    "INI": "the check is still initialising, which a proxy reports just after a "
+           "reload rather than because anything is wrong",
+    "SOCKERR": "the check could not open a socket at all, which is this proxy's "
+               "own limits or configuration rather than the backend",
     "L4CON": "the connection was refused, so nothing is listening there",
     "L4TOUT": "the connection timed out, so something is there and did not answer",
     "L4OK": "it connects, and nothing above that was checked",
@@ -11517,7 +11581,10 @@ CHECK_MEANS = {
     "L7TOUT": "it connected and the application never replied",
     "L7RSP": "the application answered with something unreadable",
     "L7STS": "the application answered, with a status the check rejects",
+    "L6OK": "the TLS handshake completed, and nothing above it was checked",
     "L7OK": "the application answered correctly",
+    "L7OKC": "the application answered correctly, on a check configured to accept "
+             "it conditionally",
 }
 
 
@@ -14693,7 +14760,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                if any(f in TRACE_PROHIBITED for f in (h.get("flags") or []))]
     if refused and not trace_reached(hops, target):
         hop = refused[-1]
-        reasons = sorted({TRACE_ANNOTATIONS.get(f, f) for f in hop["flags"]
+        reasons = sorted({annotation_means(f) for f in hop["flags"]
                           if f in TRACE_PROHIBITED})
         findings.append({
             "severity": "critical",

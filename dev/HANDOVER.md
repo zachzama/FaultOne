@@ -7,6 +7,42 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
+## Open: the clauses a report can say and no scenario produces
+
+A finding whose message contains an `if` has more than one thing to say, and
+the corpus keeps one scenario per finding - which asks whether a finding fires
+and cannot ask whether it fires both ways. Sweeping every conditional clause
+and matching its longest run of fixed words against what the corpus renders
+found 15 of 36 never produced.
+
+**Seven are now driven by tests** and hold under mutation: more than one
+firewall rule, a second unreachable proxy, the listener holding a datagram
+queue, a second queued listener, the session a quiet box was run over, the
+handshake share of a slow answer, and the collisions that turn a duplex
+mismatch from a warning into a critical. That last one is the only one where
+the unrendered clause marked a change of severity, and it was the finding
+already exempted in `COARSER_ON_THE_STRIP` on exactly that reasoning.
+
+**Two were attempted and removed.** `ephemeral_ports_low` needs the port range
+read off the box before it can judge pressure against it, and
+`inet_unreachable`'s backend clause needs a run aimed at a backend that is also
+unreachable - two fixtures rather than one. Both were first written as "assert
+if it fired", which passed while producing nothing. A test that proves nothing
+looks exactly like coverage, so they are out rather than green.
+
+**Six remain undriven**, all describing the shape of a path rather than a
+severity: two on `double_nat`, two on `latency_wall` (ECMP across a pair of
+hops, and the wall being at the very first hop), `nat_observed` seeing more
+than one translation, and `trace_took_another_route` finding the destination
+on-link with no router in the way. Each needs a hand-built trace.
+
+**Getting the sweep right took three attempts and that is the transferable
+part.** Stripping the placeholders out of a clause glues the fragments either
+side together into a string that appears nowhere, so it reported clauses as
+missing that are plainly in the message - `proxy_backend_down` was a false
+positive twice. The unit that works is the longest run of fixed words between
+placeholders.
+
 ## Settled: what a mutation being caught by one test does and does not mean
 
 The whole set ran on 2026-08-18: **33 mutations, 0 survived, control clean.**

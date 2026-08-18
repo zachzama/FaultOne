@@ -9912,6 +9912,136 @@ class TestTheNameTheRunWasAimedAt(unittest.TestCase):
                       [f for f in [verdict.get("detail", "")]][0] or "")
 
 
+class TestTheClausesNoReportEverRendered(unittest.TestCase):
+    """Conditional sentences in finding messages that no scenario produced.
+
+    The corpus keeps one scenario per finding, which asks whether a finding
+    fires. A message with an `if` in it has more than one thing to say, and the
+    branch nobody drives is text nobody has read - twice this week that turned
+    out to be a real reading that never reached a page.
+
+    Found by sweeping every conditional clause and matching its longest run of
+    fixed words against what the corpus renders. Getting that sweep right took
+    three attempts: stripping the placeholders glues the fragments either side
+    together into a string that appears nowhere, so it reported clauses as
+    missing that are plainly in the message.
+    """
+
+    def _fired(self, mod, code, **kw):
+        args = dict(target="8.8.8.8", check_ports=None, baseline=None, quick=True)
+        args.update(kw)
+        r = mod.diagnose(**args)
+        return next((f for f in r["findings"] if f["code"] == code), None)
+
+    # ---- "more than one of them" ------------------------------------------
+
+    def test_more_than_one_firewall_rule_is_counted(self):
+        """One rule names itself; several need saying how many, or the reader
+        goes looking for the one."""
+        ipt = ("*filter\n:INPUT ACCEPT [0:0]\n"
+               "[%d:700] -A INPUT -p tcp --dport 443 -j DROP\n"
+               "[%d:700] -A INPUT -p tcp --dport 443 -j REJECT\nCOMMIT\n")
+        m = fresh()
+        reads = [dict(m.parse_iptables_save(ipt % (n, n)), ok=True) for n in (4, 31)]
+        m.cmd_firewall_counters = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
+        serving(m, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                   "LISTEN 0 128 10.0.0.5:443 0.0.0.0:*\n"
+                   "ESTAB 0 0 10.0.0.5:443 198.51.100.1:52000\n")
+        found = self._fired(m, "inbound_filtered_here")
+        self.assertIsNotNone(found)
+        self.assertIn("2 rules are doing it.", found["message"])
+
+    def test_more_than_one_proxy_unreachable_is_counted(self):
+        m = fresh()
+        m.cmd_proxy_config = lambda: {"ok": True, "cmd": "proxy configuration",
+                                      "code": 0, "stderr": "", "stdout": "",
+                                      "env": {"https_proxy": "http://10.0.0.9:3128",
+                                              "http_proxy": "http://10.0.0.8:3128"},
+                                      "system": {}}
+        m.cmd_proxy_reachable = lambda cfg, timeout=3: {
+            "ok": True, "cmd": "tcp connect (proxy)", "stdout": "",
+            "proxies": [{"host": "10.0.0.9", "port": 3128, "reachable": False,
+                         "refusal": "refused"},
+                        {"host": "10.0.0.8", "port": 3128, "reachable": False,
+                         "refusal": "timeout"}]}
+        found = self._fired(m, "proxy_unreachable")
+        self.assertIsNotNone(found)
+        self.assertIn("2 configured proxies are unreachable.", found["message"])
+
+    # ---- the two halves of the datagram queue -----------------------------
+
+    def test_a_datagram_queue_names_the_listener_holding_it(self):
+        found = self._queue(processes=True, listeners=1)
+        self.assertIsNotNone(found)
+        self.assertIn("That listener is", found["message"])
+
+    def test_more_than_one_datagram_listener_is_counted(self):
+        found = self._queue(processes=False, listeners=2)
+        self.assertIsNotNone(found)
+        self.assertIn("listeners are in that state.", found["message"])
+
+    def _queue(self, processes, listeners):
+        """Two readings of the same listeners, both over the floor and not
+        coming down - which is what makes a queue standing rather than a burst.
+        The finding reads `standing_queues`, which `udp_window` derives from the
+        pair; a fixture that sets `listeners` alone produces nothing."""
+        m = fresh()
+        reads = [
+            {"ok": True, "cmd": "ss -uanm", "stdout": "",
+             "listeners": [{"address": "0.0.0.0", "port": 443 + i, "recv_q": q,
+                            "send_q": 0, "recv_buffer": 212_992}
+                           for i in range(listeners)],
+             "connected": 0, "queued_bytes": q,
+             "listen_ports": [443 + i for i in range(listeners)]}
+            for q in (52_000, 61_000)]
+        m.cmd_udp_sockets = lambda: reads.pop(0) if len(reads) > 1 else reads[0]
+        if processes:
+            m.cmd_socket_owners = lambda: {
+                "ok": True, "cmd": "ss -uanp",
+                "owners": [{"process": "tunnel-svc", "pid": 903, "state": "LISTEN",
+                            "local_port": "443", "peer": "0.0.0.0:*"}]}
+        # Not quick: a standing queue is two readings a window apart, and
+        # --quick skips the window - which is why the corpus scenario does not
+        # fire under it either.
+        return self._fired(m, "udp_queue_standing", quick=False)
+
+    # ---- clauses that describe the shape of what was found ----------------
+    #
+    # Two more were attempted and are not here. `ephemeral_ports_low` needs the
+    # port range read from the box before it can judge pressure against it, and
+    # `inet_unreachable`'s backend clause needs a run aimed at a backend that
+    # is also unreachable - two fixtures rather than one. Both were written as
+    # "assert if it fired", which passed while producing nothing, so they are
+    # out: a test that proves nothing looks exactly like coverage.
+
+    def test_a_quiet_box_excludes_the_session_it_was_run_over(self):
+        """Otherwise it says nothing is connected while the reader is looking
+        at it down a connection."""
+        m = fresh()
+        # Read from the environment, not from a module attribute: the suite
+        # clears SSH_CONNECTION so no test is ever diagnosing its own operator,
+        # and this is the one case that needs it back.
+        self.addCleanup(os.environ.pop, "SSH_CONNECTION", None)
+        os.environ["SSH_CONNECTION"] = "198.51.100.9 51999 10.0.0.5 22"
+        serving(m, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+                   "ESTAB 0 0 10.0.0.5:22 198.51.100.9:51999\n")
+        found = self._fired(m, "no_traffic_at_all", target=None)
+        self.assertIsNotNone(found)
+        self.assertIn("except the session this was run over", found["message"])
+
+    def test_a_slow_listener_says_how_much_was_the_handshake(self):
+        """Connection time and handshake time have different owners, and the
+        split is the whole value of the finding."""
+        m = fresh()
+        own_service(m, ms=900.0,
+                    phases={"connect_ms": 40.0, "tls_ms": 700.0, "wait_ms": 160.0})
+        # Not quick: _check_own_service returns early under it, so there is no
+        # answer to break into phases.
+        found = self._fired(m, "own_service_timing", quick=False)
+        self.assertIsNotNone(found)
+        self.assertIn("was the TLS handshake", found["message"])
+
+
 class TestTheBranchThatMakesAFindingCritical(unittest.TestCase):
     """duplex_mismatch is a warning or a critical depending on one reading, and
     only one of the two was ever produced.

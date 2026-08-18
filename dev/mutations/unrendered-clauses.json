@@ -1,0 +1,17 @@
+[
+ {"label": "the count of firewall rules is dropped",
+  "old": "            + (f\" {len(dropped)} rules are doing it.\" if len(dropped) > 1 else \"\")),",
+  "new": "            ),"},
+ {"label": "a second unreachable proxy is not counted",
+  "old": "                + (f\" {len(dead)} configured proxies are unreachable.\"",
+  "new": "                + (\"\" if False else \"\") + (f\"\""},
+ {"label": "the listener holding a datagram queue is not named",
+  "old": "            + (f\" That listener is {process}.\" if process else \"\")", "new": ""},
+ {"label": "a second queued listener is not counted",
+  "old": "            + (f\" {len(standing)} listeners are in that state.\" if len(standing) > 1 else \"\")",
+  "new": ""},
+ {"label": "the session this ran over is not excepted",
+  "old": "                   + (\" except the session this was run over\" if ssh_peer else \"\")", "new": ""},
+ {"label": "the handshake share of a slow answer is dropped",
+  "old": "                   + (f\", {tls:.0f}ms was the TLS handshake\" if tls is not None else \"\")", "new": ""}
+]

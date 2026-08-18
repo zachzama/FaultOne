@@ -1,0 +1,27 @@
+[
+ {
+  "label": "the two sides are never compared",
+  "old": "    _check_shared_hop(_legs, findings)\n",
+  "new": ""
+ },
+ {
+  "label": "a healthy shared gateway is a finding",
+  "old": "if host and host != \"*\" and hop.get(\"state\") in (\"warn\", \"crit\"):",
+  "new": "if host and host != \"*\":"
+ },
+ {
+  "label": "one side failing is enough",
+  "old": "    both = {h: seen for h, seen in lit.items() if len(seen) > 1}",
+  "new": "    both = lit"
+ },
+ {
+  "label": "the walk goes back behind the verdict",
+  "old": "    trace_each_side(_legs, findings, quick)\n    count_the_hops_in(_legs, quick)\n    _check_asymmetric_path(_legs, findings)\n",
+  "new": ""
+ },
+ {
+  "label": "an off-by-one is a different route",
+  "old": "differs = out and back and abs(out - back) >= ASYMMETRIC_HOP_GAP",
+  "new": "differs = out and back and abs(out - back) >= 1"
+ }
+]

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Break a rule on purpose and see whether the suite objects.
 
-    python3 dev/mutate.py mutations.json          # run a set
+    python3 dev/mutate.py dev/mutations           # every stored set (slow, ~1h)
+    python3 dev/mutate.py dev/mutations/both-sides.json   # one of them
+    python3 dev/mutate.py --anchors               # do the stored sets still apply
     python3 dev/mutate.py --self-test             # check this file works
 
 A green test proves nothing until breaking the thing it tests makes it fail.
@@ -81,11 +83,27 @@ def apply_one(tree, mutation, sources):
 def main(argv):
     if "--self-test" in argv:
         return self_test()
+    if "--anchors" in argv:
+        return check_anchors(argv)
     if len(argv) < 2:
         print(__doc__.strip().splitlines()[2].strip())
         return 2
-    with open(argv[1], encoding="utf-8") as fh:
-        mutations = json.load(fh)
+    target = argv[1]
+    if os.path.isdir(target):
+        # A directory is every set in it, run as one. The sets live in
+        # dev/mutations/ beside the rules they check, because writing them from
+        # memory each time is how this harness came to be needed.
+        mutations = []
+        for name in sorted(os.listdir(target)):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(target, name), encoding="utf-8") as fh:
+                for m in json.load(fh):
+                    m["label"] = "%s: %s" % (name[:-5], m.get("label", ""))
+                    mutations.append(m)
+    else:
+        with open(target, encoding="utf-8") as fh:
+            mutations = json.load(fh)
     sources = {}
     for m in mutations:
         name = m.get("file", "faultone.py")
@@ -140,6 +158,37 @@ def main(argv):
         for label, why in bad:
             print("  %-46s %s" % (label[:46], why))
     return 1 if survived or bad else 0
+
+
+def check_anchors(argv):
+    """Do all the stored anchors still appear exactly once, without running.
+
+    A set whose anchor has drifted reports every mutation in it as bad, which
+    is correct and slow to find out - an hour of suite runs to be told the
+    file moved. This asks in a second, and is the thing to run after touching
+    anything the sets point at.
+    """
+    where = os.path.join(REPO, "dev", "mutations")
+    sources, stale = {}, []
+    for name in sorted(os.listdir(where)):
+        if not name.endswith(".json"):
+            continue
+        with open(os.path.join(where, name), encoding="utf-8") as fh:
+            for m in json.load(fh):
+                f = m.get("file", "faultone.py")
+                if f not in sources:
+                    with open(os.path.join(REPO, f), encoding="utf-8") as src:
+                        sources[f] = src.read()
+                seen = sources[f].count(m["old"])
+                if seen != 1:
+                    stale.append((name[:-5], m.get("label", ""), seen))
+    if stale:
+        print("%d anchor(s) no longer match exactly once:" % len(stale))
+        for name, label, seen in stale:
+            print("  %-18s %-46s matched %d" % (name, label[:46], seen))
+        return 1
+    print("every anchor in dev/mutations still matches exactly once")
+    return 0
 
 
 def self_test():

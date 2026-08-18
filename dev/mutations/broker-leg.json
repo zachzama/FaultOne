@@ -1,0 +1,12 @@
+[
+ {
+  "label": "the serving gate goes, so a box's own database counts",
+  "old": "    if not _serves_traffic(raw):\n        return None\n",
+  "new": ""
+ },
+ {
+  "label": "every port that is not TLS is called cleartext",
+  "old": "            if str(p) in CLEARTEXT_PROTOCOL_PORTS}",
+  "new": "            if str(p) not in TLS_PORTS}"
+ }
+]

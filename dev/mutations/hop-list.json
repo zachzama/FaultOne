@@ -1,0 +1,32 @@
+[
+ {
+  "label": "tracepath stops parsing again",
+  "old": "m = re.match(r\"^\\s*(\\d{1,3})\\??[:\\s]\", raw_line)",
+  "new": "m = re.match(r\"^\\s*(\\d{1,3})\\s+\", raw_line)"
+ },
+ {
+  "label": "repeated hop numbers become separate hops",
+  "old": "        if hops and hops[-1][\"hop\"] == hop_num:",
+  "new": "        if False:"
+ },
+ {
+  "label": "this box becomes the first hop",
+  "old": "        if m and \"[LOCALHOST]\" in raw_line:\n            continue\n",
+  "new": ""
+ },
+ {
+  "label": "the routing-table floor goes",
+  "old": "    floor = first_hop_from_route(target)\n    if floor:",
+  "new": "    floor = None\n    if floor:"
+ },
+ {
+  "label": "an on-link route invents a first hop",
+  "old": "    if not via or not valid_target(via):",
+  "new": "    if False:"
+ },
+ {
+  "label": "mtr is not asked which network each hop is in",
+  "old": "for args in ([\"-b\", \"-z\"], [\"-b\"], []):",
+  "new": "for args in ([\"-b\"], []):"
+ }
+]

@@ -1,0 +1,17 @@
+[
+ {
+  "label": "a symptom at the cause's own layer is evidence again",
+  "old": "and f.get(\"code\") not in level_symptoms\n",
+  "new": ""
+ },
+ {
+  "label": "a finding is confirmed by what it was counted from",
+  "old": "and f.get(\"code\") not in derived_from\n",
+  "new": ""
+ },
+ {
+  "label": "the summary stops naming what it was built from",
+  "old": "            \"derived_from\": [code],\n",
+  "new": ""
+ }
+]

@@ -256,3 +256,20 @@ moving one without the other leaves the red suite this exists to prevent. That
 makes it the one harness here that edits the thing which would otherwise catch
 it, so it self-tests: `--check` must write nothing against a document that is
 genuinely stale, and a rewrite must settle in one pass.
+
+### dev/mutations
+
+The sets, kept beside the rules they check rather than written from memory
+each time - which is how this harness came to be needed. One file per group
+of related rules: verdict severity, corroboration, the log leg, the broker
+leg, latency causation, the two sides, and the hop list.
+
+```bash
+python3 dev/mutate.py --anchors                     # do they still apply
+python3 dev/mutate.py dev/mutations/both-sides.json # one group
+python3 dev/mutate.py dev/mutations                 # all of them, ~1h
+```
+
+`--anchors` is the one to run after touching anything they point at. A set
+whose anchor has drifted reports every mutation in it as bad, which is correct
+and slow to discover: an hour of suite runs to be told a line moved.

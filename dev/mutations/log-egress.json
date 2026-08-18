@@ -1,0 +1,17 @@
+[
+ {
+  "label": "a log shipper counts against the control plane again",
+  "old": "    working = max(0, outbound - (shipping.get(\"sessions\") or 0))",
+  "new": "    working = outbound"
+ },
+ {
+  "label": "plaintext log ports are called encrypted",
+  "old": "plaintext = sorted(p for p in sessions if not LOG_EGRESS_PORTS[p][1])",
+  "new": "plaintext = []"
+ },
+ {
+  "label": "a collector that will not open is not counted",
+  "old": "stalled = {str(p): n for p, n in trying.items() if str(p) in LOG_EGRESS_PORTS}",
+  "new": "stalled = {}"
+ }
+]

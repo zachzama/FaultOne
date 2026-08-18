@@ -1,0 +1,17 @@
+[
+ {
+  "label": "a verdict may read milder than its own evidence",
+  "old": "\"severity\": _verdict_severity(",
+  "new": "\"severity\": (lambda *a: a[0])("
+ },
+ {
+  "label": "promote on any critical, not only the evidence",
+  "old": "    evidence = set(based_on)\n",
+  "new": "    evidence = None\n"
+ },
+ {
+  "label": "a critical finding leaves its stage on warn",
+  "old": "state = \"fail\" if critical & warn_codes else \"warn\"",
+  "new": "state = \"warn\""
+ }
+]

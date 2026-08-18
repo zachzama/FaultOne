@@ -1,0 +1,17 @@
+[
+ {
+  "label": "this box's own queue stops being a finding",
+  "old": "    _check_local_queue(raw, findings)\n",
+  "new": ""
+ },
+ {
+  "label": "any backlog at all is a standing queue",
+  "old": "standing = worst and worst[\"backlog_pkts\"] >= LOCAL_QUEUE_STANDING_PKTS",
+  "new": "standing = worst and worst[\"backlog_pkts\"] >= 0"
+ },
+ {
+  "label": "loopback can be the worst queue",
+  "old": "    real = [q for q in queues if q.get(\"iface\") != \"lo\"]",
+  "new": "    real = queues"
+ }
+]

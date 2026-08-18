@@ -10042,6 +10042,107 @@ class TestTheClausesNoReportEverRendered(unittest.TestCase):
         self.assertIn("was the TLS handshake", found["message"])
 
 
+class TestWhatARealApplianceReported(unittest.TestCase):
+    """Three defects found in one report from a production box.
+
+    All three had the same shape: the tool knew something and said something
+    else. The path findings carried a note saying they were measured on a route
+    the traffic does not take, and the verdict used them anyway. A SYN to
+    127.0.0.1 was described as traffic being filtered. And a half-millisecond
+    path was given a bar chart apportioning nought milliseconds.
+    """
+
+    def _off_route(self):
+        """A trace through one router while the table sends traffic via
+        another, with the target unreachable - which is what that box saw."""
+        m = fresh()
+        # A real loop on the traced route - A, B, A - so there is a path-derived
+        # fault that would take the verdict if it were allowed to. Without one
+        # the suppression is never exercised and the test passes on a fixture
+        # that could not tell either way, which is what the first version did.
+        trace(m, " 1  203.0.113.3 (203.0.113.3)  0.5 ms\n"
+                 " 2  203.0.113.4 (203.0.113.4)  0.6 ms\n"
+                 " 3  203.0.113.3 (203.0.113.3)  0.7 ms\n")
+        route = "8.8.8.8 via 10.0.0.1 dev igb0 src 10.0.0.5"
+        m.cmd_route_to = lambda t: dict(
+            {"ok": True, "cmd": "ip route get", "stdout": route},
+            **m.parse_route_to(route))
+        ping = m.cmd_ping
+        m.cmd_ping = lambda t, c=4, w=2, _p=ping: (
+            _p(t, c, w) if t == "10.0.0.1" else
+            {"ok": True, "cmd": "ping",
+             "stdout": "4 packets transmitted, 0 received, 100% packet loss\n"})
+        m.cmd_check_port = lambda h, p, timeout=5: {
+            "ok": False, "cmd": "tcp connect", "stdout": "", "error": "timeout"}
+        return m.diagnose(quick=False, target="8.8.8.8",
+                          check_ports=None, baseline=None)
+
+    def test_a_path_the_traffic_does_not_take_is_not_the_answer(self):
+        """`trace_took_another_route` has said since it was written that every
+        hop below it is measured on the wrong route. The verdict read those
+        hops anyway and named an owner from them."""
+        r = self._off_route()
+        self.assertIs(r["raw"].get("path_off_route"), True)
+        self.assertNotIn(r["verdict"]["based_on"][0], nd.PATH_DERIVED)
+
+    def test_it_is_still_reported_beside_the_reason_it_is_suspect(self):
+        """Not dropped. The reader needs both the reading and the note saying
+        which route it was taken on."""
+        codes = {f["code"] for f in self._off_route()["findings"]}
+        self.assertIn("trace_took_another_route", codes)
+        self.assertTrue(codes & set(nd.PATH_DERIVED))
+
+    def test_on_the_right_route_a_path_finding_answers_normally(self):
+        """The suppression is about disagreement, not about path findings."""
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  10.0.1.1 (10.0.1.1)  2.0 ms\n"
+                 " 3  10.0.0.1 (10.0.0.1)  3.0 ms\n")
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        self.assertIsNot(r["raw"].get("path_off_route"), True)
+        self.assertEqual(r["verdict"]["based_on"][0], "loop")
+
+    def test_a_stuck_connection_to_this_box_is_not_the_network(self):
+        """Nothing filters loopback. Ten of these to 127.0.0.1 were reported as
+        traffic being filtered, which sends the reader to a firewall over a
+        process that is not accepting."""
+        m = fresh()
+        rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port"]
+        rows += ["SYN-SENT 0 1 127.0.0.1:5%03d 127.0.0.1:9200" % i for i in range(12)]
+        serving(m, "\n".join(rows) + "\n")
+        r = m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None)
+        found = next((f for f in r["findings"] if f["code"] == "syn_sent_backlog"), None)
+        self.assertIsNotNone(found)
+        self.assertIn("Those are to this box itself", found["message"])
+        self.assertNotIn("being filtered", found["message"])
+
+    def test_a_stuck_connection_to_somewhere_else_still_is(self):
+        m = fresh()
+        rows = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port"]
+        rows += ["SYN-SENT 0 1 10.0.0.5:5%03d 203.0.113.9:443" % i for i in range(12)]
+        serving(m, "\n".join(rows) + "\n")
+        r = m.diagnose(quick=True, target="8.8.8.8", check_ports=None, baseline=None)
+        found = next((f for f in r["findings"] if f["code"] == "syn_sent_backlog"), None)
+        self.assertIsNotNone(found)
+        self.assertIn("being filtered", found["message"])
+
+    def test_no_bar_chart_of_nought_milliseconds(self):
+        """A total that rounds to zero has no shares to give out, and one hop
+        was being given 100% of it."""
+        m = fresh()
+        trace(m, " 1  203.0.113.3 (203.0.113.3)  0.5 ms\n"
+                 " 2  203.0.113.4 (203.0.113.4)  0.5 ms\n")
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        self.assertNotIn("where the 0ms went", nd.render_text_report(r))
+
+    def test_a_path_with_time_in_it_still_gets_one(self):
+        m = fresh()
+        trace(m, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n"
+                 " 2  203.0.113.9 (203.0.113.9)  40.0 ms\n")
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
+        self.assertIn("where the 40ms went", nd.render_text_report(r))
+
+
 class TestTheClausesThatDescribeTheShapeOfAPath(unittest.TestCase):
     """The six remaining conditional clauses, all needing a hand-built trace.
 
@@ -15693,8 +15794,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1000),
-            "compressed": (len(gzip.compress(raw, 9)), 302),
+            "on disk": (len(raw), 1004),
+            "compressed": (len(gzip.compress(raw, 9)), 303),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 211),
         }
         for label, (measured, quoted) in claims.items():

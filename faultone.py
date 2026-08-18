@@ -4766,6 +4766,25 @@ def _is_link_local(addr):
     return lower.startswith("169.254.") or lower.startswith("fe80:")
 
 
+def _is_loopback(address):
+    """Is this address the box itself, rather than merely nearby.
+
+    Narrower than `_flow_is_local`, deliberately: that one is true of anything
+    on this segment, and a peer on 10.0.0.7 not answering is a network problem
+    where the same silence on 127.0.0.1 is a service on this box not accepting.
+    Conflating them sends the reader to a firewall over a process.
+
+    Asked of `ipaddress` rather than by matching the prefix a second time.
+    There is one string test for locality in this file on purpose - two drift
+    apart the first time either is corrected - and this needs a different
+    question answered, not the same one written again.
+    """
+    try:
+        return ipaddress.ip_address(str(address or "").strip("[]")).is_loopback
+    except ValueError:
+        return str(address or "").lower() == "localhost"
+
+
 def _flow_is_local(peer):
     """Loopback and link-local peers are not the network under test. Loss on
     loopback is memory pressure, and must never read as a path fault."""
@@ -8325,6 +8344,16 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
 # because rank is by layer and nothing consulted whether the finding was
 # actually breaking something. Something that says "not failing yet" cannot be
 # the explanation for something that is failing now.
+#: Findings taken from the traced hops. When the trace and the kernel disagree
+#: about the first hop, every one of these describes a route the traffic does
+#: not use - so none of them may be the answer while something else is wrong.
+#: They stay in the report, next to the finding that says why they are suspect.
+PATH_DERIVED = frozenset({
+    "loop", "same_router_twice", "path_loss", "path_loss_cosmetic",
+    "latency_wall", "double_nat", "nat_observed", "cgnat", "trace_stalls",
+    "path_admin_prohibited", "trace_took_another_route",
+})
+
 LATENT = {
     "optics_warning", "optics_rx_marginal", "link_errors_historical",
     "negotiated_below_capacity", "bond_degraded", "neigh_table_near_limit",
@@ -8833,6 +8862,9 @@ RAW_STAGE = {
     "route_to": "internet",
     # The address the target resolved to, kept beside the kind it is.
     "target_ip": "internet",
+    # Whether the trace and the kernel disagree about the first hop, which the
+    # verdict reads to decide whether the path findings can be the answer.
+    "path_off_route": "internet",
     "dns_lookup": "dns", "dns_health": "dns",
     # Same again: socket states answer the ports stage, while the accept queue,
     # SYN cookies and the descriptor ceiling read from them answer "clients".
@@ -10463,6 +10495,16 @@ def build_verdict(findings, quick=False, raw=None):
         matches = by_code.get(code)
         if not matches:
             continue
+        # Measured on a route the traffic does not take. Not dropped - the
+        # report still carries it, beside the finding that says why - but it
+        # cannot be the answer while there is an answer that was measured on
+        # the right one.
+        if (code in PATH_DERIVED and (raw or {}).get("path_off_route")
+                and any(f["severity"] != "ok"
+                        and f.get("code") not in PATH_DERIVED
+                        and f.get("code") not in VERDICT_EXEMPT
+                        for f in findings)):
+            continue
         if code in LATENT and live_critical:
             # Still reported, and still eligible to be the answer when nothing
             # is actively broken - just not the headline over a live outage.
@@ -11560,6 +11602,11 @@ def _check_route_agrees(raw, findings, hops, target):
     off = route_disagrees_with_trace(raw, hops, target)
     if not off:
         return
+    # Read by the verdict. The paragraph above has said since it was written
+    # that everything below is measured on the wrong route, and nothing acted
+    # on it: a real appliance headlined a fault taken from those hops and named
+    # the provider as its owner, on a path its own traffic does not take.
+    raw["path_off_route"] = True
     findings.append({
         "severity": "ok",
         "layer": 3,
@@ -13460,11 +13507,22 @@ def _check_arp(raw, findings):
             "severity": "warning",
             "layer": 4,
             "code": "syn_sent_backlog",
+            # Where they are going changes what it means, and the same sentence
+            # was used for both. A real appliance reported ten of these to
+            # 127.0.0.1 and was told its traffic was being filtered: nothing
+            # filters loopback, and a SYN to it that gets no answer is a
+            # service on this box not accepting - which sends the reader to a
+            # process rather than to a firewall.
             "message": f"{syn_sent} connection(s) from this device are stuck waiting for a reply"
                        + (f", mostly to {worst}" if worst else "")
-                       + ". The device is trying and nothing is answering, which is traffic being "
-                         "filtered rather than a slow network - a dropped SYN looks identical to "
-                         "a slow server from the application's side.",
+                       + (". Those are to this box itself, so nothing on the network is "
+                          "involved: a service here is not accepting, and the connections "
+                          "will sit there until they time out. Look at what should be "
+                          "listening on that port."
+                          if worst and _is_loopback(worst) else
+                          ". The device is trying and nothing is answering, which is traffic "
+                          "being filtered rather than a slow network - a dropped SYN looks "
+                          "identical to a slow server from the application's side."),
         })
     close_wait = sock_states.get("CLOSE_WAIT", 0)
     if close_wait >= CLOSE_WAIT_WARN:
@@ -19047,7 +19105,12 @@ def _render_path(report, out, tint, width):
     bar_cells = max(0, min(24, width - 40))
     # One segment is not a shape, and under eight cells the bar says less than
     # the numbers already beside it. The ribbon declines under two hops too.
-    if total_ms and len(timed) >= 2 and bar_cells >= 8:
+    # A total that rounds to zero has no shares to give out. A real appliance
+    # on a half-millisecond path printed "where the 0ms went" and gave one hop
+    # 100% of it, which is arithmetic on nothing: the ribbon exists to say
+    # which hop the time went into, and under a millisecond there is no time
+    # and no hop to point at. The per-hop numbers beside it are still there.
+    if total_ms and total_ms >= 1 and len(timed) >= 2 and bar_cells >= 8:
         steepest = max(timed, key=lambda x: x["delta_ms"] or 0)
         out.append(f"  where the {total_ms:.0f}ms went")
         for h in timed:

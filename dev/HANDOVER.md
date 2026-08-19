@@ -141,10 +141,39 @@ a conclusion and whose body checks the layer underneath it. Three tests now
 cover `_check_bonds` itself, including the positive case so the negative one
 cannot pass by the finding being unreachable.
 
+**Batch two: six more, five caught, one survivor that is not a hole.** In
+`dev/mutations/negatives-batch-two.json`. The survivor is worth writing down
+because it is a category, not a defect.
+
+`_serves_traffic` opens with `if not sock.get("ok"): return None`. Deleting it
+survives and always will: a failed collector returns its own error shape with
+none of the parsed keys, so the port test two lines down already returns None
+for every failure the corpus can produce.
+
+**That is not the same as the line being dead**, and the distinction decides
+what to do about it. The group-size guard in `_check_idle_endpoint` came out
+when a mutation proved it dead - it was subsumed by the next line for *any*
+input. This one is subsumed only while "a failed collector carries no data"
+holds, which is a convention here rather than a guarantee: a partial read that
+kept some rows and reported not-ok would reach the test below with real ports.
+So the line stays, with a comment saying it is untestable and why, and the
+mutation is out of the set - a mutation that can never be caught makes the set
+permanently red and teaches nothing.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
-mutation means the test is real. Do not trust the name of the test - the one
-hole found here had an accurate name pointing at the wrong layer.
+mutation means the test is real. Two things learned from eleven so far:
+
+- **Do not trust the name of the test.** The one real hole had an accurate name
+  pointing at the wrong layer - `test_a_healthy_bond_reports_nothing_down`
+  tests the parser, not the finding.
+- **Sort survivors into holes and equivalent mutants before acting.** Of three
+  survivors across both batches, one was a missing test and two were mutants
+  that could not change an answer. Deleting a guard because a mutation survived
+  is the wrong lesson from the right signal.
+
+Roughly 110 of the 121 behavioural ones are still unexamined, at about six
+mutations per two-minute run.
 
 ## Open: phase A, `findings` from out-parameter to return value
 

@@ -16803,6 +16803,17 @@ def _serves_traffic(raw):
     is how a proxy with no egress by design reads as a carrier outage.
     """
     sock = raw.get("sockets") or {}
+    # Not independently testable, and kept anyway. A collector that failed
+    # returns its own error shape with none of the parsed keys, so the port
+    # test below already returns None for every failure the corpus can
+    # produce - a mutation deleting this line survives and always will.
+    #
+    # That is not the same as the line being dead. It is dead only while
+    # "failed collectors carry no data" holds, which is a convention here
+    # rather than a guarantee: a partial read that kept some rows and reported
+    # not-ok would reach the test below with real ports. The group-size guard
+    # in _check_idle_endpoint came out when a mutation proved it dead, and
+    # that one was subsumed by the next line for *any* input. This is not.
     if not sock.get("ok"):
         return None
     inbound, ports = sock.get("inbound") or 0, sock.get("listen_ports") or []

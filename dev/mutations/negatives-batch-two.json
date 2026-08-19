@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a wildcard listener is compared against siblings it has no address for",
+  "old": "            if not r.get(\"wildcard\") and r.get(\"address\")]",
+  "new": "            if r.get(\"address\") or True]"
+ },
+ {
+  "label": "an idle listener with no serving sibling is named anyway",
+  "old": "        if not serving or not idle:\n            continue",
+  "new": "        if not idle:\n            continue"
+ },
+ {
+  "label": "a group where everything is serving still names one as idle",
+  "old": "        idle = [r for r in group if not (r.get(\"traffic\") or 0)]",
+  "new": "        idle = list(group)"
+ },
+ {
+  "label": "a box with no orphan counters reports on them anyway",
+  "old": "    if not count or not limit:\n        return found",
+  "new": "    count, limit = count or 1, limit or 1"
+ },
+ {
+  "label": "one inbound connection is enough to call a box serving",
+  "old": "    if ports and inbound >= SERVING_INBOUND_MIN:",
+  "new": "    if ports:"
+ }
+]

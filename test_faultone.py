@@ -5293,6 +5293,35 @@ class TestBondMembers(unittest.TestCase):
         base = self.build({"bond0": {"eth0": "up", "eth1": "up"}})
         self.assertEqual(nd._bond_members_linux(base)["bond0"]["down"], [])
 
+    def graded(self, members, down):
+        """The finding, not the parser. Everything else in this class checks
+        what `_bond_members_linux` reads out of /sys; this checks what
+        `_check_bonds` concludes from it, which is a different question and had
+        no test at all."""
+        mod = fresh()
+        mod.OS_NAME = "Linux"
+        mod._bond_members_linux = lambda base="/sys/class/net": {
+            "bond0": {"members": members, "down": down, "mode": "802.3ad"}}
+        return [f["code"] for f in mod._check_bonds({})]
+
+    def test_a_bond_with_every_cable_up_produces_no_finding(self):
+        """The half of the guard nothing covered. A mutation deleting `not
+        down` made every healthy bond report as degraded, and all 1,780 tests
+        passed - because the only test named for this asserts that the
+        *parser* found nothing down, which is a different layer.
+        """
+        self.assertEqual(self.graded(["eth0", "eth1"], []), [])
+
+    def test_a_bond_with_one_cable_down_is_degraded(self):
+        """The positive case, so the test above cannot pass by the finding
+        being unreachable."""
+        self.assertEqual(self.graded(["eth0", "eth1"], ["eth1"]), ["bond_degraded"])
+
+    def test_a_bond_with_every_cable_down_is_a_dead_link_not_a_degraded_bond(self):
+        """The other half of the same guard: all members down is an interface
+        with no carrier, which the link checks say in better words."""
+        self.assertEqual(self.graded(["eth0", "eth1"], ["eth0", "eth1"]), [])
+
     def test_a_member_with_no_status_falls_back_to_its_own_link_state(self):
         """Not every kernel exports bonding_slave/mii_status. Without the
         fallback a bond on one of those reads as entirely healthy."""

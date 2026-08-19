@@ -1,0 +1,37 @@
+[
+ {
+  "label": "a healthy bond is reported as degraded",
+  "old": "        if not down or len(down) >= len(members):",
+  "new": "        if len(down) >= len(members):"
+ },
+ {
+  "label": "one MAC serving many IPs is called a conflict",
+  "old": "    return [{\"ip\": ip, \"macs\": sorted(macs)} for ip, macs in by_ip.items() if len(macs) > 1]",
+  "new": "    return [{\"ip\": ip, \"macs\": sorted(macs)} for ip, macs in by_ip.items()]"
+ },
+ {
+  "label": "a box with headroom is called saturated",
+  "old": "    saturated = per_cpu >= LOAD_PER_CPU_WARN",
+  "new": "    saturated = True"
+ },
+ {
+  "label": "the load explains findings that are not timings",
+  "old": "    explainable = [f for f in findings\n                   if FINDING_CLASS.get(f.get(\"code\"), (None,))[0] == \"qualityOfServiceAlarm\"]",
+  "new": "    explainable = list(findings)"
+ },
+ {
+  "label": "every address reaching is still reported as one that cannot",
+  "old": "    return bool(row.get(\"reached\")) or row.get(\"tcp\") == \"open\"",
+  "new": "    return False"
+ },
+ {
+  "label": "a hop that timed out counts as a shared router",
+  "old": "        if host and host != \"*\" and hop.get(\"state\") in (\"warn\", \"crit\"):",
+  "new": "        if hop.get(\"state\") in (\"warn\", \"crit\") or True:"
+ },
+ {
+  "label": "all members down is still called a degraded bond",
+  "old": "        if not down or len(down) >= len(members):",
+  "new": "        if not down:"
+ }
+]

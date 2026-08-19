@@ -210,6 +210,13 @@ def main():
           "is how\n  this suite says a rule stayed quiet. What it cannot show "
           "from here is\n  whether the fixture arranged the situation at all.",
           flush=True)
+    print("  Two populations, and conflating them is why the list reads as a "
+          "wall.\n  About a fifth assert an empty *violation* set - the "
+          "structural guards,\n  whose healthy state is nothing to report and "
+          "several of which caught\n  real defects this week. The rest run "
+          "something and assert a rule\n  stayed quiet, and only a mutation "
+          "can say whether the fixture arranged\n  the situation: see "
+          "dev/mutations/negatives-that-stay-quiet.json.", flush=True)
     for test_id in empty_only:
         print("  %s" % short(test_id), flush=True)
     if not empty_only:

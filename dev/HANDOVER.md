@@ -114,6 +114,38 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
+## The 142 tests that assert only on empty things
+
+`dev/vacuous.py` flags them; this is what reading them found.
+
+**They are two populations and conflating them is why the list reads as a
+wall.** 21 assert an empty *violation* set - the structural guards, whose
+healthy state is nothing to report, and several of which caught real defects
+this week. Those are working as designed. The other 121 run something and
+assert a rule stayed quiet, and for those the question is whether the fixture
+arranged the situation at all. Only a mutation answers that.
+
+**Six were mutated as a spread across different rules. Five were caught and one
+was a real hole**, in `dev/mutations/negatives-that-stay-quiet.json`:
+
+`_check_bonds` skips a bond with `if not down or len(down) >= len(members)`.
+Delete `not down` and every healthy bond reports as degraded - and all 1,780
+tests pass. The only test named for it,
+`test_a_healthy_bond_reports_nothing_down`, asserts that
+`_bond_members_linux` found nothing down. That is the **parser**, not the
+finding, and the whole of `TestBondMembers` was about the parser. The finding
+had no test of any kind.
+
+That is the shape to look for in the remaining 115: a test whose name describes
+a conclusion and whose body checks the layer underneath it. Three tests now
+cover `_check_bonds` itself, including the positive case so the negative one
+cannot pass by the finding being unreachable.
+
+**How to work through the rest:** take a handful at a time, find the guard that
+keeps the rule quiet, and write a mutation that forces it open. A caught
+mutation means the test is real. Do not trust the name of the test - the one
+hole found here had an accurate name pointing at the wrong layer.
+
 ## Open: phase A, `findings` from out-parameter to return value
 
 81 functions take `findings`; 66 mutate it in place. That is the dominant

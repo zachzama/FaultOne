@@ -306,26 +306,36 @@ assertions in the suite check message text; almost all of them check words.
 
 **Run against all 62: 53 survived.** Nine were already covered.
 
-**Now 41 survive**, after seven test edits closing `clock_skewed`,
+**Now 33 survive.** Ten test edits so far have closed `clock_skewed`,
 `queue_builds_at_hop`, the standing-versus-bursting sentence, `latency_high`,
-`latency_is_queuing`, the port timing breakdown and the jitter pair. Several
-placeholders belong to one message, so one added assertion often kills three or
-four mutations.
+`latency_is_queuing`, the port timing breakdown, the jitter pair,
+`throughput_limited_by` and `path_loss`. Several placeholders belong to one
+message, so one added assertion often kills three or four mutations.
 
 Four of the first five were **this week's own work** - tests I wrote that assert
 the sentence while the figures the finding turns on went unchecked. The pattern
 is not confined to old code.
 
-**Quote the run, not the arithmetic.** An intermediate count of 42 and the
-number of mutations closed since do not reconcile with 41, and the discrepancy
-was not chased. The figure to trust is whatever a freshly regenerated set
-reports against the current tree; the line numbers below come from that run:
+**Two shapes keep recurring in the fixes, and both are reusable:**
+
+- *A test that serves a real request cannot assert a number.* The port timing
+  breakdown had no assertion on any of its three phases for exactly that
+  reason. Build the result instead of measuring one, and the numbers become
+  knowable.
+- *Where the message prints a split, assert it adds up.* `throughput_limited_by`
+  names a leader and then lists three shares; the added test checks the leader
+  is the largest of the three it goes on to print, which no single-value
+  assertion would catch.
+
+**Quote the run, not the arithmetic.** An intermediate count of 42 did not
+reconcile with the mutations closed since, and the discrepancy was not chased.
+The figure to trust is whatever a freshly regenerated set reports against the
+current tree; the lines below come from that run:
 
 ```
-1245 3332 4110 4559 5729 9479 11122 11359 11360 11517 12829 13065 13572
-13573 13808 14499 14500 14501 14502 14811 14908 14910 14913 15704 15779
-15782 15894 15914 15993 16026 17023 17033 17422 17432 20118 20175 20176
-20359 20411 20412 20414
+1245 3332 4110 4559 9479 11122 11359 11360 11517 12829 13065 13572 13573
+13808 14811 14908 14910 14913 15704 15779 15782 15914 15993 17023 17033
+17422 20118 20175 20176 20359 20411 20412 20414
 ```
 
 Regenerate the set after any edit - the line numbers move. The generator is a

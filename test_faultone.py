@@ -4484,6 +4484,26 @@ class TestWhichOfThreeIsHoldingThroughputBack(unittest.TestCase):
                 self.assertTrue(fired, f"nothing fired for rwnd={rwnd} snd={snd}")
                 self.assertIn(expect, fired[0]["message"])
 
+    def test_the_split_it_prints_is_the_split_it_measured(self):
+        """Four percentages in one sentence, and every one of them survived a
+        mutation replacing it with zero: the tests here assert which of the
+        three is named and never what the numbers are.
+
+        The split is the finding. "Held back mostly by the path" with the wrong
+        share behind it is the difference between a path worth escalating and
+        one that is fine, and the three parts have to add up or the sentence is
+        arithmetic nobody did."""
+        said = self.fired_for(2.0, 1.0)[0]["message"]
+        self.assertIn("held back mostly by the path between them (97% of the "
+                      "time they spent busy)", said)
+        self.assertIn("97% waiting on the path", said)
+        self.assertIn("2% on the far end having no window left", said)
+        self.assertIn("1% on this box having nothing queued", said)
+        # The lead share is the largest of the three it goes on to list.
+        import re as _re
+        parts = [int(n) for n in _re.findall(r"(\d+)% ", said)]
+        self.assertEqual(parts[0], max(parts[1:]))
+
     def test_the_three_cases_do_not_all_produce_the_same_sentence(self):
         """What the first version of the test above accidentally asserted."""
         said = {self.fired_for(r, s)[0]["message"] for r, s in ((2.0, 1.0), (61.0, 1.0), (1.0, 55.0))}
@@ -6199,6 +6219,15 @@ class TestZones(unittest.TestCase):
         self.assertEqual(report["verdict"]["severity"], "critical")
         lossy = [h for h in report["hops"] if (h.get("loss_pct") or 0) >= 5]
         self.assertTrue(lossy)
+        # The figure a carrier ticket gets opened on, and the hop it is blamed
+        # at. Both survived a mutation replacing them with zero: the tests here
+        # assert the severity and the shape of the picture, never the numbers
+        # the sentence carries.
+        said = next(f["message"] for f in report["findings"]
+                    if f["code"] == "path_loss")
+        self.assertIn("27% at the destination", said)
+        self.assertIn("first appearing at hop 2 (198.51.100.63)", said)
+        self.assertIn("over 10 probes per hop", said)
         self.assertFalse([h for h in lossy if h.get("cosmetic")],
                          "loss that reaches the destination was written off as cosmetic")
 

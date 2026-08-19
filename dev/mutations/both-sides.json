@@ -16,7 +16,7 @@
  },
  {
   "label": "the walk goes back behind the verdict",
-  "old": "    trace_each_side(_legs, findings, quick)\n    count_the_hops_in(_legs, quick)\n    _check_asymmetric_path(_legs, findings)\n",
+  "old": "    trace_each_side(_legs, findings, quick)\n    count_the_hops_in(_legs, quick)\n    findings += _check_asymmetric_path(_legs)\n",
   "new": ""
  },
  {

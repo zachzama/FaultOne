@@ -9383,7 +9383,7 @@ HOP_LOSS_WARN_PCT = 5
 ASYMMETRIC_HOP_GAP = 2
 
 
-def _check_asymmetric_path(legs, findings):
+def _check_asymmetric_path(legs):
     """Traffic leaving by one route and coming back by another.
 
     The page has drawn the word "asymmetric" beside these two numbers for a
@@ -9401,6 +9401,7 @@ def _check_asymmetric_path(legs, findings):
     was walked, the way back is inferred from a TTL against an assumed starting
     value. A difference of one is not a finding for that reason.
     """
+    found = []
     for side in (legs or []):
         out = len(side.get("traced", {}).get("hops") or [])
         back = side.get("hops_in")
@@ -9411,7 +9412,7 @@ def _check_asymmetric_path(legs, findings):
             continue
         where = ("the clients" if side.get("side") == "client"
                  else "what this box connects out to")
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 3,
             "code": "path_asymmetric",
@@ -9427,6 +9428,7 @@ def _check_asymmetric_path(legs, findings):
                 f"connection dies while both directions look healthy measured on "
                 f"their own, which is most of what is below this line."),
         })
+    return found
 
 
 def _check_shared_hop(legs, findings):
@@ -11037,14 +11039,15 @@ def _per_day_since_boot(total):
     return total / days, days
 
 
-def _check_nic_backlog(stats, findings, counter_window):
+def _check_nic_backlog(stats, counter_window):
     """Packets the kernel dropped because its receive backlog was full."""
+    found = []
     delta = stats.get("delta") or {}
     live_ppm = stats.get("drop_ppm_live")
     live_drops = delta.get("softnet_dropped", 0)
 
     if live_drops and live_ppm is not None and live_ppm >= SOFTNET_DROP_PPM:
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 2,
             "code": "nic_drops_live",
@@ -11058,7 +11061,7 @@ def _check_nic_backlog(stats, findings, counter_window):
         })
     elif stats.get("drop_ppm_lifetime") and stats["drop_ppm_lifetime"] >= SOFTNET_DROP_PPM:
         lifetime = stats.get("lifetime", {})
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 2,
             "code": "nic_drops_historical",
@@ -11068,10 +11071,12 @@ def _check_nic_backlog(stats, findings, counter_window):
                        f"Worth knowing before blaming the network for loss that comes and "
                        f"goes with load on this box.",
         })
+    return found
 
 
-def _check_conntrack_table(stats, findings, counter_window):
+def _check_conntrack_table(stats, counter_window):
     """Connection tracking: how full the table is, and whether it has refused."""
+    found = []
     delta = stats.get("delta") or {}
     # Connection tracking: pressure, and whether it has already refused.
     ct_refused = delta.get("ct_insert_failed", 0) + delta.get("ct_drop", 0)
@@ -11079,7 +11084,7 @@ def _check_conntrack_table(stats, findings, counter_window):
     ct_count, ct_max = lifetime.get("ct_count"), lifetime.get("ct_max")
     ct_pct = round(100.0 * ct_count / ct_max, 1) if ct_count is not None and ct_max else None
     if ct_refused:
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 4,
             "code": "conntrack_drops_live",
@@ -11093,7 +11098,7 @@ def _check_conntrack_table(stats, findings, counter_window):
                          f"need it." + _load_context(),
         })
     elif ct_pct is not None and ct_pct >= CONNTRACK_WARN_PCT:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "conntrack_near_limit",
@@ -11107,7 +11112,7 @@ def _check_conntrack_table(stats, findings, counter_window):
         per_day, _days = _per_day_since_boot(past)
         if per_day is not None:
             if per_day >= CONNTRACK_REFUSAL_PER_DAY:
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "layer": 4,
                     "code": "conntrack_drops_historical",
@@ -11117,9 +11122,10 @@ def _check_conntrack_table(stats, findings, counter_window):
                                + f". It fills under load, so this explains failures that "
                                  f"cluster at busy times and never reproduce afterwards.",
                 })
+    return found
 
 
-def _check_connection_setup(stats, findings, counter_window):
+def _check_connection_setup(stats, counter_window):
     """Is it connection setup that's failing, or traffic once it's up?
 
     A SYN is one packet sent before anything has warmed up - no window, no
@@ -11130,13 +11136,14 @@ def _check_connection_setup(stats, findings, counter_window):
     place. The existing retransmit rate mixes this in with everything else and
     cannot tell you which.
     """
+    found = []
     delta = stats.get("delta") or {}
     lifetime = stats.get("lifetime") or {}
     live_syn, live_opens = delta.get("TCPSynRetrans", 0), delta.get("ActiveOpens", 0)
     if live_opens >= 20 and live_syn:
         pct = round(100.0 * live_syn / live_opens, 1)
         if pct >= SYN_RETRANS_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "syn_retrans_high",
@@ -11152,7 +11159,7 @@ def _check_connection_setup(stats, findings, counter_window):
     if live_opens >= 20 and live_fails:
         pct = round(100.0 * live_fails / live_opens, 1)
         if pct >= ATTEMPT_FAIL_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "connect_failures_high",
@@ -11174,7 +11181,7 @@ def _check_connection_setup(stats, findings, counter_window):
         pct = round(100.0 * live_rsts / live_conns)
         if pct >= RESETS_PER_CONN_PCT:
             estab = delta.get("EstabResets", 0)
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "resets_sent_high",
@@ -11203,7 +11210,7 @@ def _check_connection_setup(stats, findings, counter_window):
         pct = round(100.0 * live_estab / live_conns)
         ours = delta.get("OutRsts", 0)
         if pct >= ESTAB_RESET_PCT and ours < live_estab:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "connections_reset_by_peer",
@@ -11228,7 +11235,7 @@ def _check_connection_setup(stats, findings, counter_window):
         pct = round(100.0 * live_dsack / live_retrans, 1)
         if pct >= SPURIOUS_RETRANS_PCT:
             reorder = delta.get("TCPSACKReorder", 0) + delta.get("TCPOFOQueue", 0)
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 3,
                 "code": "retrans_spurious",
@@ -11251,7 +11258,7 @@ def _check_connection_setup(stats, findings, counter_window):
     if live_csum and live_in:
         ppm = round(live_csum * 1_000_000.0 / live_in, 1)
         if ppm >= CSUM_ERR_PPM:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 3,
                 "code": "tcp_checksum_errors",
@@ -11278,7 +11285,7 @@ def _check_connection_setup(stats, findings, counter_window):
     # Packets the kernel threw away because it could not find memory for them.
     pruned = delta.get("RcvPruned", 0) + delta.get("PruneCalled", 0)
     if pruned:
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 4,
             "code": "rcv_buffer_pruned",
@@ -11288,6 +11295,7 @@ def _check_connection_setup(stats, findings, counter_window):
                        f"network losing anything - and it produces retransmits that look "
                        f"exactly like a lossy path." + _load_context(),
         })
+    return found
 
 
 # Share of the ephemeral range in use before outbound connections are at risk.
@@ -11311,7 +11319,7 @@ SYN_RECV_HIGH = 256
 ABORT_TIMEOUT_PCT = 2.0
 
 
-def _check_server_limits(stats, findings, counter_window, raw):
+def _check_server_limits(stats, counter_window, raw):
     """Local ceilings that a service hits and that present as network faults.
 
     Nothing here is the network. Each is a limit on this box that, from the
@@ -11319,6 +11327,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     the path being broken - which is exactly why they belong in a tool whose
     job is deciding which it is.
     """
+    found = []
     life, delta = stats.get("lifetime") or {}, stats.get("delta") or {}
     sock = raw.get("sockets") or {}
     states = sock.get("states") or {}
@@ -11326,7 +11335,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     # Syncookies: the kernel saying the accept queue overflowed, in words.
     cookies = delta.get("SyncookiesSent") if delta else None
     if cookies:
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 4,
             "code": "syncookies_live",
@@ -11341,7 +11350,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     elif life.get("SyncookiesSent"):
         per_day, days = _per_day_since_boot(life["SyncookiesSent"])
         if per_day is not None and per_day >= 1:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "syncookies_historical",
@@ -11369,7 +11378,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
         where = sock.get("outbound_worst_dest") or "one destination"
         pct = round(worst * 100.0 / total, 1)
         if pct >= EPHEMERAL_PRESSURE_PCT:
-            findings.append({
+            found.append({
                 "severity": "critical" if pct >= 95 else "warning",
                 "layer": 4,
                 "code": "ephemeral_ports_low",
@@ -11398,7 +11407,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     if fd_used and fd_max:
         pct = round(fd_used * 100.0 / fd_max, 1)
         if pct >= FD_PRESSURE_PCT:
-            findings.append({
+            found.append({
                 "severity": "critical" if pct >= 95 else "warning",
                 "layer": 4,
                 "code": "fd_pressure",
@@ -11415,7 +11424,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
 
     # Out of socket memory. Unambiguous, and never normal.
     if (delta or {}).get("TCPAbortOnMemory"):
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 4,
             "code": "aborts_on_memory",
@@ -11429,7 +11438,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
 
     # SYNs dropped before they ever reached a queue.
     if (delta or {}).get("TCPReqQFullDrop"):
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 4,
             "code": "reqq_full_drops",
@@ -11446,7 +11455,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     if aborts and handled >= 100:
         pct = round(aborts * 100.0 / handled, 1)
         if pct >= ABORT_TIMEOUT_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "aborts_on_timeout",
@@ -11462,7 +11471,7 @@ def _check_server_limits(stats, findings, counter_window, raw):
     syn_recv = states.get("SYN_RECV", 0)
     if syn_recv >= SYN_RECV_HIGH:
         somaxconn = life.get("somaxconn")
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "syn_recv_backlog",
@@ -11473,14 +11482,16 @@ def _check_server_limits(stats, findings, counter_window, raw):
                          "abandoned - the two look identical here, and the syncookie counter "
                          "above tells them apart.",
         })
+    return found
 
 
-def _check_accept_queues(stats, findings, counter_window, owners=()):
+def _check_accept_queues(stats, counter_window, owners=()):
     """Connections a service here turned away with a full accept queue."""
+    found = []
     delta = stats.get("delta") or {}
     live_overflow = delta.get("ListenOverflows", 0)
     if live_overflow:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "accept_overflow_live",
@@ -11496,7 +11507,7 @@ def _check_accept_queues(stats, findings, counter_window, owners=()):
         per_day, _days = _per_day_since_boot(total)
         if per_day is not None:
             if per_day >= ACCEPT_OVERFLOW_PER_DAY:
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "layer": 4,
                     "code": "accept_overflow_historical",
@@ -11506,6 +11517,7 @@ def _check_accept_queues(stats, findings, counter_window, owners=()):
                                f"gets reported as the network being unreliable."
                                + _the_listeners_are(owners),
                 })
+    return found
 
 
 def _check_kernel_drops(raw, findings, counter_window, baseline):
@@ -11521,15 +11533,14 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     stats = raw["kernel_drops"]
     if not stats.get("ok"):
         return
-    _check_nic_backlog(stats, findings, counter_window)
-    _check_conntrack_table(stats, findings, counter_window)
-    _check_accept_queues(stats, findings, counter_window,
-                         socket_owners(raw))
-    _check_connection_setup(stats, findings, counter_window)
-    _check_server_limits(stats, findings, counter_window, raw)
-    _check_thermal(stats, findings, counter_window)
-    _check_udp(stats, findings, counter_window)
-    _check_fragments(stats, findings, counter_window)
+    findings += _check_nic_backlog(stats, counter_window)
+    findings += _check_conntrack_table(stats, counter_window)
+    findings += _check_accept_queues(stats, counter_window, socket_owners(raw))
+    findings += _check_connection_setup(stats, counter_window)
+    findings += _check_server_limits(stats, counter_window, raw)
+    findings += _check_thermal(stats, counter_window)
+    findings += _check_udp(stats, counter_window)
+    findings += _check_fragments(stats, counter_window)
     _check_orphans(stats, findings)
 
 
@@ -12485,7 +12496,7 @@ def _check_udp_queues(raw, findings):
     })
 
 
-def _check_udp(stats, findings, counter_window):
+def _check_udp(stats, counter_window):
     """Datagrams this box did not take delivery of.
 
     Nothing else here looks at UDP, and DNS is UDP. A box overflowing its
@@ -12493,6 +12504,7 @@ def _check_udp(stats, findings, counter_window):
     passes - so the report reads as a slow or failing resolver, and the fault
     is on this side of the wire.
     """
+    found = []
     delta = stats.get("delta") or {}
     got = delta.get("udp_InDatagrams", 0)
     rcvbuf = delta.get("udp_RcvbufErrors", 0)
@@ -12500,7 +12512,7 @@ def _check_udp(stats, findings, counter_window):
     if rcvbuf >= UDP_DROP_FLOOR and got:
         pct = round(100.0 * rcvbuf / (got + rcvbuf), 1)
         if pct >= UDP_DROP_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "udp_recv_buffer_full",
@@ -12521,7 +12533,7 @@ def _check_udp(stats, findings, counter_window):
     if other >= UDP_DROP_FLOOR and got:
         pct = round(100.0 * other / (got + errors), 1)
         if pct >= UDP_DROP_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 3,
                 "code": "udp_datagrams_corrupt",
@@ -12533,21 +12545,23 @@ def _check_udp(stats, findings, counter_window):
                            f"after that did it - a device in the path or an offload engine "
                            f"on this one, not the cable.",
             })
+    return found
 
 
-def _check_fragments(stats, findings, counter_window):
+def _check_fragments(stats, counter_window):
     """Fragments that arrived and never came back together.
 
     The path-MTU probe measures this from the sending side. This is the same
     problem seen from the receiving side, and it is evidence the probe cannot
     produce: it is about traffic other people sent to this box.
     """
+    found = []
     delta = stats.get("delta") or {}
     tried, failed = delta.get("ip_ReasmReqds", 0), delta.get("ip_ReasmFails", 0)
     if failed >= REASM_FAIL_FLOOR and tried:
         pct = round(100.0 * failed / tried, 1)
         if pct >= REASM_FAIL_PCT:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 3,
                 "code": "fragments_lost",
@@ -12560,6 +12574,7 @@ def _check_fragments(stats, findings, counter_window):
                            f"would report it filtered, so the sender never learns to send "
                            f"smaller packets.",
             })
+    return found
 
 
 def _check_orphans(stats, findings):
@@ -12585,7 +12600,7 @@ def _check_orphans(stats, findings):
         })
 
 
-def _check_thermal(stats, findings, counter_window):
+def _check_thermal(stats, counter_window):
     """A CPU clocking itself down, which every network check reads as the network.
 
     Throttling costs cycles exactly where a box that moves packets needs them:
@@ -12593,11 +12608,12 @@ def _check_thermal(stats, findings, counter_window):
     of those is a finding here that points somewhere else. None of them is
     wrong - they are all downstream of a box that is too hot to run at speed.
     """
+    found = []
     delta, lifetime = stats.get("delta") or {}, stats.get("lifetime") or {}
     live = max(delta.get("core_throttles", 0), delta.get("package_throttles", 0))
     total = max(lifetime.get("core_throttles", 0), lifetime.get("package_throttles", 0))
     if live:
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 1,
             "code": "cpu_throttled_live",
@@ -12610,7 +12626,7 @@ def _check_thermal(stats, findings, counter_window):
                        f"health before anything on the network." + _load_context(),
         })
     elif total:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 1,
             "code": "cpu_throttled_historical",
@@ -12621,6 +12637,7 @@ def _check_thermal(stats, findings, counter_window):
                        f"that only appears at the busiest time of day and never reproduces "
                        f"afterwards.",
         })
+    return found
 
 def _check_clock(raw, findings):
     """A clock that has drifted, which is a device fault reported as a service one.
@@ -12735,7 +12752,7 @@ def _check_kernel_log(raw, findings):
         })
 
 
-def _check_link_flaps(raw, findings):
+def _check_link_flaps(raw):
     """Has the link been dropping and coming back?
 
     Every other link check measures the state the port is in. This one measures
@@ -12744,6 +12761,7 @@ def _check_link_flaps(raw, findings):
     boot, so it costs nothing to read and carries months of history into a
     seven-second run.
     """
+    found = []
     # The kernel log has already reported these transitions with their times,
     # which is strictly better evidence. Reporting the same interface twice -
     # once as a critical fault with timestamps, once as a warning about a
@@ -12756,7 +12774,7 @@ def _check_link_flaps(raw, findings):
         live = iface.get("delta_carrier_changes")
         window = iface.get("sample_seconds")
         if live:
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "layer": 1,
                 "code": "link_flapping_live", "scope": name,
@@ -12773,7 +12791,7 @@ def _check_link_flaps(raw, findings):
         flaps = max(0, total - LINK_FLAP_BASELINE)
         per_day, days = _per_day_since_boot(flaps)
         if per_day is not None and per_day >= LINK_FLAP_PER_DAY:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 1,
                 "code": "link_flapping", "scope": name,
@@ -12784,6 +12802,7 @@ def _check_link_flaps(raw, findings):
                            f"reproduce while someone is watching. Try --soak to catch it "
                            f"in the act.",
             })
+    return found
 
 
 # A site uplink is called full lower than a NIC is. Queues on a CPE are small
@@ -12908,8 +12927,9 @@ def _burst_note(raw, iface):
             f"for fifty milliseconds at a time and still read as idle.")
 
 
-def _check_counters(raw, findings, duplex_by_iface):
+def _check_counters(raw, duplex_by_iface):
     """Error, drop and collision counters, per interface that carries traffic."""
+    found = []
     for iface in raw["link_stats"].get("interfaces", []):
         name = iface["name"]
         # Skip loopback and interfaces that have never passed traffic - every
@@ -12934,7 +12954,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         length_errs = min(iface.get("delta_length_errors") or 0, total_errs - host_errs)
         link_errs = max(total_errs - host_errs - length_errs, 0)
         if iface["delta_errors"] and host_errs > max(link_errs, length_errs):
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "code": "nic_ring_overruns", "scope": name,
                 "layer": 2,
@@ -12946,7 +12966,7 @@ def _check_counters(raw, findings, duplex_by_iface):
                            f"that services it does." + _burst_note(raw, iface),
             })
         elif iface["delta_errors"] and length_errs > max(link_errs, host_errs):
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "code": "frame_length_errors", "scope": name,
                 "layer": 2,
@@ -12957,7 +12977,7 @@ def _check_counters(raw, findings, duplex_by_iface):
                            f"or VLAN-tagging mismatch rather than a damaged link.",
             })
         elif iface["delta_errors"]:
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "code": "link_errors_live", "scope": name,
                 "layer": 1,
@@ -12969,7 +12989,7 @@ def _check_counters(raw, findings, duplex_by_iface):
             })
         elif (iface["errors"] and iface["err_ppm"] >= ERR_PPM_WARN
                 and iface["packets"] >= MIN_PACKETS_FOR_RATE):
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "link_errors_historical", "scope": name,
                 "layer": 1,
@@ -12986,7 +13006,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         if (iface["collisions"] and iface.get("coll_ppm", 0) >= COLL_PPM_WARN
                 and iface["packets"] >= MIN_PACKETS_FOR_RATE
                 and duplex_by_iface.get(name) != "half"):
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "collisions", "scope": name,
                 "layer": 1,
@@ -13007,7 +13027,7 @@ def _check_counters(raw, findings, duplex_by_iface):
         drop_pct = (100.0 * iface["delta_drops"] / window
                     if iface["delta_drops"] and window else 0)
         if window >= MIN_WINDOW_PACKETS_FOR_RATE and drop_pct >= DROP_PCT_WARN:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "drops_live", "scope": name,
                 "layer": 2,
@@ -13018,6 +13038,7 @@ def _check_counters(raw, findings, duplex_by_iface):
                            f"device isn't keeping up - CPU, ring buffer, or driver, rather than "
                            f"the network." + _burst_note(raw, iface),
             })
+    return found
 
 def _check_link_modes(raw, findings):
     """Negotiated speed, duplex and MTU per interface.
@@ -14205,8 +14226,9 @@ def _check_saturation_bursts(iface, findings, capacity, uplink_mbps, raw, counte
     })
 
 
-def _check_tcp(raw, findings, counter_window, tcp_baseline):
+def _check_tcp(raw, counter_window, tcp_baseline):
     """Retransmit rate on this device's own traffic."""
+    found = []
     raw["tcp_health"] = cmd_tcp_health(counter_window if tcp_baseline else 0,
                                        baseline=tcp_baseline)
     live_retrans = raw["tcp_health"].get("retrans_pct_live")
@@ -14215,7 +14237,7 @@ def _check_tcp(raw, findings, counter_window, tcp_baseline):
     if retrans is not None and retrans >= 2:
         window = (f"over the last {counter_window}s" if live_retrans is not None
                   else "since boot, so this is history rather than a live rate")
-        findings.append({
+        found.append({
             "severity": "critical" if retrans >= 5 else "warning",
             "layer": 3,
             "code": "tcp_retransmits",
@@ -14224,6 +14246,7 @@ def _check_tcp(raw, findings, counter_window, tcp_baseline):
                        f"that ICMP tests can miss - anything above a few percent will be felt "
                        f"as slowness by every application on this box.",
         })
+    return found
 
 def _check_returns_that_stopped(raw, findings, stats):
     """A side that is being sent to and is acknowledging nothing.
@@ -14549,13 +14572,13 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     raw["link_stats"] = cmd_link_stats(counter_window, sample=link_sample,
                                        progress=progress)
     late = []
-    _check_counters(raw, late, duplex_by_iface)
+    findings += _check_counters(raw, duplex_by_iface)
     _check_kernel_log(raw, late)
-    _check_link_flaps(raw, late)
+    findings += _check_link_flaps(raw)
     _check_clock(raw, late)
     _check_kernel_drops(raw, late, counter_window, drops_baseline)
     _check_utilization(raw, late, counter_window, uplink_mbps)
-    _check_tcp(raw, late, counter_window, tcp_baseline)
+    findings += _check_tcp(raw, counter_window, tcp_baseline)
     _check_flows(raw, late)
     # The other plane's queues, read again now the window has run. Recv-Q is a
     # level rather than a counter, so the second reading is the measurement and
@@ -15348,7 +15371,7 @@ def collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles, paralle
         return {name: f.result() for name, f in futures.items()}
 
 
-def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
+def _check_path_mtu(raw, target, quick, inet_loss, primary_mtu):
     """The largest packet that survives the path, and what it costs.
 
     A separate question from where the packets go, asked with separate
@@ -15357,13 +15380,14 @@ def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
     because it needs the same target, which is not a reason to read it
     there.
     """
+    found = []
     # Path MTU. Skipped in quick mode (it's several more pings) and pointless
     # if the target never answered at all.
     if not quick and inet_loss is not None and inet_loss < 100:
         raw["path_mtu"] = cmd_path_mtu(target, primary_mtu or STANDARD_MTU)
         pm = raw["path_mtu"]
         if pm.get("path_mtu") is None:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "pmtu_unmeasurable",
                 "layer": 3,
@@ -15380,7 +15404,7 @@ def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
             # working machine it was broken.
             told = pm["signalled_mtu"]
             named = f" and reported it as {told}" if told is not True else ""
-            findings.append({
+            found.append({
                 "severity": "ok",
                 "code": "pmtu_reduced",
                 "layer": 3,
@@ -15393,7 +15417,7 @@ def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
                            f"same measurement without the signal is a blackhole.",
             })
         elif pm.get("path_mtu") < pm.get("iface_mtu", STANDARD_MTU):
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "code": "pmtu_blackhole",
                 "layer": 3,
@@ -15409,10 +15433,11 @@ def _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu):
                            f"routing is often asymmetric, so a service elsewhere may see a "
                            f"different limit, and the return path is not tested at all.",
             })
+    return found
 
 
 
-def _findings_from_the_walk(findings, hops, path_insight, target):
+def _findings_from_the_walk(hops, path_insight, target):
     """What the trace noticed, turned into findings.
 
     A loop, a translation, two NATs in series, a carrier NAT layer, and the
@@ -15424,6 +15449,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
     place: above this, the path is being obtained and may be retried three
     ways. Below it, the path is a fact and this is reading it.
     """
+    found = []
     if path_insight.get("loop_at"):
         lp = path_insight["loop_at"]
         # A router answering twice is a loop, or it is one router that two
@@ -15440,7 +15466,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         for hop in hops:
             if hop.get("hop") in lp["hops"]:
                 hop["blame"] = {"code": "loop", "severity": severity}
-        findings.append({
+        found.append({
             "severity": severity,
             "code": "loop",
             "layer": 3,
@@ -15468,7 +15494,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
     # themselves - which is where this check started.
     rep = path_insight.get("repeated_hop")
     if rep and not path_insight.get("loop_at"):
-        findings.append({
+        found.append({
             "severity": "ok",
             "layer": 3,
             "code": "same_router_twice",
@@ -15488,7 +15514,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         where = ("before the first hop that answered"
                  if first["hop"] is None else
                  "at hop %s (%s)" % (first["hop"], first["host"]))
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "nat_observed",
             "layer": 3,
@@ -15514,7 +15540,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         fanned = balanced_between(path_insight.get("balanced_hops"), 1,
                                   path_insight.get("demarc_hop") or len(hops) or 1)
         mark_fanout(hops, fanned)
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "double_nat",
             "layer": 3,
@@ -15544,7 +15570,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         })
 
     if path_insight.get("cgnat_hop"):
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "cgnat",
             "layer": 3,
@@ -15631,7 +15657,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
             if hop.get("hop") == qj["hop"]:
                 hop["blame"] = {"code": "queue_builds_at_hop", "severity": "warning"}
                 break
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "queue_builds_at_hop",
             "layer": 3,
@@ -15693,7 +15719,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         fanned = balanced_between(path_insight.get("balanced_hops"),
                                   max(1, wj["hop"] - 1), wj["hop"])
         mark_fanout(hops, fanned)
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "latency_wall",
             "layer": 3,
@@ -15711,6 +15737,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                    "of one link, and the size of it is real either way."
                    if fanned else "")),
         })
+    return found
 
 
 def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
@@ -15875,8 +15902,8 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                        "forwards real traffic - check the ping result above to tell them apart).",
         })
 
-    _check_path_mtu(raw, findings, target, quick, inet_loss, primary_mtu)
-    _findings_from_the_walk(findings, hops, path_insight, target)
+    findings += _check_path_mtu(raw, target, quick, inet_loss, primary_mtu)
+    findings += _findings_from_the_walk(hops, path_insight, target)
     return hops, path_insight, path_source
 
 
@@ -16276,7 +16303,7 @@ def _check_service_addresses(raw, findings):
             })
 
 
-def _check_idle_endpoint(raw, findings):
+def _check_idle_endpoint(raw):
     """One listener on an address serving nobody while its siblings serve.
 
     The address-level check above cannot see this. It asks whether traffic is
@@ -16295,6 +16322,7 @@ def _check_idle_endpoint(raw, findings):
     Wildcard listeners are left out. `*:443` answers on every address the box
     holds, so it has no address of its own to compare siblings against.
     """
+    found = []
     rows = [r for r in (raw.get("service_instances") or [])
             if not r.get("wildcard") and r.get("address")]
     by_address = {}
@@ -16311,7 +16339,7 @@ def _check_idle_endpoint(raw, findings):
             continue
         for row in idle:
             busiest = max(serving, key=lambda r: r.get("traffic") or 0)
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "service_endpoint_idle",
@@ -16325,6 +16353,7 @@ def _check_idle_endpoint(raw, findings):
                            f"- what is not is whatever should be steering clients "
                            f"to this port, or the instance behind it.",
             })
+    return found
 
 
 def _check_addressing(raw, findings):
@@ -16841,15 +16870,16 @@ def _gateway_answers_arp(arp_entries, gw):
     return None
 
 
-def _check_gateway(raw, findings, gw, probes, arp_entries=None):
+def _check_gateway(raw, gw, probes, arp_entries=None):
     """Is a gateway configured, and does it answer?
 
     Same shape as the address check: an unreadable routing table leaves the
     question open, no default route is a fault, and only when there is a
     gateway to ping does its reachability mean anything.
     """
+    found = []
     if not raw["routes"].get("ok"):
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "routes_unreadable",
             "layer": 3,
@@ -16858,7 +16888,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                        f"gateway exists is unknown - not established as missing.",
         })
     elif not gw:
-        findings.append({
+        found.append({
             "severity": "critical",
             "code": "no_gateway",
             "layer": 3,
@@ -16869,14 +16899,14 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
         raw["ping_gateway"] = probes["ping_gateway"]
         loss = parse_ping_loss(raw["ping_gateway"])
         if loss is None:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "gw_unknown",
                 "layer": 3,
                 "message": f"Could not determine reachability of the gateway ({gw}).",
             })
         elif loss >= 100 and not raw.get("ipv4", True):
-            findings.append({
+            found.append({
                 "severity": "ok",
                 "code": "gw_unmeasurable_v4",
                 "layer": 2,
@@ -16887,7 +16917,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
         elif loss >= 100:
             neighbour = _gateway_answers_arp(arp_entries, gw)
             if neighbour:
-                findings.append({
+                found.append({
                     "severity": "ok",
                     "code": "gw_icmp_filtered",
                     "layer": 2,
@@ -16900,7 +16930,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                                  "Reported so nothing below reads as an outage.",
                 })
             else:
-                findings.append({
+                found.append({
                     "severity": "critical",
                     "code": "gw_unreachable",
                     "layer": 2,
@@ -16912,7 +16942,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
         elif loss > 0:
             sent, lost = parse_ping_counts(raw["ping_gateway"])
             if sent and sent < MIN_PROBES_FOR_LOSS and lost == 1:
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "code": "gw_loss_unmeasured",
                     "layer": 2,
@@ -16923,7 +16953,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                                f"the local link unstable.",
                 })
             else:
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "code": "gw_partial_loss",
                     "layer": 2,
@@ -16932,6 +16962,7 @@ def _check_gateway(raw, findings, gw, probes, arp_entries=None):
                                + f") to the gateway ({gw}). Possible unstable cabling, "
                                  f"Wi-Fi interference, or an overloaded switch/AP.",
                 })
+    return found
 
 
 _PROXY_URL = re.compile(r"^(?:[a-z]+://)?(?:[^@/]*@)?\[?([^\]/:]+)\]?(?::(\d+))?",
@@ -17787,7 +17818,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     probes = collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles,
                             parallel=not soak)
     raw["firewall"] = firewall_window(_rules_before, cmd_firewall_counters())
-    _check_gateway(raw, findings, gw, probes, arp_entries)
+    findings += _check_gateway(raw, gw, probes, arp_entries)
 
     _check_proxy(raw, findings, target)
     inet_loss = _check_internet(raw, findings, target, probes)
@@ -17818,7 +17849,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # under --quick, where the up column simply says less.
     _build_service_instances(raw)
     # After the table, because it compares its rows.
-    _check_idle_endpoint(raw, findings)
+    findings += _check_idle_endpoint(raw)
     _check_upstream_sessions(raw, findings)
 
     say("querying each configured DNS resolver")
@@ -17867,7 +17898,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _legs = build_path_legs(raw, _sides)
     trace_each_side(_legs, findings, quick)
     count_the_hops_in(_legs, quick)
-    _check_asymmetric_path(_legs, findings)
+    findings += _check_asymmetric_path(_legs)
     # Last, because it only speaks about findings that already exist.
     _check_cpu_load(findings)
     _check_shared_hop(_legs, findings)

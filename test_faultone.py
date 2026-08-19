@@ -9824,7 +9824,7 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
 
     def test_a_route_out_and_a_different_one_back_is_reported(self):
         found = []
-        nd._check_asymmetric_path(self._legs(5, 2), found)
+        found += nd._check_asymmetric_path(self._legs(5, 2))
         self.assertEqual([f["code"] for f in found], ["path_asymmetric"])
         self.assertIn("5 hop(s) on the way out and 2 on the way back", found[0]["message"])
 
@@ -9833,14 +9833,14 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         other inferred from a TTL against an assumed starting value - so a gap
         of one falls out of the method rather than out of the network."""
         found = []
-        nd._check_asymmetric_path(self._legs(5, 4), found)
+        found += nd._check_asymmetric_path(self._legs(5, 4))
         self.assertEqual(found, [])
 
     def test_it_fires_at_the_documented_gap(self):
         for gap, expect in ((nd.ASYMMETRIC_HOP_GAP - 1, False),
                             (nd.ASYMMETRIC_HOP_GAP, True)):
             found = []
-            nd._check_asymmetric_path(self._legs(5, 5 - gap), found)
+            found += nd._check_asymmetric_path(self._legs(5, 5 - gap))
             with self.subTest(gap=gap):
                 self.assertEqual(bool(found), expect)
 
@@ -9848,7 +9848,7 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         """Most clients behind a firewall never answer ICMP, so a missing
         inbound count is the ordinary case and must not read as zero hops."""
         found = []
-        nd._check_asymmetric_path(self._legs(5, None), found)
+        found += nd._check_asymmetric_path(self._legs(5, None))
         self.assertEqual(found, [])
 
     def test_it_is_graded_because_the_walk_now_happens_first(self):
@@ -9863,7 +9863,7 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         The order is asserted the other way round now. Anything derived from
         the walk can be the answer, and this one is."""
         found = []
-        nd._check_asymmetric_path(self._legs(5, 2), found)
+        found += nd._check_asymmetric_path(self._legs(5, 2))
         self.assertEqual(found[0]["severity"], "warning")
         self.assertNotIn("path_asymmetric", nd.VERDICT_EXEMPT)
         self.assertIn("path_asymmetric", [c for c, *_ in nd.VERDICT_RULES])
@@ -9907,7 +9907,7 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
 
     def test_the_message_says_which_number_to_trust(self):
         found = []
-        nd._check_asymmetric_path(self._legs(5, 2), found)
+        found += nd._check_asymmetric_path(self._legs(5, 2))
         self.assertIn("weaker of the two", found[0]["message"])
 
 
@@ -13038,7 +13038,7 @@ class TestOneListenerAmongSiblings(unittest.TestCase):
 
     def fired(self, rows):
         out = []
-        nd._check_idle_endpoint({"service_instances": rows}, out)
+        out += nd._check_idle_endpoint({"service_instances": rows})
         return [f.get("scope") for f in out]
 
     def test_an_idle_port_beside_a_busy_one_is_named(self):
@@ -13078,9 +13078,9 @@ class TestOneListenerAmongSiblings(unittest.TestCase):
 
     def test_it_names_the_busiest_sibling_as_the_comparison(self):
         out = []
-        nd._check_idle_endpoint({"service_instances": self.rows(
+        out += nd._check_idle_endpoint({"service_instances": self.rows(
             ("10.0.0.5", 443, 40, False), ("10.0.0.5", 444, 2, False),
-            ("10.0.0.5", 8443, 0, False))}, out)
+            ("10.0.0.5", 8443, 0, False))})
         self.assertIn("10.0.0.5:443", out[0]["message"])
         self.assertIn("40", out[0]["message"])
 
@@ -13134,10 +13134,10 @@ class TestClosedConnectionsStillHoldTheirPort(unittest.TestCase):
         def message(estab, waiting):
             sock = self.table(estab=estab, waiting=waiting)
             findings = []
-            nd._check_server_limits(
+            findings += nd._check_server_limits(
                 {"lifetime": {"ephemeral_low": 32768, "ephemeral_high": 32868,
                               "ephemeral_total": 100}},
-                findings, None, {"sockets": sock})
+                None, {"sockets": sock})
             return next((f["message"] for f in findings
                          if f["code"] == "ephemeral_ports_low"), "")
 

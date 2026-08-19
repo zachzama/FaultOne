@@ -148,11 +148,27 @@ refactor that is a declared input rather than an accident of a shared list.
   a second call, and each is a judgement rather than a rewrite.
 - 16 are the straightforward case.
 
-**Done so far: `_check_bonds`.** One function, as the proof that the transform
-holds end to end - suite green, and `dev/equivalence.py` reports 195 scenarios
-with none differing, which is the bar for a refactor here rather than a green
-suite. Do the remaining 16 straightforward ones next, then the 27 with bare
-returns, then the 10 that already return a value one at a time.
+**Done so far: 17 of 53** - `_check_bonds`, then the 16 with no `return`
+statement at all, which are the straightforward category. `dev/equivalence.py`
+reports 195 scenarios with none differing after each batch, which is the bar
+for a refactor here rather than a green suite.
+
+Two things the batch taught, both worth having before the next one:
+
+- **Rewrite the signature before the call site.** The definition line contains
+  the call's own text as a substring, so replacing the call first clobbers the
+  `def`. A syntax error was the only reason that was noticed, and it would not
+  have been noticed at all if the clobbered function had still parsed.
+- **Fourteen tests call these directly**, which is worth knowing before
+  assuming the corpus is the only caller: `_check_asymmetric_path`,
+  `_check_idle_endpoint` and `_check_server_limits` all have unit tests that
+  passed a list in. That is a good sign about coverage and it means the call
+  sites in `test_faultone.py` move with each batch.
+
+Next: the 27 with a bare `return`, where every one has to become
+`return found`; then the 10 that already return a value, one at a time, since
+each needs a tuple or a second call and that is a judgement rather than a
+rewrite.
 
 Run `dev/equivalence.py` after every batch, not at the end. It compares against
 the previous release, so a batch that changes an answer is found while the

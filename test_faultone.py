@@ -1080,7 +1080,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             "ok": True, "cmd": "proxy configuration (read, not probed)", "code": 0,
             "stderr": "", "stdout": "", "env": env or {}, "system": system or {}}
         found = []
-        m._check_proxy({}, found, "8.8.8.8")
+        found += m._check_proxy({}, "8.8.8.8")
         return found
 
     def test_a_proxied_box_is_told_the_checks_went_direct(self):
@@ -1122,7 +1122,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
         m.cmd_proxy_config = lambda: {"ok": False, "cmd": "proxy configuration",
                                       "applicable": False, "error": "not available"}
         found = []
-        m._check_proxy({}, found, "8.8.8.8")
+        found += m._check_proxy({}, "8.8.8.8")
         self.assertEqual(found, [])
 
     def test_the_environment_caveat_is_only_made_when_it_applies(self):
@@ -3005,7 +3005,7 @@ class TestQuietGotchas(unittest.TestCase):
         # The call, not the definition - "def _check_dns_cache(raw, findings)"
         # contains the call as a substring, and matching that put the first
         # version of this assertion the wrong way round.
-        call = "\n    _check_dns_cache(raw, findings)"
+        call = "\n    findings += _check_dns_cache(raw)"
         self.assertIn(call, src)
         self.assertLess(src.index("dns_failed = _check_dns(raw, findings"),
                         src.index(call))
@@ -7436,7 +7436,7 @@ class TestSomethingInTheMiddle(unittest.TestCase):
     def finding_for(self, **kw):
         raw, hops, ports = self.inputs(**kw)
         out = []
-        nd._check_answered_closer(raw, out, "8.8.8.8", hops, ports)
+        out += nd._check_answered_closer(raw, "8.8.8.8", hops, ports)
         return out
 
     def test_both_readings_see_it_on_an_intercepted_path(self):
@@ -8352,7 +8352,7 @@ class TestWhatABrokerIsActuallyDoing(unittest.TestCase):
                                        "unanswered": 0},
                        "sockets": {"served_endpoints": {"10.0.0.5:443": tcp}}}
                 out = []
-                nd._check_transport_fallback(raw, out)
+                out += nd._check_transport_fallback(raw)
                 self.assertEqual(bool(out), expected)
 
     def test_a_port_that_only_answers_one_transport_is_not_a_split(self):
@@ -8465,10 +8465,10 @@ class TestWhatABrokerIsActuallyDoing(unittest.TestCase):
         self.assertIsNone(got["inner_mtu"])
         self.assertEqual(got["over_by"], 0)
         out = []
-        nd._check_encapsulation_headroom(
+        out += nd._check_encapsulation_headroom(
             {"udp_sockets": {"listeners": [{"port": "443"}]},
              "path_mtu": {"ok": True, "path_mtu": 1400},
-             "link_modes": {"interfaces": [{"name": "eth0", "mtu": 1500}]}}, out)
+             "link_modes": {"interfaces": [{"name": "eth0", "mtu": 1500}]}})
         self.assertEqual(out[0]["severity"], "ok")
         self.assertIn("cannot be read from here", out[0]["message"])
 
@@ -10932,7 +10932,7 @@ class TestSayingWhyItIsSlowAndNotOnlyThatItIs(unittest.TestCase):
             {"iface": "eth0", "kind": "fq_codel", "backlog_pkts": 4,
              "backlog_bytes": 6000, "dropped": 0}]}}
         out = []
-        nd._check_local_queue(raw, out)
+        out += nd._check_local_queue(raw)
         self.assertEqual(out, [])
 
     def test_it_fires_at_the_documented_value(self):
@@ -10942,7 +10942,7 @@ class TestSayingWhyItIsSlowAndNotOnlyThatItIs(unittest.TestCase):
                 {"iface": "eth0", "kind": "fq_codel", "backlog_pkts": pkts,
                  "backlog_bytes": pkts * 1500, "dropped": 0}]}}
             out = []
-            nd._check_local_queue(raw, out)
+            out += nd._check_local_queue(raw)
             with self.subTest(backlog=pkts):
                 self.assertEqual(bool(out), expect)
 
@@ -10953,7 +10953,7 @@ class TestSayingWhyItIsSlowAndNotOnlyThatItIs(unittest.TestCase):
             {"iface": "lo", "kind": "noqueue", "backlog_pkts": 9000,
              "backlog_bytes": 9000000, "dropped": 0}]}}
         out = []
-        nd._check_local_queue(raw, out)
+        out += nd._check_local_queue(raw)
         self.assertEqual(out, [])
 
     def test_an_empty_queue_still_rules_this_box_out(self):
@@ -13164,7 +13164,7 @@ class TestWhatArrivedAgainstWhatLeft(unittest.TestCase):
 
     def fired(self, raw):
         out = []
-        nd._check_relay_volume(raw, out)
+        out += nd._check_relay_volume(raw)
         return [f["code"] for f in out]
 
     def test_traffic_arriving_and_not_leaving_is_reported(self):
@@ -13175,7 +13175,7 @@ class TestWhatArrivedAgainstWhatLeft(unittest.TestCase):
         """A policy refusing requests produces exactly this shape. Grading it
         as a fault would make the tool wrong on a box doing its job."""
         out = []
-        nd._check_relay_volume(self.sides(500_000_000, 1_000_000), out)
+        out += nd._check_relay_volume(self.sides(500_000_000, 1_000_000))
         self.assertEqual(out[0]["severity"], "ok")
         self.assertIn("meant to stop some of it", out[0]["message"])
 
@@ -14132,7 +14132,7 @@ class TestOwnTlsListener(unittest.TestCase):
         self.assertEqual(res["names"], ["api.internal.example"])
         self.assertLessEqual(res["days_left"], 5)
         findings = []
-        nd._own_tls_findings(res, port, findings)
+        findings += nd._own_tls_findings(res, port)
         self.assertEqual([f["code"] for f in findings], ["own_tls_expiring"])
 
     def test_a_private_certificate_still_gives_up_its_expiry(self):
@@ -14148,7 +14148,7 @@ class TestOwnTlsListener(unittest.TestCase):
     def test_an_untrusted_chain_is_reported_when_expiry_is_fine(self):
         port = self.serve(days=400)
         findings = []
-        nd._own_tls_findings(nd.cmd_own_tls(port), port, findings)
+        findings += nd._own_tls_findings(nd.cmd_own_tls(port), port)
         self.assertEqual([f["code"] for f in findings], ["own_tls_untrusted"])
 
     def test_a_port_bound_to_nothing_here_says_nothing(self):
@@ -14163,7 +14163,7 @@ class TestOwnTlsListener(unittest.TestCase):
         res = nd.cmd_own_tls(port)
         self.assertIn("unreachable_locally", res)
         findings = []
-        nd._own_tls_findings(res, port, findings)
+        findings += nd._own_tls_findings(res, port)
         self.assertEqual(findings, [])
 
     def test_a_plain_tcp_service_on_a_tls_port_is_a_broken_listener(self):
@@ -14171,7 +14171,7 @@ class TestOwnTlsListener(unittest.TestCase):
         and every client is getting exactly the same thing."""
         port = self.serve(tls=False)
         findings = []
-        nd._own_tls_findings(nd.cmd_own_tls(port), port, findings)
+        findings += nd._own_tls_findings(nd.cmd_own_tls(port), port)
         self.assertEqual([f["code"] for f in findings], ["own_tls_handshake_failed"])
 
     def test_junk_in_the_certificate_bytes_is_not_read_as_a_hostname(self):
@@ -15987,7 +15987,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1050),
+            "on disk": (len(raw), 1051),
             "compressed": (len(gzip.compress(raw, 9)), 317),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }

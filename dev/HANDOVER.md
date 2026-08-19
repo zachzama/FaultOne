@@ -148,7 +148,7 @@ refactor that is a declared input rather than an accident of a shared list.
   a second call, and each is a judgement rather than a rewrite.
 - 16 are the straightforward case.
 
-**Done so far: 17 of 53** - `_check_bonds`, then the 16 with no `return`
+**Done so far: 44 of 53** - `_check_bonds`, then the 16 with no `return`
 statement at all, which are the straightforward category. `dev/equivalence.py`
 reports 195 scenarios with none differing after each batch, which is the bar
 for a refactor here rather than a green suite.
@@ -165,10 +165,40 @@ Two things the batch taught, both worth having before the next one:
   passed a list in. That is a good sign about coverage and it means the call
   sites in `test_faultone.py` move with each batch.
 
-Next: the 27 with a bare `return`, where every one has to become
-`return found`; then the 10 that already return a value, one at a time, since
-each needs a tuple or a second call and that is a judgement rather than a
-rewrite.
+The 27 with a bare `return` are done too, in two batches with
+`dev/equivalence.py` between them. Three more things they taught:
+
+- **A bare return can carry a trailing comment**, and several do. The AST has
+  already said the value is None, so the line only has to *start* with the
+  keyword - requiring it to be exactly `return` stopped a batch dead on
+  `return    # not a box with two sides to compare`.
+- **The caller's list is not always called `findings`.** `_check_clock` appends
+  into `late`, a second list the report merges further down, so the call site
+  becomes `late += _check_clock(raw)`. Take the accumulator's name from the
+  call rather than assuming.
+- **A test pins the call's source text.**
+  `test_the_cache_check_runs_after_the_resolvers_are_probed` asserts that
+  `_check_dns_cache` is called after `_check_dns`, by string. Its own comment
+  warns that the `def` line contains the call as a substring - the same hazard,
+  written down by whoever hit it first.
+
+**What is left: 14, and they are all judgement rather than rewrite.** Each
+already returns something - `_check_arp` its neighbour entries, `_check_dns`
+whether resolution failed, `_choose_target` the target and its kind - so each
+needs a tuple, a second call, or a small object, and the right answer differs
+per function. `_check_path` and `_check_ports` are large enough that they
+should probably be split first.
+
+The remaining fourteen: `_check_addressing`, `_check_arp`, `_check_call_quality`,
+`_check_dns`, `_check_flow_delay`, `_check_link_modes`,
+`_check_neighbours_and_optics`, `_check_path`, `_check_ports`,
+`_check_returns_that_stopped`, `_check_shared_hop`,
+`_check_source_reachability`, `_choose_target`, `_own_service_findings`.
+
+The transformer used for the first 44 is in the session scratchpad as
+`phaseA.py`. It rewrites the signature before the call site, converts bare
+returns, and takes the accumulator's name from the call - the three things that
+went wrong when it did not.
 
 Run `dev/equivalence.py` after every batch, not at the end. It compares against
 the previous release, so a batch that changes an answer is found while the

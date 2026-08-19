@@ -1,7 +1,7 @@
 [
  {
   "label": "this box's own queue stops being a finding",
-  "old": "    _check_local_queue(raw, findings)\n",
+  "old": "    findings += _check_local_queue(raw)\n",
   "new": ""
  },
  {

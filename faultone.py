@@ -3346,7 +3346,7 @@ def _check_cpu_load(findings):
     })
 
 
-def _check_local_queue(raw, findings):
+def _check_local_queue(raw):
     """This box holding traffic on the way out, said as a cause.
 
     The reading was already here and only half used. A deep queue on this box's
@@ -3365,15 +3365,16 @@ def _check_local_queue(raw, findings):
     latency and queuing finding and lets it explain them rather than sit beside
     them as a second opinion.
     """
+    found = []
     worst = worst_local_queue(raw)
     # Written as the condition for firing rather than as a guard against it, so
     # the bar reads the way it is documented: a queue holding exactly this many
     # is standing, and the threshold table can be checked against this line.
     standing = worst and worst["backlog_pkts"] >= LOCAL_QUEUE_STANDING_PKTS
     if not standing:
-        return
+        return found
     dropped = worst["dropped"]
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 2,
         "code": "queue_standing_here",
@@ -3390,6 +3391,7 @@ def _check_local_queue(raw, findings):
               "is the line rate, the shaper on it, or whatever is filling it - and "
               "not the network beyond."),
     })
+    return found
 
 
 def _queues_here_say(raw):
@@ -11541,7 +11543,7 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     findings += _check_thermal(stats, counter_window)
     findings += _check_udp(stats, counter_window)
     findings += _check_fragments(stats, counter_window)
-    _check_orphans(stats, findings)
+    findings += _check_orphans(stats)
 
 
 # ---------------------------------------------------------------------------
@@ -11917,7 +11919,7 @@ def other_plane(raw):
     return {"ports": sorted({str(l["port"]) for l in listeners})}
 
 
-def _check_encapsulation_headroom(raw, findings):
+def _check_encapsulation_headroom(raw):
     """The tunnel's own arithmetic, graded only where it can be.
 
     A warning needs two numbers that disagree. With only one of them this
@@ -11925,9 +11927,10 @@ def _check_encapsulation_headroom(raw, findings):
     that is useful on a broker and one that cries wolf on every box with a
     tunnel on it.
     """
+    found = []
     room = encapsulation_headroom(raw)
     if not room:
-        return
+        return found
     where = ", ".join(room["ports"])
     parts = ", ".join("%s %d" % (name, size)
                       for name, size in sorted(room["parts"].items(),
@@ -11939,7 +11942,7 @@ def _check_encapsulation_headroom(raw, findings):
         f"That overhead is estimated from the header sizes rather than measured, so "
         f"treat the last few bytes of it as approximate.")
     if room["over_by"]:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 3,
             "code": "tunnel_payload_short",
@@ -11952,8 +11955,8 @@ def _check_encapsulation_headroom(raw, findings):
                 f"handshakes all pass. Lower {room['iface']} to {room['payload']}, or "
                 f"find why the path carries less than it used to."),
         })
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "ok",
         "layer": 3,
         "code": "tunnel_payload_room",
@@ -11966,9 +11969,10 @@ def _check_encapsulation_headroom(raw, findings):
                "cannot be read from here. The number above is the ceiling it has to "
                "stay under.")),
     })
+    return found
 
 
-def _check_route_agrees(raw, findings, hops, target):
+def _check_route_agrees(raw, hops, target):
     """The trace and the kernel disagreeing about the first hop.
 
     Not a fault on its own. A box with policy routing, a second table, or a
@@ -11980,15 +11984,16 @@ def _check_route_agrees(raw, findings, hops, target):
     take. A loss figure, a latency wall, a site edge, a NAT: all measured on
     the wrong route, and all of them will read as facts about the service.
     """
+    found = []
     off = route_disagrees_with_trace(raw, hops, target)
     if not off:
-        return
+        return found
     # Read by the verdict. The paragraph above has said since it was written
     # that everything below is measured on the wrong route, and nothing acted
     # on it: a real appliance headlined a fault taken from those hops and named
     # the provider as its owner, on a path its own traffic does not take.
     raw["path_off_route"] = True
-    findings.append({
+    found.append({
         "severity": "ok",
         "layer": 3,
         "code": "trace_took_another_route",
@@ -12005,6 +12010,7 @@ def _check_route_agrees(raw, findings, hops, target):
               "holding a prefix, and it is worth knowing before acting on anything "
               "further down."),
     })
+    return found
 
 
 TELLS_THE_SENDER = {
@@ -12014,7 +12020,7 @@ TELLS_THE_SENDER = {
 }
 
 
-def _check_discard_route(raw, findings, target):
+def _check_discard_route(raw, target):
     """The target sitting inside a route this box throws traffic away on.
 
     Decisive when it happens, and it presents as a dead upstream: nothing
@@ -12022,14 +12028,15 @@ def _check_discard_route(raw, findings, target):
     packets never got onto. The route is on this box and nobody has to go
     looking further than it.
     """
+    found = []
     routes = (raw or {}).get("routes") or {}
     if not routes.get("ok"):
-        return
+        return found
     caught = discards_the_target(parse_discard_routes(routes.get("stdout") or ""),
                                  (raw or {}).get("target_ip"))
     if not caught:
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "critical",
         "layer": 3,
         "code": "target_is_discarded",
@@ -12042,6 +12049,7 @@ def _check_discard_route(raw, findings, target):
             f"that never left. The route is on this box, so this is the whole of the "
             f"fault and the place to fix it."),
     })
+    return found
 
 
 # What each check status means, in the words a reader needs rather than the
@@ -12135,7 +12143,7 @@ def answered_closer_than_the_path(raw, hops, port_results=()):
     return out or None
 
 
-def _check_answered_closer(raw, findings, target, hops, port_results):
+def _check_answered_closer(raw, target, hops, port_results):
     """Something between here and the target answering as the target.
 
     The one interception check that needs neither TLS nor a certificate.
@@ -12143,6 +12151,7 @@ def _check_answered_closer(raw, findings, target, hops, port_results):
     works where there is a handshake to read and a name to recognise. This is
     the same fault seen from the outside of the envelope, on any port.
     """
+    found = []
     seen = answered_closer_than_the_path(raw, hops, port_results) or {}
     timing, distance = seen.get("timing"), seen.get("distance")
     # Both, or nothing. Either alone is a lead and neither is worth a finding:
@@ -12152,7 +12161,7 @@ def _check_answered_closer(raw, findings, target, hops, port_results):
     # what makes this sayable - and the alternative is a warning on every box
     # with an edge node in front of it.
     if not (timing and distance):
-        return
+        return found
     parts = []
     if timing:
         parts.append(
@@ -12164,7 +12173,7 @@ def _check_answered_closer(raw, findings, target, hops, port_results):
             "the reply arrived having crossed %d router(s) on a path the trace walked "
             "%d of, counted from a starting TTL of %d"
             % (distance["replied_from"], distance["traced"], distance["ttl_assumed"]))
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "answered_closer_than_the_path",
@@ -12179,9 +12188,10 @@ def _check_answered_closer(raw, findings, target, hops, port_results):
               "below about reaching that address describes the connection to whatever "
               "answered, not to the host you named."),
     })
+    return found
 
 
-def _check_proxy_backends(raw, findings):
+def _check_proxy_backends(raw):
     """Backends the proxy on this box has taken out of rotation.
 
     The one thing on this report that the kernel cannot know. A socket table
@@ -12193,16 +12203,17 @@ def _check_proxy_backends(raw, findings):
     them in maintenance, and reporting that as a fault teaches a reader that
     this section is wrong.
     """
+    found = []
     servers = ((raw or {}).get("proxy_stats") or {}).get("servers") or []
     if not servers:
-        return
+        return found
     down = [s for s in servers if s["status"] in PROXY_IS_DOWN]
     parked = [s for s in servers if s["status"] in PROXY_ON_PURPOSE]
     if not down:
-        return
+        return found
     worst = max(down, key=lambda s: s.get("times_down") or 0)
     means = CHECK_MEANS.get(worst.get("check_status") or "")
-    findings.append({
+    found.append({
         "severity": "critical" if len(down) == len(
             [s for s in servers if s["status"] not in PROXY_ON_PURPOSE]) else "warning",
         "layer": 7,
@@ -12222,9 +12233,10 @@ def _check_proxy_backends(raw, findings):
               "here: nothing in a socket table says which backends a service has "
               "decided to stop using, or which check it was that failed."),
     })
+    return found
 
 
-def _check_inbound_filtering(raw, findings):
+def _check_inbound_filtering(raw):
     """This box turning away traffic addressed to its own service.
 
     The counterpart to what already gets said about the way out, and the more
@@ -12232,12 +12244,13 @@ def _check_inbound_filtering(raw, findings):
     that is refused here never reaches the service, and every check below the
     firewall passes because the service really is up.
     """
+    found = []
     dropped = inbound_drops_on_served_ports(raw)
     if not dropped:
-        return
+        return found
     worst = dropped[0]
     ports = ", ".join(worst["ports"])
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "inbound_filtered_here",
@@ -12251,9 +12264,10 @@ def _check_inbound_filtering(raw, findings):
             f"counted names a port this box serves."
             + (f" {len(dropped)} rules are doing it." if len(dropped) > 1 else "")),
     })
+    return found
 
 
-def _check_forwarding_shape(raw, findings):
+def _check_forwarding_shape(raw):
     """Say that the far side of the traffic this box carries is not on here.
 
     Context, never a fault. Nothing is wrong with a box that forwards inside
@@ -12262,11 +12276,12 @@ def _check_forwarding_shape(raw, findings):
     control plane, and a reader who takes them for the user path will chase
     the wrong thing.
     """
+    found = []
     shape = forwards_out_of_band(raw)
     if not shape:
-        return
+        return found
     where = ", ".join(shape["ports"]) if shape["ports"] else "its listeners"
-    findings.append({
+    found.append({
         "severity": "ok",
         "layer": 4,
         "code": "forwards_inside_tunnels",
@@ -12281,6 +12296,7 @@ def _check_forwarding_shape(raw, findings):
             f"figure or a stalled return on that side is about this box reaching the "
             f"service it enrols with, not about anyone's traffic getting through."),
     })
+    return found
 
 
 #: Ports that carry brokered traffic onward in the clear. Deliberately only the
@@ -12329,7 +12345,7 @@ def brokered_in_the_clear(raw):
             "what": sorted({CLEARTEXT_PROTOCOL_PORTS[p] for p in bare})}
 
 
-def _check_broker_leg(raw, findings):
+def _check_broker_leg(raw):
     """The onward leg, and whether what this box re-sends is protected.
 
     A box that intercepts a client's tunnel, evaluates it against policy and
@@ -12339,10 +12355,11 @@ def _check_broker_leg(raw, findings):
     Nothing asked what happened on the way back out, which is the one leg this
     box chose.
     """
+    found = []
     bare = brokered_in_the_clear(raw)
     if not bare:
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "broker_leg_in_the_clear",
@@ -12357,9 +12374,10 @@ def _check_broker_leg(raw, findings):
             f"take TLS, this is a configuration choice on one side or the other; if "
             f"it cannot, the segment it crosses is the control."),
     })
+    return found
 
 
-def _check_log_egress(raw, findings):
+def _check_log_egress(raw):
     """The leg that carries this box's own record of what it did.
 
     Three legs, not two. Client tunnels arrive, brokered traffic leaves, and
@@ -12375,15 +12393,16 @@ def _check_log_egress(raw, findings):
     means. They are latent, which is exactly what latent is for: reported
     always, and the answer only when nothing else is broken.
     """
+    found = []
     shipping = log_egress(raw)
     if not shipping:
-        return
+        return found
     what = ", ".join(shipping["what"]) or "a collector"
     named = (" (%s)" % ", ".join(shipping["shippers"][:2])
              if shipping["shippers"] else "")
 
     if shipping["stalled"]:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "log_egress_stalled",
@@ -12398,7 +12417,7 @@ def _check_log_egress(raw, findings):
         })
 
     if shipping["plaintext_ports"]:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "log_egress_plaintext",
@@ -12412,7 +12431,7 @@ def _check_log_egress(raw, findings):
                 f"other place this gets decided."),
         })
     elif shipping["sessions"]:
-        findings.append({
+        found.append({
             "severity": "ok",
             "layer": 4,
             "code": "log_egress_encrypted",
@@ -12423,9 +12442,10 @@ def _check_log_egress(raw, findings):
                 f"connections this box opened, and they are neither its control plane "
                 f"nor traffic it is brokering for anyone."),
         })
+    return found
 
 
-def _check_transport_fallback(raw, findings):
+def _check_transport_fallback(raw):
     """Clients that could not use the datagram transport and took the slow way.
 
     The fault this exists for is invisible by construction. A fallback that
@@ -12434,11 +12454,12 @@ def _check_transport_fallback(raw, findings):
     built to avoid TCP is running on TCP. Nothing else in this tool would ever
     mention it.
     """
+    found = []
     split = transport_split(raw)
     if not split or split["datagram_pct"] >= FALLBACK_WARN_PCT:
-        return
+        return found
     where = ", ".join(split["ports"])
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "transport_fell_back",
@@ -12457,9 +12478,10 @@ def _check_transport_fallback(raw, findings):
             f"is broken and nobody will report it, because from a client's side it "
             f"works and is merely slower."),
     })
+    return found
 
 
-def _check_udp_queues(raw, findings):
+def _check_udp_queues(raw):
     """Datagrams the kernel is holding that the process has not taken.
 
     The counterpart to an accept queue, for a plane that has no accept. On a
@@ -12470,13 +12492,14 @@ def _check_udp_queues(raw, findings):
     Everything careful about it is in `udp_window`, which decides what two
     readings support. This says it.
     """
+    found = []
     standing = (raw.get("udp_sockets") or {}).get("standing_queues") or []
     if not standing:
-        return
+        return found
     worst = standing[0]
     where = "%s:%s" % (worst["address"] or "*", worst["port"])
     process = owner_of_port(socket_owners(raw), worst["port"])
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "udp_queue_standing",
@@ -12494,6 +12517,7 @@ def _check_udp_queues(raw, findings):
               "say how many peers it serves or whether anything was lost in flight - "
               "those need the listener's own counters."),
     })
+    return found
 
 
 def _check_udp(stats, counter_window):
@@ -12577,15 +12601,16 @@ def _check_fragments(stats, counter_window):
     return found
 
 
-def _check_orphans(stats, findings):
+def _check_orphans(stats):
     """Connections torn down without being closed, against the ceiling."""
+    found = []
     live = stats.get("lifetime") or {}
     count, limit = live.get("tcp_orphans"), live.get("tcp_max_orphans")
     if not count or not limit:
-        return
+        return found
     pct = round(100.0 * count / limit)
     if pct >= ORPHAN_WARN_PCT:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 4,
             "code": "tcp_orphans_high",
@@ -12598,6 +12623,7 @@ def _check_orphans(stats, findings):
                        f"arrives at the far end as a connection dropped for no reason "
                        f"visible from there.",
         })
+    return found
 
 
 def _check_thermal(stats, counter_window):
@@ -12639,7 +12665,7 @@ def _check_thermal(stats, counter_window):
         })
     return found
 
-def _check_clock(raw, findings):
+def _check_clock(raw):
     """A clock that has drifted, which is a device fault reported as a service one.
 
     Deliberately a warning even at five minutes out, rather than critical.
@@ -12649,15 +12675,16 @@ def _check_clock(raw, findings):
     models. It ranks above the certificate findings instead, because if the
     clock is wrong then those readings are measuring the clock.
     """
+    found = []
     raw["clock"] = cmd_clock_sync()
     clock = raw["clock"]
     if not clock.get("ok"):
-        return
+        return found
     offset, synced = clock.get("offset_ms"), clock.get("synced")
     if offset is not None and abs(offset) >= CLOCK_SKEW_WARN_MS:
         bad = abs(offset) >= CLOCK_SKEW_BAD_MS
         direction = "ahead of" if offset > 0 else "behind"
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 7,
             "code": "clock_skewed",
@@ -12673,7 +12700,7 @@ def _check_clock(raw, findings):
                          "this clock.",
         })
     elif synced is False:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 7,
             "code": "clock_unsynced",
@@ -12683,6 +12710,7 @@ def _check_clock(raw, findings):
                        f"and certificate checks in ways that look like the service is at "
                        f"fault rather than this box.",
         })
+    return found
 
 
 def _fmt_span(seconds):
@@ -12703,7 +12731,7 @@ def _fmt_ago(seconds):
     return f"{span} ago" if span else "at an unknown time"
 
 
-def _check_kernel_log(raw, findings):
+def _check_kernel_log(raw):
     """Faults the kernel timestamped, which the counters can only average.
 
     The counter checks answer "how much, since boot". This answers "when", and
@@ -12711,16 +12739,17 @@ def _check_kernel_log(raw, findings):
     before _check_link_flaps so the flap check can see what it found and stay
     quiet rather than reporting the same link twice at two different urgencies.
     """
+    found = []
     raw["kernel_log"] = cmd_kernel_log()
     klog = raw["kernel_log"]
     if not klog.get("ok"):
-        return
+        return found
 
     resets = [e for e in klog["recent"] if e["kind"] == "reset"]
     if resets:
         ifaces = sorted({e["iface"] for e in resets if e["iface"]})
         where = f" on {', '.join(ifaces)}" if ifaces else ""
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 1,
             "code": "nic_reset_logged",
@@ -12738,7 +12767,7 @@ def _check_kernel_log(raw, findings):
         newest = min(e["age_seconds"] for e in carrier)
         ifaces = sorted({e["iface"] for e in carrier if e["iface"]})
         raw["kernel_log"]["flapping_ifaces"] = ifaces
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 1,
             "code": "link_flapping_logged",
@@ -12750,6 +12779,7 @@ def _check_kernel_log(raw, findings):
                        f"been up a while. This is a physical fault: the cable, the "
                        f"transceiver, or the switch port.",
         })
+    return found
 
 
 def _check_link_flaps(raw):
@@ -13295,7 +13325,7 @@ def _check_own_tls(raw, findings, quick=False):
     for addr, port in listening[:OWN_TLS_MAX_LISTENERS]:
         res = cmd_own_tls(port, address=addr)
         results.append(res)
-        _own_tls_findings(res, port, findings)
+        findings += _own_tls_findings(res, port)
     skipped = len(listening) - len(results)
     if results:
         lines = [
@@ -13320,7 +13350,7 @@ def _check_own_tls(raw, findings, quick=False):
         }
 
 
-def _check_upstream_sessions(raw, findings):
+def _check_upstream_sessions(raw):
     """A box serving clients while connected to nothing itself.
 
     The shape this is for: something that only exists to relay, brokering
@@ -13340,16 +13370,17 @@ def _check_upstream_sessions(raw, findings):
     failing rather than a box not trying, syn_sent_backlog already says so, and
     two findings for one condition is how a report stops being a verdict.
     """
+    found = []
     sockets = raw.get("sockets") or {}
     if not sockets.get("ok"):
-        return
+        return found
     inbound = sockets.get("inbound") or 0
     outbound = sockets.get("outbound") or 0
     if outbound or inbound < SERVING_INBOUND_MIN:
-        return
+        return found
     if (sockets.get("states") or {}).get("SYN_SENT", 0) >= SYN_SENT_WARN:
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "ok",
         "code": "no_upstream_sessions",
         "layer": 4,
@@ -13360,6 +13391,7 @@ def _check_upstream_sessions(raw, findings):
                    f"connection those clients are making is failing on the far side "
                    f"of this box while everything measured here stays healthy.",
     })
+    return found
 
 
 # Enough traffic on a side before its volume says anything, and the ratio at
@@ -13480,7 +13512,7 @@ def _check_source_reachability(raw, findings):
     })
 
 
-def _check_relay_volume(raw, findings):
+def _check_relay_volume(raw):
     """What arrived on one side against what left on the other.
 
     Context and not a fault, for the same reason no_upstream_sessions is. A box
@@ -13494,14 +13526,15 @@ def _check_relay_volume(raw, findings):
     magnitude means anything - a side carrying a twentieth of the other is a
     different claim from a side carrying nine tenths of it.
     """
+    found = []
     by_side = ((raw.get("tcp_flows") or {}).get("by_side")) or {}
     client, backend = by_side.get("client") or {}, by_side.get("backend") or {}
     if not client or not backend:
-        return                              # not a box with two sides to compare
+        return found                              # not a box with two sides to compare
     # A kernel that does not report bytes_received leaves this unanswerable,
     # and an unanswered question must not read as a side carrying nothing.
     if not client.get("volume_readable") or not backend.get("volume_readable"):
-        return
+        return found
     arrived = client.get("bytes_in") or 0
     forwarded = backend.get("bytes_out") or 0
     # Written as what has to be true, the way the direction rules are, so each
@@ -13510,8 +13543,8 @@ def _check_relay_volume(raw, findings):
     enough_to_judge = arrived >= RELAY_MIN_BYTES
     broadly_relaying = forwarded * RELAY_RATIO >= arrived
     if not enough_to_judge or broadly_relaying:
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "ok",
         "code": "relay_volume_lopsided",
         "layer": 4,
@@ -13524,6 +13557,7 @@ def _check_relay_volume(raw, findings):
                    f"the two. If this box is supposed to be relaying most of "
                    f"what it receives, the far side is where to look.",
     })
+    return found
 
 
 def _fmt_bytes(n):
@@ -13690,7 +13724,7 @@ def _check_own_service(raw, findings, quick=False):
         }
 
 
-def _own_service_timing(res, port, findings):
+def _own_service_timing(res, port):
     """Which part of the answer took the time.
 
     "The service answered in 900ms" is true and useless. Getting a connection,
@@ -13703,17 +13737,18 @@ def _own_service_timing(res, port, findings):
     Context rather than a fault. What counts as slow depends entirely on what
     the service does, and a number picked here would be wrong for most of them.
     """
+    found = []
     phases = res.get("phases") or {}
     wait, connect = phases.get("wait_ms"), phases.get("connect_ms")
     if wait is None or connect is None:
-        return
+        return found
     tls = phases.get("tls_ms")
     parts = [("waiting for the service to answer", wait),
              ("getting a connection", connect)]
     if tls is not None:
         parts.append(("finishing the TLS handshake", tls))
     lead = max(parts, key=lambda pair: pair[1])
-    findings.append({
+    found.append({
         "severity": "ok",
         "layer": 7,
         "code": "own_service_timing",
@@ -13725,6 +13760,7 @@ def _own_service_timing(res, port, findings):
                    f"first parts should be close to nothing - whatever is left is the "
                    f"service thinking, and none of it is the network.",
     })
+    return found
 
 
 def _own_service_findings(res, port, findings, owners=()):
@@ -13756,7 +13792,7 @@ def _own_service_findings(res, port, findings, owners=()):
                       "box is dropping traffic to that port."),
             })
         return
-    _own_service_timing(res, port, findings)
+    findings += _own_service_timing(res, port)
     if res.get("silent"):
         findings.append({
             "severity": "critical",
@@ -13830,12 +13866,13 @@ def _own_service_findings(res, port, findings, owners=()):
         })
 
 
-def _own_tls_findings(res, port, findings):
+def _own_tls_findings(res, port):
     """Turn one listener's handshake into findings, if it deserves any."""
+    found = []
     if res.get("unreachable_locally"):
-        return          # bound elsewhere; nothing was checked and nothing is wrong
+        return found          # bound elsewhere; nothing was checked and nothing is wrong
     if not res.get("ok"):
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 7,
             "code": "own_tls_handshake_failed",
@@ -13844,10 +13881,10 @@ def _own_tls_findings(res, port, findings):
                        f"reach this service over TLS is getting the same thing, and no "
                        f"check that looks outward from here would ever show it.",
         })
-        return
+        return found
     days = res.get("days_left")
     if res.get("expired") or (days is not None and days < 0):
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 7,
             "code": "own_tls_expired",
@@ -13857,7 +13894,7 @@ def _own_tls_findings(res, port, findings):
                          "wrong and no amount of looking at the network will find it.",
         })
     elif days is not None and days <= CERT_EXPIRY_WARN_DAYS:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 7,
             "code": "own_tls_expiring",
@@ -13868,7 +13905,7 @@ def _own_tls_findings(res, port, findings):
                          "the network side.",
         })
     elif res.get("verified") is False:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 7,
             "code": "own_tls_untrusted",
@@ -13881,18 +13918,20 @@ def _own_tls_findings(res, port, findings):
                          "exactly the failure that reaches customers and not you."
                        + (" " + (own_cert_trust_note(res.get("verify_error")) or "")).rstrip(),
         })
+    return found
 
 
-def _check_neigh_table(raw, findings):
+def _check_neigh_table(raw):
     """The ceiling on how many neighbours this box can talk to at once."""
+    found = []
     if OS_NAME != "Linux":
         raw["neigh_table"] = {"applicable": False}
-        return
+        return found
     table = _read_neigh_table()
     raw["neigh_table"] = table
     limit, entries = table.get("gc_thresh3"), table.get("entries")
     if table.get("table_fulls"):
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 3,
             "code": "neigh_table_full",
@@ -13907,7 +13946,7 @@ def _check_neigh_table(raw, findings):
                          "net.ipv4.neigh.default.gc_thresh3 and the two thresholds below it.",
         })
     elif limit and entries and round(100.0 * entries / limit) >= NEIGH_TABLE_WARN_PCT:
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 3,
             "code": "neigh_table_near_limit",
@@ -13918,6 +13957,7 @@ def _check_neigh_table(raw, findings):
                        f"neighbours at random on a segment that is working - raise "
                        f"net.ipv4.neigh.default.gc_thresh3 before that rather than after.",
         })
+    return found
 
 
 def _check_bonds(raw):
@@ -14573,9 +14613,9 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
                                        progress=progress)
     late = []
     findings += _check_counters(raw, duplex_by_iface)
-    _check_kernel_log(raw, late)
+    late += _check_kernel_log(raw)
     findings += _check_link_flaps(raw)
-    _check_clock(raw, late)
+    late += _check_clock(raw)
     _check_kernel_drops(raw, late, counter_window, drops_baseline)
     _check_utilization(raw, late, counter_window, uplink_mbps)
     findings += _check_tcp(raw, counter_window, tcp_baseline)
@@ -14586,18 +14626,18 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     if raw.get("udp_sockets", {}).get("ok") and counter_window:
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
-    _check_udp_queues(raw, late)
-    _check_proxy_backends(raw, late)
-    _check_inbound_filtering(raw, late)
-    _check_forwarding_shape(raw, late)
-    _check_log_egress(raw, late)
-    _check_broker_leg(raw, late)
-    _check_transport_fallback(raw, late)
-    _check_encapsulation_headroom(raw, late)
+    late += _check_udp_queues(raw)
+    late += _check_proxy_backends(raw)
+    late += _check_inbound_filtering(raw)
+    late += _check_forwarding_shape(raw)
+    late += _check_log_egress(raw)
+    late += _check_broker_leg(raw)
+    late += _check_transport_fallback(raw)
+    late += _check_encapsulation_headroom(raw)
     # After the flows, because it reads them. Wired in beside the sessions
     # check first, which runs before the socket table is even collected, so
     # it read an empty side and quietly concluded nothing every time.
-    _check_relay_volume(raw, late)
+    late += _check_relay_volume(raw)
     _check_source_reachability(raw, late)
     findings[slot:slot] = late
 
@@ -14633,7 +14673,7 @@ def _check_device_and_link(raw, findings, link_sample):
     # Duplicate IP: Wireshark's classic ARP finding, from the table this box
     # already keeps rather than from a capture.
     findings += _check_bonds(raw)
-    _check_neigh_table(raw, findings)
+    findings += _check_neigh_table(raw)
     arp_entries = _check_arp(raw, findings)
     return neighbours, primary_mtu, duplex_by_iface, arp_entries
 
@@ -14799,7 +14839,7 @@ def _check_dns(raw, findings, target, inet_loss, quick):
     return dns_failed
 
 
-def _findings_for_one_port(raw, findings, target, port_spec, port_result,
+def _findings_for_one_port(raw, target, port_spec, port_result,
                            timeout, speculative):
     """Everything one requested port can turn out to be.
 
@@ -14814,6 +14854,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
     nested loop in here, so each of them meant "nothing more to say about
     this port", which is what a return says.
     """
+    found = []
     raw[f"port_{target}_{port_spec}"] = port_result
     # A name with records for both families, where one of them doesn't
     # work, costs every client a timeout before it falls back - on every
@@ -14822,7 +14863,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
     # than down for everyone.
     if port_result.get("family_mismatch"):
         dead = ", ".join(f"IPv{v}" for v in port_result["family_mismatch"])
-        findings.append({
+        found.append({
             "severity": "warning",
             "layer": 3,
             "code": "family_unreachable",
@@ -14837,11 +14878,11 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
     try:
         port_num = int(port_spec)
     except (TypeError, ValueError):
-        return
+        return found
     if port_result.get("ok") and port_num in TLS_PORTS:
         tls = cmd_tls_check(target, port_num)
         if not tls:
-            return
+            return found
         raw[f"tls_{target}_{port_num}"] = tls
         port_result["tls"] = {k: tls.get(k) for k in
                               ("tls_version", "subject", "issuer", "expires",
@@ -14855,7 +14896,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
         if (tls_ms is not None and tcp_ms is not None
                 and tls_ms >= TLS_HANDSHAKE_FLOOR_MS
                 and tcp_ms > 0 and tls_ms / tcp_ms >= TLS_HANDSHAKE_RATIO):
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 7,
                 "code": "tls_handshake_slow",
@@ -14867,7 +14908,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"The network delivered the connection in {tcp_ms:.0f}ms.",
             })
         if not tls.get("ok"):
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 4,
                 "code": "tls_handshake_failed",
@@ -14876,7 +14917,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"Something is listening; whatever it is isn't serving TLS. A "
                            f"port check alone would have called this healthy.",
             })
-            return
+            return found
         issuer = (tls.get("issuer") or "").lower()
         if tls.get("verified") is False:
             # Two separate findings rather than one with a computed code:
@@ -14887,7 +14928,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                         + (f", and was issued by {tls.get('issuer')}"
                            if tls.get("issuer") else "") + ". ")
             if tls.get("intercepted_by") or any(h in issuer for h in INTERCEPTION_HINTS):
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "layer": 7,
                     "code": "tls_intercepted",
@@ -14898,7 +14939,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                                           "look perfect.",
                 })
             else:
-                findings.append({
+                found.append({
                     "severity": "warning",
                     "layer": 7,
                     "code": "tls_untrusted",
@@ -14909,7 +14950,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                 })
         ahead = tls.get("not_yet_valid_days")
         if ahead:
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "layer": 7,
                 "code": "tls_not_yet_valid",
@@ -14922,7 +14963,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
             })
         days = tls.get("days_left")
         if tls.get("expired"):
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "layer": 7,
                 "code": "tls_expired",
@@ -14931,7 +14972,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"which is why this looks like a network fault and isn't one.",
             })
         elif days is not None and days < 0:
-            findings.append({
+            found.append({
                 "severity": "critical",
                 "layer": 7,
                 "code": "tls_expired",
@@ -14940,7 +14981,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"refuse the connection outright; the network is fine.",
             })
         elif days is not None and days <= CERT_EXPIRY_WARN_DAYS:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "layer": 7,
                 "code": "tls_expiring",
@@ -14957,7 +14998,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
         suffix = (" This came from the 'common' preset rather than a port you named, so "
                   "plenty of hosts legitimately don't answer here." if speculative else "")
         if reason == "refused":
-            findings.append({
+            found.append({
                 "severity": severity,
                 "code": "port_refused",
                 "layer": 4,
@@ -14966,7 +15007,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"may not be running, or a firewall is blocking it." + suffix,
             })
         elif reason == "no_route":
-            findings.append({
+            found.append({
                 # Never speculative: a missing route is this box's own
                 # configuration whichever port asked the question, and a
                 # preset port finding one is the preset doing its job.
@@ -14982,7 +15023,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"points at an interface that is down.",
             })
         elif reason == "host_unreachable":
-            findings.append({
+            found.append({
                 "severity": severity,
                 "code": "port_host_unreachable",
                 "layer": 3,
@@ -14994,7 +15035,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"hop." + suffix,
             })
         else:  # timeout
-            findings.append({
+            found.append({
                 "severity": severity,
                 "code": "port_timeout",
                 "layer": 4,
@@ -15002,6 +15043,7 @@ def _findings_for_one_port(raw, findings, target, port_spec, port_result,
                            f"{port_result.get('error', 'no response')}. Likely a routing or "
                            f"packet-loss issue rather than a firewall rule." + suffix,
             })
+    return found
 
 
 
@@ -15033,8 +15075,13 @@ def _check_ports(raw, findings, target, check_ports, quick, speculative=False):
         results = [cmd_check_port(target, p, timeout=timeout) for p in check_ports]
     for port_spec, port_result in zip(check_ports, results):
         port_results.append(port_result)
-        _findings_for_one_port(raw, findings, target, port_spec,
-                               port_result, timeout, speculative)
+        findings += _findings_for_one_port(
+            raw,
+            target,
+            port_spec,
+            port_result,
+            timeout,
+            speculative)
     return port_results
 
 
@@ -15821,8 +15868,8 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # route this box would actually use. Everything below reads differently
         # if they are not.
         raw["route_to"] = cmd_route_to(target)
-        _check_discard_route(raw, findings, target)
-        _check_route_agrees(raw, findings, hops, target)
+        findings += _check_discard_route(raw, target)
+        findings += _check_route_agrees(raw, hops, target)
         path_insight = annotate_hops(
             hops, gw, target,
             sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")
@@ -16138,7 +16185,7 @@ def source_address_is_held(address):
         return False
 
 
-def _check_source_address(raw, findings):
+def _check_source_address(raw):
     """What this box holds, and whether it holds what the run was told to use.
 
     Two findings out of one reading. Without --source, a service address is
@@ -16151,6 +16198,7 @@ def _check_source_address(raw, findings):
     redundant pair the backup node holds its own address, reaches everything
     from it, and reports a healthy box that is serving nothing.
     """
+    found = []
     addresses = raw.get("own_addresses") or []
     service = service_addresses(addresses)
     raw["service_addresses"] = service
@@ -16158,7 +16206,7 @@ def _check_source_address(raw, findings):
     if service and not SOURCE_ADDRESS:
         named = ", ".join("%s on %s" % (s["address"], s["interface"] or "?")
                           for s in service[:4])
-        findings.append({
+        found.append({
             "severity": "ok",
             "code": "service_address_present",
             "layer": 3,
@@ -16171,7 +16219,7 @@ def _check_source_address(raw, findings):
         })
 
     if not SOURCE_ADDRESS:
-        return
+        return found
 
     raw["source_address"] = SOURCE_ADDRESS
     held = source_address_is_held(SOURCE_ADDRESS)
@@ -16181,7 +16229,7 @@ def _check_source_address(raw, findings):
         where = (" (%s on %s)" % ("/%s" % match[0]["prefix"] if match[0]["prefix"]
                                   else "no prefix", match[0]["interface"] or "?")
                  ) if match else ""
-        findings.append({
+        found.append({
             "severity": "ok",
             "code": "bound_to_source_address",
             "layer": 3,
@@ -16193,7 +16241,7 @@ def _check_source_address(raw, findings):
                        f"check left from whichever address the kernel chose.",
         })
     else:
-        findings.append({
+        found.append({
             "severity": "critical",
             "code": "source_address_not_held",
             "layer": 3,
@@ -16204,6 +16252,7 @@ def _check_source_address(raw, findings):
                        f"run that let the kernel choose would have measured this node's "
                        f"own address and called the box healthy.",
         })
+    return found
 
 
 _WILDCARD_BINDS = ("", "*", "0.0.0.0", "::", "[::]", "*.*")
@@ -16238,7 +16287,7 @@ def _serves(bound, address):
     return False
 
 
-def _check_service_addresses(raw, findings):
+def _check_service_addresses(raw):
     """A service address that is up, and whether anything is actually using it.
 
     Holding the address is the easy half and the tool now does it. The half
@@ -16256,10 +16305,11 @@ def _check_service_addresses(raw, findings):
     normal shape of the deployment this exists for, so an absent listener has
     to be reported as something to look at rather than as a broken box.
     """
+    found = []
     service = raw.get("service_addresses") or []
     sockets = raw.get("sockets") or {}
     if not service or not sockets.get("ok"):
-        return                              # nothing to say, or no way to tell
+        return found                              # nothing to say, or no way to tell
 
     bound = sockets.get("bound") or []
     served_on = sockets.get("served_on") or {}
@@ -16275,7 +16325,7 @@ def _check_service_addresses(raw, findings):
         # reaching this machine and choosing somewhere other than this address.
         arriving_elsewhere = sum(served_on.values())
         if not _serves(bound, address):
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "service_address_unserved",
                 "layer": 4,
@@ -16289,7 +16339,7 @@ def _check_service_addresses(raw, findings):
                            f"see and this is expected.",
             })
         elif arriving_elsewhere:
-            findings.append({
+            found.append({
                 "severity": "warning",
                 "code": "service_address_idle",
                 "layer": 4,
@@ -16301,6 +16351,7 @@ def _check_service_addresses(raw, findings):
                            f"traffic, a partner still answering for it, or a load "
                            f"balancer that has taken this box out of rotation.",
             })
+    return found
 
 
 def _check_idle_endpoint(raw):
@@ -16371,8 +16422,8 @@ def _check_addressing(raw, findings):
     # first time anyone writes `if raw["ipv4"]`. A key should mean one thing.
     raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
     raw["own_addresses"] = parse_own_addresses(raw["interfaces"])
-    _check_source_address(raw, findings)
-    _check_service_addresses(raw, findings)
+    findings += _check_source_address(raw)
+    findings += _check_service_addresses(raw)
     if not raw["interfaces"].get("ok"):
         # No command could describe the interfaces, so ask the kernel for the
         # one fact this finding turns on. It answers on a box shipping none of
@@ -16599,7 +16650,7 @@ LOCAL_RESOLVERS = {
 }
 
 
-def _check_dns_cache(raw, findings):
+def _check_dns_cache(raw):
     """Are we asking a cache on this box, or a server on the network?
 
     It changes what every DNS answer here means. A stale entry in a cache on
@@ -16608,16 +16659,17 @@ def _check_dns_cache(raw, findings):
     exactly the shape of "it works for me". Worth saying before any resolver
     result below is read as the network's answer.
     """
+    found = []
     health = raw.get("dns_health") or {}
     if not health.get("ok"):
-        return
+        return found
     local = [(r.get("server"), LOCAL_RESOLVERS.get((r.get("server") or "").strip()))
              for r in health.get("resolvers") or []
              if _flow_is_local((r.get("server") or "").strip())]
     if not local:
-        return
+        return found
     named = ", ".join(f"{s} ({n})" if n else str(s) for s, n in local)
-    findings.append({
+    found.append({
         "severity": "ok",
         "layer": 7,
         "code": "dns_local_cache",
@@ -16628,9 +16680,10 @@ def _check_dns_cache(raw, findings):
                    f"machine somebody tries, and outlives the upstream being fixed. Flush "
                    f"it before concluding anything about DNS from these results.",
     })
+    return found
 
 
-def _check_idle(raw, findings):
+def _check_idle(raw):
     """Neither listening for anyone nor talking to anything.
 
     A box that carries traffic over links it opens itself - a connector to some
@@ -16643,23 +16696,24 @@ def _check_idle(raw, findings):
     Our own session is excluded. We arrived over it, so counting it would mean
     this could never fire from the place it is run.
     """
+    found = []
     sock = raw.get("sockets") or {}
     if not sock.get("ok"):
-        return
+        return found
     # "No peers listed" and "the peer list was never produced" are different
     # answers, and only the first is evidence. A parse that predates this key,
     # or a platform whose socket table it cannot read, must not be reported as
     # a box with nothing connected to it.
     if "peers" not in sock or "listen_ports" not in sock:
-        return
+        return found
     if sock.get("listen_ports"):
-        return                  # something is bound; _check_rotation covers it
+        return found                  # something is bound; _check_rotation covers it
     ssh_peer, _port = _own_ssh_peer()
     others = [peer for peer, _local in (sock.get("peers") or [])
               if peer and peer != ssh_peer and not _flow_is_local(peer)]
     if others:
-        return
-    findings.append({
+        return found
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "no_traffic_at_all",
@@ -16673,9 +16727,10 @@ def _check_idle(raw, findings):
                      "fault. Check the service is running and can reach what it "
                      "registers with before looking at anything below.",
     })
+    return found
 
 
-def _check_rotation(raw, findings):
+def _check_rotation(raw):
     """Listening, healthy, and nobody is talking to it.
 
     The failure a load balancer produces looks like nothing at all from the
@@ -16683,15 +16738,16 @@ def _check_rotation(raw, findings):
     is fine, and no traffic arrives. Every check in this tool passes. It is
     the most common way a proxy is "down" and the least visible from here.
     """
+    found = []
     sock = raw.get("sockets") or {}
     if not sock.get("ok"):
-        return
+        return found
     ports = [p for p in (sock.get("listen_ports") or []) if p in SERVING_PORTS]
     if not ports:
-        return                      # nothing here exists to be connected to
+        return found                      # nothing here exists to be connected to
     inbound = sock.get("inbound") or 0
     if inbound >= SERVING_INBOUND_MIN:
-        return                      # clients are connected; whatever else is wrong
+        return found                      # clients are connected; whatever else is wrong
     # A datagram listener serves peers the kernel never records, so an empty TCP
     # table is not an empty box. On one that forwards user traffic over UDP this
     # fired while every tunnel it was built to carry was up, and said the service
@@ -16700,7 +16756,7 @@ def _check_rotation(raw, findings):
     datagram = (raw.get("udp_sockets") or {}).get("listeners") or []
     if datagram:
         where = ", ".join(str(p) for p in ports_in_order({l["port"] for l in datagram})[:4])
-        findings.append({
+        found.append({
             "severity": "ok",
             "layer": 4,
             "code": "clients_may_be_on_the_datagram_plane",
@@ -16711,7 +16767,7 @@ def _check_rotation(raw, findings):
                 f"cannot say how many are being served."
                 + _tunnels_counted(raw)),
         })
-        return
+        return found
     # Named directly rather than through dominant_peer: that asks whether one
     # address carries *most* of the traffic, and here there is barely any
     # traffic to carry. With one or two connections the peer is the whole
@@ -16719,7 +16775,7 @@ def _check_rotation(raw, findings):
     listening = set(ports)
     who = sorted({peer for peer, local in (sock.get("peers") or [])
                   if peer and local in listening})
-    findings.append({
+    found.append({
         "severity": "warning",
         "layer": 4,
         "code": "no_clients_connected",
@@ -16735,6 +16791,7 @@ def _check_rotation(raw, findings):
               "genuinely quiet period. Every other check here will pass while this "
               "is true, so check the balancer's view of this box before its own."),
     })
+    return found
 
 
 def _serves_traffic(raw):
@@ -17091,7 +17148,7 @@ WHAT_A_REFUSAL_MEANS = {
 }
 
 
-def _check_proxy(raw, findings, target):
+def _check_proxy(raw, target):
     """Say when the checks and the traffic take different routes.
 
     Every probe here goes direct: ping, traceroute and a TCP connect do not
@@ -17105,6 +17162,7 @@ def _check_proxy(raw, findings, target):
     thirty-odd findings below are about a route that may not be the one in
     use, which is the reader's to weigh and not the tool's to guess at.
     """
+    found = []
     cfg = cmd_proxy_config()
     raw["proxy"] = cfg
     # A collector that could not run returns the shape every other one does,
@@ -17117,7 +17175,7 @@ def _check_proxy(raw, findings, target):
     pac = sysc.get("ProxyAutoConfigEnable") == "1"
     wpad = sysc.get("ProxyAutoDiscoveryEnable") == "1"
     if not (env or on or pac or wpad):
-        return
+        return found
 
     where = []
     if env:
@@ -17141,7 +17199,7 @@ def _check_proxy(raw, findings, target):
             if not p["reachable"]]
     if dead:
         worst = dead[0]
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 7,
             "code": "proxy_unreachable",
@@ -17169,7 +17227,7 @@ def _check_proxy(raw, findings, target):
     if refused:
         worst = refused[0]
         why = PROXY_REFUSES[worst["status"]]
-        findings.append({
+        found.append({
             "severity": "critical",
             "layer": 7,
             "code": "proxy_denies_this_box",
@@ -17186,7 +17244,7 @@ def _check_proxy(raw, findings, target):
                    "is presenting.")),
         })
 
-    findings.append({
+    found.append({
         "severity": "ok",
         "layer": 7,
         "code": "proxy_configured",
@@ -17201,6 +17259,7 @@ def _check_proxy(raw, findings, target):
                       "what a service running here sees." if env and not (on or pac or wpad)
                       else ""),
     })
+    return found
 
 
 def _check_internet(raw, findings, target, probes):
@@ -17619,7 +17678,7 @@ def _survey_this_box(raw, findings):
     # rather than with the late checks so it lands below the layer-3 findings
     # it explains, which is what makes it the cause of them rather than a
     # second opinion beside them.
-    _check_local_queue(raw, findings)
+    findings += _check_local_queue(raw)
     # PROTOTYPE: what the proxy on this box believes about its own backends,
     # if there is one and it is willing to say. Absent on almost every box.
     raw["proxy_stats"] = cmd_haproxy_stats()
@@ -17820,7 +17879,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     raw["firewall"] = firewall_window(_rules_before, cmd_firewall_counters())
     findings += _check_gateway(raw, gw, probes, arp_entries)
 
-    _check_proxy(raw, findings, target)
+    findings += _check_proxy(raw, target)
     inet_loss = _check_internet(raw, findings, target, probes)
 
     say("reading the path and measuring MTU")
@@ -17840,8 +17899,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # whether something answers from outside, this shows what is bound here at
     # all - and on which interface rather than just loopback.
     raw["ports"] = cmd_listen_ports()
-    _check_rotation(raw, findings)
-    _check_idle(raw, findings)
+    findings += _check_rotation(raw)
+    findings += _check_idle(raw)
     _check_own_tls(raw, findings, quick)
     _check_own_service(raw, findings, quick)
     # After both, so the rows carry whatever those two learned. It reads what
@@ -17850,14 +17909,14 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _build_service_instances(raw)
     # After the table, because it compares its rows.
     findings += _check_idle_endpoint(raw)
-    _check_upstream_sessions(raw, findings)
+    findings += _check_upstream_sessions(raw)
 
     say("querying each configured DNS resolver")
     dns_failed = _check_dns(raw, findings, target, inet_loss, quick)
     # After the resolvers are probed, not before: this reads what that check
     # collected, and running it first meant it read an empty dict and said
     # nothing, on every box, silently.
-    _check_dns_cache(raw, findings)
+    findings += _check_dns_cache(raw)
     # Check specific ports if requested
     if check_ports:
         say(f"checking {len(check_ports)} port(s) on {target}")
@@ -17866,7 +17925,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # After the port checks, because it compares how long a handshake took
     # against how long the path is, and those timings are what they produce.
     # Called earlier it read an empty list and concluded nothing, silently.
-    _check_answered_closer(raw, findings, target, hops, port_results)
+    findings += _check_answered_closer(raw, target, hops, port_results)
 
     # Everything else is done; close the counter window and report on it.
     if counter_window:

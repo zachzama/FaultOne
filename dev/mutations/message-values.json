@@ -1,0 +1,7 @@
+[
+ {
+  "label": "a value in a message is wrong, the words are not (line 12691)",
+  "old": "            \"message\": f\"This device's clock is {abs(offset) / 1000:.0f}s {direction} its time \"",
+  "new": "            \"message\": f\"This device's clock is {0:.0f}s {direction} its time \""
+ }
+]

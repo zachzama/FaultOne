@@ -23348,6 +23348,12 @@ class TestEveryFindingFires(unittest.TestCase):
                 fired = [f for f in report["findings"] if f.get("code") == "clock_skewed"]
                 self.assertTrue(fired)
                 self.assertIn(expect, fired[0]["message"])
+                # And the number, not only the words. A sweep replacing every
+                # numeric placeholder in every finding message with a literal
+                # zero left 21 of 24 mutations alive: the messages say the
+                # right sentence about whatever value happens to be there, and
+                # this one is the size of the skew, which is the whole finding.
+                self.assertIn("%.0fs " % (offset / 1000), fired[0]["message"])
 
     def test_a_box_with_no_time_daemon_says_so_rather_than_nothing(self):
         """A check that cannot run is never reported as a fault - and a clock

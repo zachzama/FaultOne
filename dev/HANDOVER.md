@@ -285,6 +285,38 @@ does not check that the phrase stays away when it should. Three mutations lived
 in that one gap. Grep the suite for `assertIn` on a message and ask what else
 would still pass.
 
+## Open, and the largest thing found so far: the numbers in messages
+
+The third pattern was swept the way the `ok` guards were, and it is much
+worse than the family that prompted it.
+
+**Method.** Every finding message built from an f-string, every numeric
+placeholder in one - `{expr:.0f}` - replaced by a literal `0`. Type-safe, and
+it leaves every word of the sentence exactly as it was. A test that asserts the
+phrase still passes; only a test that asserts the *value* fails.
+
+**Result: 21 of 24 survived.** There are 62 such placeholders in the file and
+177 messages built this way. A finding can say `0ms` where it means `580ms`,
+`0%` where it means `90%`, and the suite is silent.
+
+That matters more than the guard gaps above it. The numbers are the evidence
+somebody acts on - "hop 3 adds 57ms of the delay that varies" sends an engineer
+to hop 3, and the same sentence with a wrong number sends them nowhere. 205
+assertions in the suite check message text; almost all of them check words.
+
+**Fixed as proof: one.** `clock_skewed` now asserts the size of the skew, which
+is the whole finding, not just whether the message says "Kerberos".
+
+**How to work through the rest.** Regenerate the set - the generator is six
+lines of regex over `faultone.py` and is described above - run it, and for each
+survivor add the value to whichever test already asserts that message's words.
+Most survivors already have a test; it asserts the sentence and not the number,
+so the fix is usually one line in an existing test rather than a new one.
+
+Three messages had no assertion on their content at all and are the place to
+start: the port timing breakdown (`connect / TLS / waiting`, which is the whole
+value of that finding), the clock skew, and the jitter-against-RTT pair.
+
 ## The `ok` guards: a family, and the contract underneath them
 
 The first pattern above turned out to be predictive, so the family was hunted

@@ -306,11 +306,11 @@ assertions in the suite check message text; almost all of them check words.
 
 **Run against all 62: 53 survived.** Nine were already covered.
 
-**Now 33 survive.** Ten test edits so far have closed `clock_skewed`,
-`queue_builds_at_hop`, the standing-versus-bursting sentence, `latency_high`,
-`latency_is_queuing`, the port timing breakdown, the jitter pair,
-`throughput_limited_by` and `path_loss`. Several placeholders belong to one
-message, so one added assertion often kills three or four mutations.
+**Now 30 survive**, down from 53. Twelve test edits have closed
+`clock_skewed`, `queue_builds_at_hop`, the standing-versus-bursting sentence,
+`latency_high`, `latency_is_queuing`, the port timing breakdown, the jitter
+pair, `throughput_limited_by`, `path_loss`, `tls_handshake_slow` and
+`syncookies_historical`.
 
 Four of the first five were **this week's own work** - tests I wrote that assert
 the sentence while the figures the finding turns on went unchecked. The pattern
@@ -333,9 +333,9 @@ The figure to trust is whatever a freshly regenerated set reports against the
 current tree; the lines below come from that run:
 
 ```
-1245 3332 4110 4559 9479 11122 11359 11360 11517 12829 13065 13572 13573
-13808 14811 14908 14910 14913 15704 15779 15782 15914 15993 17023 17033
-17422 20118 20175 20176 20359 20411 20412 20414
+1245 3332 4110 4559 9479 11122 11517 12829 13065 13572 13573 13808 14811
+15704 15779 15782 15914 15993 16026 17023 17033 17422 17432 20118 20175
+20176 20359 20411 20412 20414
 ```
 
 Regenerate the set after any edit - the line numbers move. The generator is a

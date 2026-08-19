@@ -14678,6 +14678,14 @@ class TestServerLimits(unittest.TestCase):
         rep = m.diagnose("8.8.8.8", None, quick=False)
         codes = [f["code"] for f in rep["findings"]]
         self.assertIn("syncookies_historical", codes)
+        # 90,000 over 30 days is 3,000 a day, and the rate is the whole reason
+        # this finding is latent rather than live: it says the backlog has been
+        # too small, not that it is overflowing now. Both figures were
+        # unchecked.
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "syncookies_historical")
+        self.assertIn("90,000 SYN cookie(s) sent over 30.0 days", said)
+        self.assertIn("about 3000 a day", said)
         rank = {r[0]: i for i, r in enumerate(nd.VERDICT_RULES)}
         named = rep["verdict"]["based_on"][0]
         self.assertNotEqual(named, "syncookies_historical")
@@ -23611,7 +23619,15 @@ class TestEveryFindingFires(unittest.TestCase):
         report = mod.diagnose("8.8.8.8", ["443"], quick=False, baseline=None)
         fired = [f for f in report["findings"] if f.get("code") == "tls_handshake_slow"]
         self.assertTrue(fired)
-        self.assertIn("900ms of that was the TLS handshake", fired[0]["message"])
+        said = fired[0]["message"]
+        self.assertIn("900ms of that was the TLS handshake", said)
+        # The handshake figure alone proves nothing - the finding is the
+        # *comparison*, and the connect time is the half that makes it. Three
+        # placeholders here survived a mutation replacing them with zero while
+        # the one above was covered.
+        self.assertIn("took 918ms", said)                      # 18 connect + 900
+        self.assertIn("against 18ms to connect", said)
+        self.assertIn("delivered the connection in 18ms", said)
         self.assertIn("not the path", report["verdict"]["owner"])
 
     def test_a_handshake_in_proportion_to_its_round_trips_is_fine(self):

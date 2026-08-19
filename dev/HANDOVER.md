@@ -172,8 +172,29 @@ mutation means the test is real. Two things learned from eleven so far:
   that could not change an answer. Deleting a guard because a mutation survived
   is the wrong lesson from the right signal.
 
-Roughly 110 of the 121 behavioural ones are still unexamined, at about six
-mutations per two-minute run.
+**Batch three: six more, two survivors, both closed.** In
+`dev/mutations/negatives-batch-three.json`, both in `first_hop_from_route`.
+
+- Its `ok` guard was never doing the work.
+  `test_a_box_that_cannot_even_read_its_route_says_nothing` hands it a failure
+  with **no stdout**, so the empty parse two lines down returns the same answer
+  and the guard could be deleted unnoticed. A command that exits non-zero and
+  still prints is the case it exists for, and that is the fixture now.
+- Its `valid_target(via)` guard had nothing driving it at all. `via` is
+  whatever follows the word - the pattern is `\bvia (\S+)` - so that call is
+  the only thing between a malformed route line and a host in the report, which
+  is then rendered, exported and handed to a reverse lookup.
+
+The second one is also a lesson about writing the test. The first draft
+asserted that `via unreachable` would be rejected, and it failed: `valid_target`
+checks *syntax*, and a bare word is a valid hostname. The claim had to be
+narrowed to the one that is true - text that could not be a host never becomes
+one - and that is worth more than the version that would have passed by
+accident.
+
+Seventeen of the 121 examined, four survivors: two real gaps, two equivalent
+mutants. Roughly 104 still unexamined, at about six mutations per two-minute
+run.
 
 ## Open: phase A, `findings` from out-parameter to return value
 

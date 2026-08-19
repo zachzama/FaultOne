@@ -1,0 +1,32 @@
+[
+ {
+  "label": "no_proxy alone is read as a proxy being configured",
+  "old": "    env = {k: v for k, v in (cfg.get(\"env\") or {}).items()\n           if not k.lower().startswith(\"no_\")}",
+  "new": "    env = dict(cfg.get(\"env\") or {})"
+ },
+ {
+  "label": "a route that could not be read still names a first hop",
+  "old": "    if not res or not res.get(\"ok\"):\n        return None",
+  "new": "    if not res:\n        return None"
+ },
+ {
+  "label": "a route with no gateway still names one",
+  "old": "    if not via or not valid_target(via):\n        return None",
+  "new": "    if not via:\n        return None"
+ },
+ {
+  "label": "a connection this box opened counts as one it served",
+  "old": "        if host and port and port in listening:",
+  "new": "        if host and port:"
+ },
+ {
+  "label": "an interface that is not a bond is still checked for members",
+  "old": "        if not down or len(down) >= len(members):\n            # All of them down is not a degraded bond, it is an interface with",
+  "new": "        if len(down) > len(members):\n            # All of them down is not a degraded bond, it is an interface with"
+ },
+ {
+  "label": "an orphan count below the bar is reported anyway",
+  "old": "    if pct >= ORPHAN_WARN_PCT:",
+  "new": "    if pct >= 0:"
+ }
+]

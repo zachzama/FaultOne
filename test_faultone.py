@@ -10809,6 +10809,45 @@ class TestAFloorUnderTheHopList(unittest.TestCase):
         got = self._blind(route=None).collect_trace("8.8.8.8", 10)
         self.assertEqual(got["hops"], [])
 
+    def test_a_command_that_failed_is_not_trusted_for_printing_something(self):
+        """The `ok` guard, driven. The test above hands it a failure with no
+        output at all, so the guard never does the work - the empty parse two
+        lines down returns the same answer, and a mutation deleting the guard
+        survived because of it.
+
+        A command that exits non-zero and still prints is the case it is for.
+        Whatever it printed, this run does not know the route."""
+        m = self._blind()
+        m.cmd_route_to = lambda t: {"ok": False, "error": "exit 2",
+                                    "stdout": "8.8.8.8 via 10.0.0.1 dev eth0"}
+        self.assertEqual(m.collect_trace("8.8.8.8", 10)["hops"], [])
+
+    def test_a_via_that_is_not_an_address_is_never_named_as_a_hop(self):
+        """`via` is whatever follows the word - the pattern is `\bvia (\S+)` -
+        so the only thing between a malformed route line and a host in the
+        report is `valid_target`. Nothing drove that, and a mutation deleting
+        it survived.
+
+        It matters more than a tidy report: a hop's host is rendered, exported
+        and handed to a reverse lookup, and this is the tool's own gate against
+        arbitrary text reaching any of those.
+
+        What it checks is *syntax*, not sense. A bare word is a valid hostname
+        and is let through, which is right - the first draft of this test
+        asserted `via unreachable` would be rejected and failed, correctly.
+        The claim is narrower and is the one worth making: text that could not
+        be a host never becomes one."""
+        for junk in ("not-an-address!", "$(whoami)", "10.0.0.1;id", "-"):
+            with self.subTest(via=junk):
+                m = self._blind(route="8.8.8.8 via %s dev eth0" % junk)
+                self.assertEqual(m.collect_trace("8.8.8.8", 10)["hops"], [])
+
+    def test_a_real_gateway_is_still_named(self):
+        """So the two tests above cannot pass by nothing ever being named."""
+        m = self._blind(route="8.8.8.8 via 10.0.0.1 dev eth0")
+        self.assertEqual([h["host"] for h in m.collect_trace("8.8.8.8", 10)["hops"]],
+                         ["10.0.0.1"])
+
     def test_a_real_trace_is_always_preferred(self):
         """The floor is the last thing tried, not the first. A box with a
         working traceroute must never be reduced to one hop."""

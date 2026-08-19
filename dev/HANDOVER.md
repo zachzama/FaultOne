@@ -306,12 +306,18 @@ assertions in the suite check message text; almost all of them check words.
 
 **Run against all 62: 53 survived.** Nine were already covered.
 
-**Now 25 survive**, down from 53. Fifteen test edits, closing `clock_skewed`,
-`queue_builds_at_hop`, the standing-versus-bursting sentence, `latency_high`,
-`latency_is_queuing`, the port timing breakdown, the jitter pair,
-`throughput_limited_by`, `path_loss`, `tls_handshake_slow`,
-`syncookies_historical`, `inet_partial_loss`, `gw_partial_loss`,
-`gw_loss_unmeasured` and `link_flapping`.
+**Now 19 survive**, down from 53, across twenty-two test edits. Everything a
+verdict is built on is covered: the latency family, the queue at a hop, path
+loss, the throughput split, gateway and internet loss on both the measured and
+the unmeasurable sides, the TLS handshake comparison, the conntrack and accept
+queue rates, syn cookies, link flaps, CPU load, the shared hop, the resolver
+timing, live interface drops, and the latency wall's own headline.
+
+**What is left is deliberately left.** Six are helpers and renderers -
+`_fmt_bytes`, the progress line, the load-average context sentence, and the
+service/link tables in the text report. The rest are second sentences inside
+findings whose primary figures are now pinned. None of them is a number a
+verdict rests on, which was the boundary drawn when this was picked up again.
 
 **The remaining set was mischaracterised once and it is worth not repeating.**
 It was called "renderers and a thin tail"; measuring it said 17 of 30 were

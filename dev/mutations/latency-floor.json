@@ -1,0 +1,38 @@
+[
+ {
+  "label": "the floor is ignored again, so latency is only a magnitude",
+  "old": "    if avg is not None and floor is not None and avg >= LATENCY_HIGH_MS:",
+  "new": "    if False and avg is not None and floor is not None and avg >= LATENCY_HIGH_MS:"
+ },
+ {
+  "label": "a stable path is called a queue",
+  "old": "        if share >= LATENCY_VARIABLE_SHARE:",
+  "new": "        if share >= 0.0:"
+ },
+ {
+  "label": "a queuing path is called distance",
+  "old": "        if share >= LATENCY_VARIABLE_SHARE:",
+  "new": "        if share >= 1.1:"
+ },
+ {
+  "label": "the variable part is measured against the floor, not the whole",
+  "old": "        share = variable / avg if avg else 0.0",
+  "new": "        share = variable / floor if floor else 0.0"
+ },
+ {
+  "label": "the two causes are as mild as the old symptom was loud",
+  "old": "                \"code\": \"latency_is_queuing\",",
+  "new": "                \"severity\": \"warning\",\n                \"code\": \"latency_is_queuing\","
+ },
+ {
+  "label": "queuing no longer outranks the distance reading",
+  "old": "    (\"latency_is_queuing\", \"whoever owns the link the queue is on\",",
+  "new": "    (\"latency_is_queuing_moved_below\", \"whoever owns the link the queue is on\","
+ },
+ {
+  "label": "the fixture's floor goes back to a hardcoded 1ms",
+  "file": "test_faultone.py",
+  "old": "    floor = avg * 0.9 if low is None else low",
+  "new": "    floor = 1.0 if low is None else low"
+ }
+]

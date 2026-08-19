@@ -8246,12 +8246,24 @@ VERDICT_RULES = [
     # report has to work for a box whose traffic is requests and responses.
     # Below latency_wall, which names the hop: where the delay accumulates
     # beats what it costs, when the path can say.
-    ("latency_high", "the path to the target - distance if it is genuinely far away",
-     "The round trip to the target is long enough to slow every request",
-     "Nothing is being dropped, so this is delay rather than damage and more "
-     "bandwidth will not move it. Read the per-hop times in the path panel for "
-     "where it accumulates, and confirm the target is as far away as this "
-     "implies before taking it to anyone."),
+    ("latency_is_queuing", "whoever owns the link the queue is on",
+     "Most of this round trip is waiting rather than travelling",
+     "The floor is the route and is not worth raising with anyone. The rest is "
+     "a queue on a link carrying more than it comfortably can. Find where the "
+     "gap opens in the per-hop timings, and check this box's own egress queue "
+     "before escalating past it."),
+    # Ranked directly below, and it is the same measurement read the other way:
+    # a round trip this long whose floor is nearly all of it. It used to sit
+    # here saying only how slow the path was, with a paragraph about distance
+    # and satellites that concluded nothing - the reader had to decide which of
+    # them applied. The floor decides it.
+    ("latency_high", "where the destination is, not the network in between",
+     "The path is long and completely stable - this is what the route costs",
+     "Almost none of this round trip varies, so nothing on the way is holding "
+     "traffic: a queue does not stay the same length for ten probes in a row. "
+     "Nothing on this network makes it smaller, and a carrier ticket on a path "
+     "this stable comes back marked within spec, correctly. What changes it is "
+     "a shorter route or a nearer copy of whatever is being reached."),
     ("call_quality_bad", "the path to the target - see the latency/jitter/loss split",
      "Voice and video will be unusable on this connection",
      "Check which of the three is to blame: jitter points at congestion or a "
@@ -8665,6 +8677,7 @@ FINDING_SIDE.update({
     "destination_unresponsive": "upstream",
     "target_alone_unreachable": "upstream",
     "inet_partial_loss": "upstream",
+    "latency_is_queuing": "upstream",
     "inet_loss_unmeasured": "upstream",
     "inet_icmp_filtered": "upstream",
     "path_loss": "upstream",
@@ -8810,7 +8823,8 @@ STAGE_RULES = [
       # A run where somebody named the target raises it to critical, and
       # build_stages fails the stage on the finding's own severity anyway.
       "target_alone_unreachable",
-      "latency_wall", "latency_high", "tcp_retransmits", "path_admin_prohibited",
+      "latency_wall", "latency_high", "latency_is_queuing",
+      "tcp_retransmits", "path_admin_prohibited",
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
@@ -9735,6 +9749,7 @@ FINDING_CLASS = {
 "gw_loss_unmeasured": ("communicationsAlarm", "transmissionError"),
 "inet_unreachable": ("communicationsAlarm", "routingFailure"),
 "inet_partial_loss": ("communicationsAlarm", "transmissionError"),
+"latency_is_queuing": ("qualityOfServiceAlarm", "congestion"),
 "inet_loss_unmeasured": ("communicationsAlarm", "transmissionError"),
 "path_loss": ("communicationsAlarm", "transmissionError"),
 "loop": ("communicationsAlarm", "routingFailure"),
@@ -12559,6 +12574,26 @@ LATENCY_WALL_SHARE = 0.5
 # its severity from the finding that headlines it, so a warning-level rule
 # sitting above a critical one would quietly downgrade the whole run.
 LATENCY_HIGH_MS = 400
+
+# What share of the round trip has to be variable before something is holding
+# traffic rather than the path simply being long.
+#
+# A round trip is two things added together and the tool measured only their
+# sum. The minimum is the floor - propagation down the fibre and serialisation
+# onto it - and it cannot be reduced without changing the route. Everything
+# above the minimum is time spent waiting in a queue somewhere, and that is the
+# part somebody can do something about.
+#
+# Both numbers have been parsed out of every ping since the parser was written
+# and only the average was ever read, so a 300ms path that never varied and a
+# 300ms path swinging between 40 and 600 produced the same finding, the same
+# severity and the same advice. They are opposite problems: one is where the
+# destination is, the other is congestion with an owner.
+#
+# 20% is the bar because a stable long path does vary a little - hosts
+# rate-limit their own ICMP replies, and the last hop is answered by a control
+# plane that is not built for it. Below a fifth, that is what the spread is.
+LATENCY_VARIABLE_SHARE = 0.2
 
 # Utilisation below which a queue overflowing has to be explained by the shape
 # of the traffic rather than its volume.
@@ -15479,19 +15514,65 @@ def _check_call_quality(raw, findings, target, inet_loss):
     """
     ping_stats = parse_ping_stats(raw.get("ping_internet", {}))
     avg = ping_stats.get("avg_ms")
-    if avg is not None and avg >= LATENCY_HIGH_MS:
+    floor = ping_stats.get("min_ms")
+    # Which of the two things a slow path is. The finding above says how slow,
+    # which is the symptom; this says whether anything is holding traffic,
+    # which is the cause and the only part of it anybody can act on.
+    if avg is not None and floor is not None and avg >= LATENCY_HIGH_MS:
+        variable = max(0.0, avg - floor)
+        share = variable / avg if avg else 0.0
+        # Written as the condition for firing, so the bar reads the way the
+        # reference states it: this much of the round trip has to be variable
+        # before anything is called a queue.
+        if share >= LATENCY_VARIABLE_SHARE:
+            findings.append({
+                "severity": "critical",
+                "layer": 3,
+                "code": "latency_is_queuing",
+                "message": (
+                    f"The round trip to {target} averages {avg:.0f}ms against a floor of "
+                    f"{floor:.0f}ms, so {variable:.0f}ms of it - {100 * share:.0f}% - is "
+                    f"time spent waiting rather than travelling. The route itself costs "
+                    f"{floor:.0f}ms and that part is fixed; the rest is a queue somewhere "
+                    f"on it, which means a link carrying more than it comfortably can at "
+                    f"the moment the probes went through. That part is somebody's to fix, "
+                    f"and it is the part worth raising - the floor is not. Look at the "
+                    f"per-hop timings below for where the gap opens, and at this box's own "
+                    f"egress queue first if it is on this side of it."),
+            })
+        else:
+            findings.append({
+                "severity": "critical",
+                "layer": 3,
+                "code": "latency_high",
+                "message": (
+                    f"The round trip to {target} averages {avg:.0f}ms and its floor is "
+                    f"{floor:.0f}ms, so {100 * (1 - share):.0f}% of it is there on every "
+                    f"single probe and only {variable:.0f}ms of it varies. Nothing on the "
+                    f"way is holding traffic - a queue does not stay the same length for "
+                    f"ten probes in a row. This is what the route costs: how far the "
+                    f"destination is, and how many devices put the packet back on the wire "
+                    f"on the way. It does not get smaller by fixing anything on this "
+                    f"network, and a carrier ticket asking for less latency on a path this "
+                    f"stable will come back saying the circuit is within spec, correctly. "
+                    f"What changes it is a shorter route or a nearer copy of whatever is "
+                    f"being reached."),
+            })
+    elif avg is not None and avg >= LATENCY_HIGH_MS:
+        # No floor to read, so neither cause can be claimed. The measurement is
+        # still worth reporting and it is the older, vaguer sentence: a long
+        # path, with the two explanations offered rather than decided between.
         findings.append({
             "severity": "critical",
             "layer": 3,
             "code": "latency_high",
-            "message": f"The round trip to {target} averages {avg:.0f}ms. Light in "
-                       f"fibre crosses the planet and comes back in about 250ms, so "
-                       f"distance stops explaining a path this long - unless this link "
-                       f"is satellite, where a geostationary hop is 500-650ms by itself "
-                       f"and nothing is wrong. Every request pays it before any data "
-                       f"moves, and a new TLS connection pays it three times over, so "
-                       f"anything that makes several calls is seconds slower no matter "
-                       f"how much bandwidth the line has.",
+            "message": f"The round trip to {target} averages {avg:.0f}ms, and this run "
+                       f"has no minimum to compare it against - so whether anything is "
+                       f"holding traffic or the destination is simply that far away "
+                       f"cannot be told apart here. Light in fibre crosses the planet and "
+                       f"comes back in about 250ms, and a geostationary hop is 500-650ms "
+                       f"by itself with nothing wrong. Every request pays this before any "
+                       f"data moves, and a new TLS connection pays it three times over.",
         })
     call_quality = None
     if ping_stats.get("avg_ms") is not None and inet_loss is not None:

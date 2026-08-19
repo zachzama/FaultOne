@@ -5491,6 +5491,26 @@ class TestLatencyHasItsOwnWords(unittest.TestCase):
         ping_map(m, inet_loss=loss, avg=avg, mdev=5.0)
         return m.diagnose(target, None, quick=False, **kw)
 
+    def test_the_variable_share_is_measured_against_the_whole_round_trip(self):
+        """Which number the variable part is a share *of*.
+
+        A mutation swapping `variable / avg` for `variable / floor` survived a
+        run: both fixtures sat far enough from the bar that the two ratios fell
+        the same side of it. This one is built to separate them - a 500ms floor
+        and a 610ms average is 18% of the round trip and 22% of the floor, so
+        the two denominators disagree about which finding this is.
+
+        The whole round trip is the right one. The sentence the finding prints
+        is "this much of it varies", and "it" is the number the reader was
+        given: the average. A share of the floor is a ratio between two parts
+        of the measurement and answers a question nobody asked.
+        """
+        m = fresh()
+        ping_map(m, inet_loss=0, avg=610.0, mdev=40.0, low=500.0)
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertIn("latency_high", codes)
+        self.assertNotIn("latency_is_queuing", codes)
+
     def test_a_slow_path_is_named_as_delay_not_as_call_quality(self):
         v = self.verdict(800.0)["verdict"]
         self.assertEqual(v["based_on"][0], "latency_high")
@@ -5510,13 +5530,19 @@ class TestLatencyHasItsOwnWords(unittest.TestCase):
 
     def test_it_does_not_need_a_loss_figure_to_say_anything(self):
         """The call score needs loss to compute, so a run that could not
-        measure loss said nothing at all about latency."""
+        measure loss said nothing at all about latency.
+
+        A 1ms floor under a 900ms average is a path spending 99.9% of its round
+        trip in a queue, so the delay is named as queuing here. Which of the two
+        it is does not matter to what this test asserts - that a run with no
+        loss figure still says something about latency - and the fixture is left
+        as it was written rather than tuned to produce the tidier code."""
         m = fresh()
         m.cmd_ping = lambda t, c=4, w=2: {
             "ok": True, "cmd": "ping",
             "stdout": "rtt min/avg/max/mdev = 1.0/900.0/1800.0/5.0 ms\n"}
         codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
-        self.assertIn("latency_high", codes)
+        self.assertIn("latency_is_queuing", codes)
         self.assertNotIn("call_quality_bad", codes)
 
     def test_loss_still_outranks_delay(self):
@@ -15957,8 +15983,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1025),
-            "compressed": (len(gzip.compress(raw, 9)), 310),
+            "on disk": (len(raw), 1030),
+            "compressed": (len(gzip.compress(raw, 9)), 311),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 215),
         }
         for label, (measured, quoted) in claims.items():
@@ -20671,20 +20697,29 @@ def counters(nd, **over):
         r = seq[min(state["i"], 1)]; state["i"] += 1; return r
     nd._read_link_stats = read
 
-def ping_map(nd, gw_loss=0, inet_loss=0, avg=20.0, mdev=2.0, sent=20):
+def ping_map(nd, gw_loss=0, inet_loss=0, avg=20.0, mdev=2.0, sent=20, low=None):
     """Twenty probes by default, not four.
 
     The fixture had the same flaw the code did: at four probes, "25% loss" is
     one unanswered packet, which the tool now declines to call a rate. A
     fixture that can't express the thing it is asserting tests the wrong
     behaviour.
+
+    The minimum was hardcoded at 1.0ms whatever the average, which described a
+    path swinging between 1ms and 40ms as the healthy default and a stable
+    800ms path as one that queues 99% of its round trip. It went unnoticed for
+    as long as nothing read the minimum - which is the same reason the tool
+    could not say why a path was slow. It defaults to nine tenths of the
+    average now: the small spread a real path has. Pass `low` to describe one
+    that queues.
     """
+    floor = avg * 0.9 if low is None else low
     def ping(t, c=4, w=2):
         loss = gw_loss if t == "10.0.0.1" else inet_loss
         got = sent - int(sent * loss / 100)
         body = f"{sent} packets transmitted, {got} received, {loss}% packet loss\n"
         if got:
-            body += f"rtt min/avg/max/mdev = 1.0/{avg}/{avg*2}/{mdev} ms\n"
+            body += f"rtt min/avg/max/mdev = {floor}/{avg}/{avg*2}/{mdev} ms\n"
         return {"ok": True, "cmd": f"ping {t}", "stdout": body}
     nd.cmd_ping = ping
 
@@ -21616,7 +21651,17 @@ def _(nd): ping_map(nd, inet_loss=3, avg=120.0, mdev=45.0)
 def _(nd): ping_map(nd, inet_loss=25, avg=300.0, mdev=90.0)
 
 @scenario("latency_high")
-def _(nd): ping_map(nd, inet_loss=0, avg=800.0, mdev=5.0)
+def _(nd):
+    """A long path that never varies: 800ms average against a 780ms floor. That
+    is where the destination is, and no ticket on this network changes it."""
+    ping_map(nd, inet_loss=0, avg=800.0, mdev=5.0, low=780.0)
+
+
+@scenario("latency_is_queuing")
+def _(nd):
+    """The same 800ms with a 120ms floor. The route costs 120ms and the other
+    680 is spent waiting, which is somebody's to fix."""
+    ping_map(nd, inet_loss=0, avg=800.0, mdev=90.0, low=120.0)
 
 @scenario("port_refused", check_ports=["9999"])
 def _(nd): nd.cmd_check_port = lambda h, p, timeout=5: {"ok": False, "cmd": f"tcp {h}:{p}",

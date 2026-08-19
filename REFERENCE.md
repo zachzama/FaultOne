@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 193
+difference is which one it puts at the top, and that is the whole product: 194
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1149,6 +1149,41 @@ trip, so counting it as an independent second opinion put a slow path at high
 confidence on a single measurement, the same inflation two cables produced,
 in a different guise. Both, and the wall, are now one family.
 
+## Why it is slow, not only that it is
+
+A round trip is two things added together, and the tool measured only their
+sum. The minimum is the floor - propagation down the fibre and serialisation
+onto it - and it cannot be reduced without changing the route. Everything above
+the minimum is time spent waiting in a queue somewhere, and that is the part
+somebody can do something about.
+
+Both numbers have come out of every ping since the parser was written and only
+the average was ever read. So a 300ms path that never varied and a 300ms path
+swinging between 40ms and 600ms produced the same finding, at the same
+severity, with the same advice - and they are opposite problems with different
+owners.
+
+| | | |
+|---|---|---|
+| under `LATENCY_VARIABLE_SHARE` of the round trip varies | `latency_high` | *where the destination is, not the network in between* |
+| at or above it | `latency_is_queuing` | *whoever owns the link the queue is on* |
+
+`latency_high` kept its code because a dozen other rules name it, and it stops
+being a symptom: it used to print a paragraph offering distance and satellite
+links as possibilities and leave the reader to pick. Now it is the claim that
+the path is long and stable, with the floor as its evidence, and its next step
+says not to raise a ticket - a carrier asked to reduce latency on a path this
+stable answers that the circuit is within spec, correctly.
+
+The run that has no minimum to read keeps the older, vaguer sentence, and says
+that is what it is doing.
+
+The fixture had the same bug the tool did. `ping_map` hardcoded a 1ms minimum
+whatever the average, so its healthy 20ms default described a path swinging
+between 1ms and 40ms, and its 800ms case described one queuing 99% of its round
+trip. Nothing noticed for as long as nothing read the minimum, which is the
+same reason the tool could not say why a path was slow.
+
 ## Down, or unreachable
 
 A host that is failing and a host you cannot get to are different states with
@@ -1444,11 +1479,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **193** | Distinct conclusions it can reach and state in plain language. 159 are faults; 34 are context, like which switch port you're on. |
-| **Ranked causes** | **159** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1755 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **194** | Distinct conclusions it can reach and state in plain language. 160 are faults; 34 are context, like which switch port you're on. |
+| **Ranked causes** | **160** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1756 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 193 findings are the useful figure** if you want to know what the tool can
+**The 194 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2249,7 +2284,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1755 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1756 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2341,6 +2376,7 @@ can say what the bar was rather than "the tool said so".
 | `MIN_PACKETS_FOR_RATE` | **20000** | packets an interface must have carried before an error or collision *rate* is quoted about it. One error on a nearly idle NIC divides out to twenty times the threshold - the same reasoning `MIN_PROBES_FOR_LOSS` applies to ping, which had never been applied here |
 | `MIN_PROBES_FOR_LOSS` | **10** | probes needed before a single unanswered one is allowed to be called a loss rate |
 | `LATENCY_HIGH_MS` | **400** | round trip past which distance stops explaining the delay. Light in fibre crosses the planet and returns in about 250ms, and the longest real terrestrial paths measure 250-300ms, so this leaves room for a genuinely long route. One threshold rather than a warn/critical pair: the verdict takes its severity from the finding that headlines it, so a warning-level rule above a critical one would downgrade the whole run. A verdict is now lifted to critical when the evidence it is built on includes a critical finding, which covers the case where the two are corroborating, but not two rules of the same family - a single threshold is still the safer shape here |
+| `LATENCY_VARIABLE_SHARE` | **0.2** | share of the round trip that has to be variable before something is holding traffic rather than the path simply being long. A round trip is a floor plus a queue: the minimum is propagation and serialisation and cannot be reduced without changing the route, and everything above the minimum is time spent waiting. Both numbers have been parsed out of every ping since the parser was written and only the average was ever read. A fifth allows for the small spread a stable long path really has - hosts rate-limit their own ICMP replies, and the last hop answers from a control plane not built for it |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
 | `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
 | `PEAK_WORTH_SHOWING` | **1.2** | how far a peak must sit above the average before the average is worth distrusting on sight. Below this the two tell the same story and printing both is noise; above it the average is actively hiding something. A ratio rather than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000 over a 999 does not |
@@ -3776,7 +3812,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1755 tests, no dependencies, no network, a few seconds, so they run
+1756 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3855,7 +3891,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 193 findings with readable rules instead of
+> way out - and who owns it. Ranks 194 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

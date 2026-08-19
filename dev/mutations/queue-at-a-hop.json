@@ -63,5 +63,25 @@
   "label": "the second reading is reported as agreeing whatever it says",
   "old": "        elif widest.get(\"hop\") == qj[\"hop\"]:",
   "new": "        elif True:"
+ },
+ {
+  "label": "the last unread column stays unread",
+  "old": "        worst = h.get(\"worst_ms\")",
+  "new": "        worst = None"
+ },
+ {
+  "label": "the tail is measured from the floor, so every queue is bursty",
+  "old": "        h[\"tail_ms\"] = (round(max(worst - avg, 0), 1)",
+  "new": "        h[\"tail_ms\"] = (round(max(worst - (floor if floor is not None else avg), 0), 1)"
+ },
+ {
+  "label": "every queue is called bursts",
+  "old": "        elif tail >= QUEUE_BURSTY_TAIL * held:",
+  "new": "        elif tail >= 0:"
+ },
+ {
+  "label": "no queue is ever called bursts",
+  "old": "        elif tail >= QUEUE_BURSTY_TAIL * held:",
+  "new": "        elif False:"
  }
 ]

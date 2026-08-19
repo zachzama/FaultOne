@@ -1215,6 +1215,19 @@ first goes to the wrong one:
 
 The viewer reads the same rows and had the same blind spot.
 
+**Standing or bursting.** `Wrst` was the last column of that parser nothing
+read. How much a hop queues and whether it queued throughout are different
+questions with the same milliseconds and different fixes: a link above its
+floor most of the time is undersized, and one whose average is dragged up by a
+handful of very slow probes is bursting, where capacity is the expensive answer
+and what runs on a schedule is the cheap one.
+
+One honest limit, because the method has it. Best is the floor *observed*, so a
+queue that never drains raises the minimum too and the whole round trip reads
+as distance. What this measures is variable queuing; a permanently full link
+looks like a longer route, and nothing here can tell them apart from one
+vantage point.
+
 **The spread is a second witness.** mtr counts a deviation over every cycle and
 the tool spent it on a call-quality score alone. The gap between best and
 average says packets waited; the spread says they waited by a different amount
@@ -1521,7 +1534,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **195** | Distinct conclusions it can reach and state in plain language. 161 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **161** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1766 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1769 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 195 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2324,7 +2337,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1766 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1769 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2420,6 +2433,7 @@ can say what the bar was rather than "the tool said so".
 | `QUEUE_HOP_MS` | **20** | milliseconds a single hop has to add to the *varying* part of the round trip before it is named as where a queue is. A much lower floor than `LATENCY_WALL_MS`, and deliberately: a wall is about distance and 100ms is a continent, while 20ms of queue on one hop is already a link carrying more than it comfortably can - and unlike distance, somebody can fix it |
 | `QUEUE_HOP_SHARE` | **0.5** | share of all the varying delay on the path that one hop has to hold. The same pair as the wall and for the same reason: the finding's sentence claims one hop holds most of the waiting, so "most" is what it has to measure. Where no hop does, nothing is claimed and the per-hop timings are in the path panel either way |
 | `QUEUE_HOP_DRAWN_MS` | **5** | waiting on one hop worth drawing beside it in the path panel. Lower than `QUEUE_HOP_MS`, because a number on a row is context and naming a hop is a claim: a path where three hops queue 8ms each is telling the reader something the finding correctly declines to say. The verdict could name a hop on this evidence while the panel underneath drew the step and not the part of it anyone can act on |
+| `QUEUE_BURSTY_TAIL` | **2.0** | how far the slowest probe to a hop has to sit above its average, as a multiple of the waiting that hop does normally, before the queue is called bursty rather than standing. A multiple and not a millisecond figure because the question is about the shape of the distribution and not its size: a 5ms queue with a 20ms worst case and a 200ms queue with an 800ms worst case are the same fault at two scales. Twice, because a queue genuinely there most of the time still has a tail - the worst probe of thirty arrives during whatever the largest burst was |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
 | `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
 | `PEAK_WORTH_SHOWING` | **1.2** | how far a peak must sit above the average before the average is worth distrusting on sight. Below this the two tell the same story and printing both is noise; above it the average is actively hiding something. A ratio rather than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000 over a 999 does not |
@@ -3855,7 +3869,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1766 tests, no dependencies, no network, a few seconds, so they run
+1769 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

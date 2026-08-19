@@ -15983,8 +15983,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1040),
-            "compressed": (len(gzip.compress(raw, 9)), 314),
+            "on disk": (len(raw), 1042),
+            "compressed": (len(gzip.compress(raw, 9)), 315),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 217),
         }
         for label, (measured, quoted) in claims.items():
@@ -19842,6 +19842,41 @@ class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
                     if f["code"] == "queue_builds_at_hop")
         self.assertIn("widest spread on this path is at hop 2 instead", said)
         self.assertIn("slower for a while", said)
+
+    def test_a_queue_dragged_up_by_a_few_bad_probes_is_called_bursts(self):
+        """`Wrst` was the last column of that parser nothing read. How much a
+        hop queues and whether it queued throughout are different questions
+        with the same milliseconds: capacity is the answer to one and what runs
+        on a schedule is the answer to the other."""
+        rep = self.report()
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queue_builds_at_hop")
+        self.assertIn("bursts rather than a link that is continuously full", said)
+        self.assertIn("runs on a schedule", said)
+
+    def test_a_queue_that_is_simply_there_is_called_capacity(self):
+        """The same 58ms of waiting, spread across the probes instead of
+        arriving in a few. Nothing runs on a schedule here - the link is above
+        its floor most of the time, which is a size problem."""
+        mod = fresh()
+        mtr(mod, [self.hop(1, "10.0.0.1", 1.5, 1.4),
+                  dict(self.hop(2, "198.51.100.63", 120.0, 119.0), Wrst=122.0),
+                  dict(self.hop(3, "dns.google (8.8.8.8)", 180.0, 122.0), Wrst=200.0)])
+        rep = mod.diagnose("8.8.8.8", None, quick=False)
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queue_builds_at_hop")
+        self.assertIn("above its floor most of the time", said)
+        self.assertNotIn("runs on a schedule", said)
+
+    def test_the_tail_is_measured_from_the_average_not_the_floor(self):
+        """Worst less average is how far the bad probes reach past the ordinary
+        ones. Worst less best would be the whole spread, which is the number
+        the deviation already reports and would make the shape test agree with
+        itself."""
+        rep = self.report()
+        third = next(h for h in rep["hops"] if h["hop"] == 3)
+        self.assertEqual(third["tail_ms"], 120.0)      # 300 worst - 180 average
+        self.assertEqual(third["queue_ms"], 58.0)
 
     def test_a_path_with_no_queue_names_no_hop(self):
         """Every path has a hop holding the most of whatever varies. Naming one

@@ -7132,6 +7132,19 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
             prev_queue = h["queue_ms"]
         else:
             h["queue_ms"] = h["queue_delta_ms"] = None
+        # And the shape of that waiting. How much a hop queues and whether it
+        # queued throughout are different questions with the same milliseconds
+        # and different fixes: a link above its floor most of the time is
+        # undersized, and one whose average is dragged up by a handful of very
+        # slow probes is bursting. The first is capacity, the second is
+        # something that runs.
+        #
+        # mtr's Wrst is the last column of that parser nothing had read.
+        worst = h.get("worst_ms")
+        if worst is None and times:
+            worst = max(times)
+        h["tail_ms"] = (round(max(worst - avg, 0), 1)
+                        if worst is not None and avg is not None else None)
 
         # Call quality at this hop, where we know enough to say. mtr supplies
         # loss and spread; a plain traceroute doesn't, so this stays absent
@@ -12638,6 +12651,18 @@ QUEUE_HOP_SHARE = 0.5
 # correctly declines to say.
 QUEUE_HOP_DRAWN_MS = 5
 
+# How far the slowest probe to a hop has to sit above its average, as a
+# multiple of the waiting that hop is doing, before the queue is called bursty
+# rather than standing.
+#
+# Twice is the bar because a queue that is genuinely there most of the time
+# still has a tail - the worst probe of thirty arrives during whatever the
+# largest burst was - and a multiple rather than a millisecond figure because
+# the question is about the shape of the distribution, not its size. A 5ms
+# queue with a 20ms worst case and a 200ms queue with an 800ms worst case are
+# the same fault at two scales.
+QUEUE_BURSTY_TAIL = 2.0
+
 # Round trip past which the distance explanation runs out. Light in fibre
 # covers about 200,000 km/s, so the far side of the planet and back is roughly
 # 250ms and the longest real terrestrial paths measure 250-300ms. 400ms leaves
@@ -15388,6 +15413,25 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                         f"gap with a narrow spread is a hop that was slower for a "
                         f"while rather than one queuing now - look at both before "
                         f"taking either to anyone.")
+        # Standing or bursting - the same milliseconds, two different fixes.
+        named = next((h for h in hops if h.get("hop") == qj["hop"]), None)
+        tail = (named or {}).get("tail_ms")
+        held = (named or {}).get("queue_ms") or 0
+        if not tail or not held:
+            shape = ""
+        elif tail >= QUEUE_BURSTY_TAIL * held:
+            shape = (f" Its slowest probe sits {tail:.0f}ms above its own average, several "
+                     f"times the {held:.0f}ms it waits on a normal one - so most packets "
+                     f"cross it fine and a few are held badly. That is bursts rather than a "
+                     f"link that is continuously full, and more capacity is the expensive "
+                     f"answer to it: look for what runs on a schedule, and for a sender "
+                     f"filling the line faster than the queue drains.")
+        else:
+            shape = (f" Its slowest probe is only {tail:.0f}ms above its average against "
+                     f"the {held:.0f}ms it waits normally, so the waiting is spread across "
+                     f"the probes rather than arriving in a few bad ones. That is a link "
+                     f"above its floor most of the time, which is capacity rather than "
+                     f"anything intermittent.")
         for hop in hops:
             if hop.get("hop") == qj["hop"]:
                 hop["blame"] = {"code": "queue_builds_at_hop", "severity": "warning"}
@@ -15406,7 +15450,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                   f"that waiting appears. It is {whose}. This is not the same "
                   f"question as which hop adds the most delay: the longest link on a "
                   f"path is usually just the longest link, and it is the one holding "
-                  f"traffic that somebody can do something about." + confirms),
+                  f"traffic that somebody can do something about." + shape + confirms),
         })
 
     wj = path_insight.get("worst_jump")

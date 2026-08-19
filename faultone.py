@@ -7083,6 +7083,38 @@ def subnet24(ip):
     return ".".join(parts[:3]) if len(parts) == 4 else None
 
 
+def asn_with_name(row, shown=None):
+    """"AS15169, dns.google" where both are known, "AS15169" where only one is.
+
+    mtr's -z answers with the number and nothing else - there is no operator
+    name anywhere in what this tool collects, and there are two ways to get one,
+    both refused. The full ASN-to-name table is about a hundred thousand
+    entries, which is the reason the Public Suffix List is not vendored here
+    either. A hand-written list of the networks that matter is a judgement, and
+    it would be out of date within a year of anyone writing it.
+
+    What is already here costs nothing: the hop's own PTR domain, which the
+    handoff logic derives to say which operator's network the path has entered.
+    Where a hop has both, they belong in one string - "AS15169" is who a ticket
+    goes to and "dns.google" is who a reader recognises.
+
+    Core routers usually have no PTR at all, so the number stands alone often.
+    That is the honest state of it rather than a gap to fill with a lookup.
+
+    Comma-joined, not bracketed, because every caller is already inside a pair
+    of parentheses - and `shown` drops the name where the sentence has just
+    printed it, which is most of them: the summary line names the host and then
+    said "(AS15169 (dns.google))" a dozen characters later.
+    """
+    asn = (row or {}).get("asn")
+    if not asn:
+        return None
+    net = (row or {}).get("network")
+    if not net or net in asn or net == shown:
+        return asn
+    return "%s, %s" % (asn, net)
+
+
 def annotate_hops(hops, gateway=None, target=None, sent_from=None):
     """Add per-hop insight derived from what we already measured: average and
     spread of the probe times, how much latency this hop added over the last
@@ -7298,6 +7330,7 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
                              "queue_ms": worst_queue["queue_delta_ms"],
                              "host": worst_queue.get("display") or worst_queue.get("host"),
                              "asn": worst_queue.get("asn"),
+                             "network": worst_queue.get("network"),
                              "private": worst_queue.get("private"),
                              "share_pct": queue_share} if worst_queue else None,
         "networks_crossed": networks,
@@ -7314,6 +7347,7 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
                        # trace said. "Past this site's edge" is where the
                        # ticket stops being yours; the AS is who it goes to.
                        "asn": worst.get("asn"),
+                       "network": worst.get("network"),
                        "private": worst.get("private"),
                        "share_pct": worst_share,
                        "total_ms": total_ms,
@@ -9288,7 +9322,7 @@ def _check_shared_hop(legs, findings):
             f"Hop {worst.get('hop')} ({host}) is on the path to both the clients and "
             f"what this box connects out to, and is failing on both"
             + (f", adding {worst['delta_ms']:.0f}ms" if worst.get("delta_ms") else "")
-            + (f" in {worst['asn']}" if worst.get("asn") else "")
+            + (f" in {asn_with_name(worst, shown=host)}" if worst.get("asn") else "")
             + ". Both sides being unhealthy usually means two faults facing opposite "
               "ways with different owners, and this is the case where it does not: "
               "one router that both directions run through. Fixing it is expected to "
@@ -15385,7 +15419,8 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                      "here can look at")
         else:
             whose = ("past this site's edge" +
-                     (" (%s)" % qj["asn"] if qj.get("asn") else "") +
+                     (" (%s)" % asn_with_name(qj, shown=qj.get("host"))
+                      if qj.get("asn") else "") +
                      ", so it is congestion on somebody else's link")
         # A second reading of the same thing, from a different column. The gap
         # between best and average says packets waited; the spread says they
@@ -15478,7 +15513,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         # the jump outside the site; this names the network it landed in, which
         # is the difference between "not ours" and somewhere to send it.
         if wj.get("asn") and not wj.get("private"):
-            side += " (%s)" % wj["asn"]
+            side += " (%s)" % asn_with_name(wj, shown=wj.get("host"))
         # Mark the hop on the way past. The chain scored its nodes on loss and
         # timeouts alone, which are the only things it could see for itself -
         # so on a latency wall the one hop this finding names was the one thing
@@ -19826,7 +19861,8 @@ def _render_path(report, out, tint, width):
                  if qj.get("share_pct") is not None else "")
         out.append(f"  -> most of the waiting: +{qj['queue_ms']}ms at hop {qj['hop']} "
                    f"({qj['host']}){share}"
-                   + (f" ({qj['asn']})" if qj.get("asn") else ""))
+                   + (f" ({asn_with_name(qj, shown=qj.get('host'))})"
+                      if qj.get("asn") else ""))
 
 def _render_neighbours(report, out, tint, width):
     """Which switch port this device is on."""

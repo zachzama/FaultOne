@@ -15983,9 +15983,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1042),
+            "on disk": (len(raw), 1044),
             "compressed": (len(gzip.compress(raw, 9)), 315),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 217),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19894,6 +19894,52 @@ class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
         self.assertNotIn("queue_builds_at_hop",
                          [f["code"] for f in rep["findings"]])
         self.assertFalse([h for h in rep["hops"] if h.get("blame")])
+
+
+class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
+    """An AS number is who a ticket goes to and a name is who a reader knows.
+
+    mtr's -z answers with the number and nothing else, so there is no operator
+    name anywhere in what this tool collects. Two ways to get one are refused
+    on purpose: the full table is about a hundred thousand entries, which is
+    the reason the Public Suffix List is not vendored either, and a list of the
+    networks that matter is a judgement that dates. A lookup would send a
+    packet to a third party and fail on exactly the boxes this is for, which
+    have no internet egress of their own.
+
+    What is already here costs nothing - the hop's own PTR domain, derived to
+    say which operator's network the path entered.
+    """
+
+    def test_both_where_the_hop_has_both(self):
+        self.assertEqual(nd.asn_with_name({"asn": "AS2914", "network": "ntt.net"}),
+                         "AS2914, ntt.net")
+
+    def test_the_number_alone_is_the_ordinary_case(self):
+        """Core routers usually have no PTR at all. That is the honest state of
+        it rather than a gap to be filled with a lookup."""
+        self.assertEqual(nd.asn_with_name({"asn": "AS2914"}), "AS2914")
+        self.assertIsNone(nd.asn_with_name({"network": "ntt.net"}))
+        self.assertIsNone(nd.asn_with_name({}))
+
+    def test_the_name_is_dropped_where_the_sentence_just_printed_it(self):
+        """Every caller is already inside a pair of parentheses, and the
+        summary line names the host and then said "(AS15169 (dns.google))" a
+        dozen characters later."""
+        row = {"asn": "AS15169", "network": "dns.google"}
+        self.assertEqual(nd.asn_with_name(row, shown="dns.google"), "AS15169")
+        self.assertEqual(nd.asn_with_name(row, shown="somethingelse"),
+                         "AS15169, dns.google")
+
+    def test_it_reaches_the_page(self):
+        """The number travels with the jump; the name has to travel with it or
+        the pairing only exists where the hop happens to be in reach."""
+        mod = fresh()
+        setup, kwargs = S["queue_builds_at_hop"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        self.assertEqual(rep["worst_queue_jump"]["network"], "dns.google")
+        self.assertEqual(rep["worst_queue_jump"]["asn"], "AS15169")
 
 
 class TestOneDeadDestinationIsNotADeadUplink(unittest.TestCase):

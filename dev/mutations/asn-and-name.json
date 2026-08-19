@@ -1,0 +1,11 @@
+[
+ {"label": "the name is dropped, so only the number is ever shown",
+  "old": "    return \"%s, %s\" % (asn, net)", "new": "    return asn"},
+ {"label": "the name is repeated where the sentence just printed it",
+  "old": "    if not net or net in asn or net == shown:", "new": "    if not net or net in asn:"},
+ {"label": "a hop with a name and no number reads as a network",
+  "old": "    asn = (row or {}).get(\"asn\")\n    if not asn:\n        return None",
+  "new": "    asn = (row or {}).get(\"asn\")\n    if not asn:\n        return (row or {}).get(\"network\")"},
+ {"label": "the name never travels with the number",
+  "old": "                             \"network\": worst_queue.get(\"network\"),", "new": ""}
+]

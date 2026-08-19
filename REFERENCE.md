@@ -1228,6 +1228,22 @@ as distance. What this measures is variable queuing; a permanently full link
 looks like a longer route, and nothing here can tell them apart from one
 vantage point.
 
+**The number and the name.** `mtr -z` answers with an AS number and nothing
+else, so there is no operator name anywhere in what this tool collects. Two
+ways to get one are refused: the full ASN-to-name table is about a hundred
+thousand entries, which is why the Public Suffix List is not vendored here
+either, and a hand-written list of the networks that matter is a judgement that
+would date within a year. A lookup would send a packet to a third party and
+fail on exactly the boxes this is for, which have no internet egress of their
+own.
+
+What is already here costs nothing. The handoff logic derives each hop's PTR
+domain to say which operator's network the path entered, so where a hop has
+both they are printed together - `AS15169, dns.google`, one for the ticket and
+one for the reader - and the name is dropped where the sentence has just
+printed it. Core routers usually have no PTR at all, so the number stands alone
+often. That is the honest state of it rather than a gap.
+
 **The spread is a second witness.** mtr counts a deviation over every cycle and
 the tool spent it on a call-quality score alone. The gap between best and
 average says packets waited; the spread says they waited by a different amount
@@ -1534,7 +1550,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **195** | Distinct conclusions it can reach and state in plain language. 161 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **161** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1769 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1773 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 195 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2337,7 +2353,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1769 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1773 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3869,7 +3885,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1769 tests, no dependencies, no network, a few seconds, so they run
+1773 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

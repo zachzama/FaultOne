@@ -13899,11 +13899,12 @@ def _check_neigh_table(raw, findings):
         })
 
 
-def _check_bonds(raw, findings):
+def _check_bonds(raw):
     """A bond that is carrying traffic on fewer cables than it was given."""
+    found = []
     if OS_NAME != "Linux":
         raw["bonds"] = {"applicable": False}
-        return
+        return found
     bonds = _bond_members_linux()
     raw["bonds"] = bonds
     for name in sorted(bonds):
@@ -13913,7 +13914,7 @@ def _check_bonds(raw, findings):
             # All of them down is not a degraded bond, it is an interface with
             # no carrier, and the link checks already say so in better words.
             continue
-        findings.append({
+        found.append({
             "severity": "warning",
             "code": "bond_degraded", "scope": name,
             "layer": 1,
@@ -13926,7 +13927,7 @@ def _check_bonds(raw, findings):
                          f"it was built for: the next member to fail takes this box off the "
                          f"network, and the capacity it can carry is already reduced.",
         })
-
+    return found
 
 def _check_arp(raw, findings):
     """Duplicate addresses on the local segment.
@@ -14608,7 +14609,7 @@ def _check_device_and_link(raw, findings, link_sample):
 
     # Duplicate IP: Wireshark's classic ARP finding, from the table this box
     # already keeps rather than from a capture.
-    _check_bonds(raw, findings)
+    findings += _check_bonds(raw)
     _check_neigh_table(raw, findings)
     arp_entries = _check_arp(raw, findings)
     return neighbours, primary_mtu, duplex_by_iface, arp_entries

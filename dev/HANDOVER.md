@@ -114,6 +114,50 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
+## Open: phase A, `findings` from out-parameter to return value
+
+81 functions take `findings`; 66 mutate it in place. That is the dominant
+coupling in the file: ordering is implicit, any check can see another's output,
+and no check can be exercised without building the shared list first.
+
+**Measured, and the number that matters is not 66.** Classified by whether a
+function only appends or actually reads what is already there:
+
+| | count | what to do |
+|---|---|---|
+| appends only | **53** | return a list; caller does `findings += ...` |
+| reads the list as well | **12** | keep taking it - the dependency is real and now visible |
+| takes it, never appends | 15 | already read-only; leave alone |
+
+The twelve that genuinely read are `_all_clear`, `_check_addressing`,
+`_check_against_the_last_visit`, `_check_cpu_load`, `_check_every_interface`,
+`_check_flows`, `_check_internet`, `_check_path`, `_check_ports`,
+`_check_saturation_bursts`, `_check_utilization` and `_own_service_findings`.
+Those are the ones that reason about other findings - `_check_cpu_load` explains
+existing ones, `_all_clear` fires when nothing else did - and after this
+refactor that is a declared input rather than an accident of a shared list.
+
+**The transform is not mechanical, and two categories prove it.** Of the 53:
+
+- **27 contain a bare `return`.** Converted naively they return `None`, and
+  `findings += None` raises. Every bare return has to become `return found`.
+  This bit on the first function converted, which is the right place for it to
+  bite.
+- **10 already return something** - `_check_arp` returns the neighbour entries,
+  `_check_dns` its own result. Those need a tuple, or the finding list moved to
+  a second call, and each is a judgement rather than a rewrite.
+- 16 are the straightforward case.
+
+**Done so far: `_check_bonds`.** One function, as the proof that the transform
+holds end to end - suite green, and `dev/equivalence.py` reports 195 scenarios
+with none differing, which is the bar for a refactor here rather than a green
+suite. Do the remaining 16 straightforward ones next, then the 27 with bare
+returns, then the 10 that already return a value one at a time.
+
+Run `dev/equivalence.py` after every batch, not at the end. It compares against
+the previous release, so a batch that changes an answer is found while the
+batch is small enough to read.
+
 ## Collectors are a registry now, not a naming convention
 
 `@collector` registers every function that reaches outside the process into

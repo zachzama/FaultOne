@@ -248,6 +248,39 @@ depends on conventions rather than guarantees. Only delete when the later line
 subsumes the earlier one for **any** input, which is what happened to the
 group-size guard in `_check_idle_endpoint` and has not happened since.
 
+## The `ok` guards: a family, and the contract underneath them
+
+The first pattern above turned out to be predictive, so the family was hunted
+directly rather than one batch at a time: **31 early returns guard on a
+collector's `ok` flag.** A mutation was generated for each consumer and run in
+one go. **Nine survived.**
+
+Nine survivors is not nine bugs, and the reason is one fact about `run`:
+
+> `run` sets `ok` True whenever the process *ran*, whatever it exited with. Its
+> three failures are command-not-found, timeout and an exception, and **none of
+> them carries output.**
+
+A ping exiting 1 on total loss keeps its summary, which is the point of reading
+the flag that way. But it also means every consumer's empty parse returns the
+same answer its `ok` guard would, for every result `run` can produce - so those
+mutations survive by construction and always will.
+
+So the guards defend a **contract**, not a reachable state, and the contract is
+what is worth checking. `test_a_result_marked_not_ok_never_carries_data` asks
+the source: three literals build a not-ok result with a payload key, and all
+three set it to an empty list. A collector that hand-builds a not-ok result
+*with* rows would break all thirty-one guards at once, silently, and that test
+is what notices.
+
+**Do not write nine fixtures for this.** They would assert behaviour on a state
+`run` cannot produce, which is why the generated set was deleted rather than
+kept: a mutation that can never be caught makes the harness permanently red.
+The two `ok` guards that *did* get fixtures - `first_hop_from_route` and
+`_check_discard_route` - are worth keeping anyway: they pin the intent of the
+two most decisive readings in the tool, and they would catch a hand-built
+result long before the static check explained why.
+
 ## Open: phase A, `findings` from out-parameter to return value
 
 81 functions take `findings`; 66 mutate it in place. That is the dominant

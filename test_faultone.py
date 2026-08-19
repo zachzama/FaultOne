@@ -20690,6 +20690,52 @@ class DiagnoseHarness(unittest.TestCase):
         # And the pin itself, whatever this machine really is.
         self.assertEqual(fresh().OS_NAME, "Linux")
 
+    def test_a_result_marked_not_ok_never_carries_data(self):
+        """The contract thirty-one guards rest on, checked once instead.
+
+        Functions all over this file open with `if not res.get("ok"): return`
+        before touching a collector's data. Nine mutations deleting those
+        guards survived a run, and the reason is not nine missing tests: `run`
+        sets ok True whenever the process *ran*, whatever it exited with - a
+        ping that exits 1 on total loss keeps its summary, which is the point.
+        Its three failures are command-not-found, timeout and an exception, and
+        none of them carries output. So every consumer's empty parse returns
+        the same answer the guard would, and always will.
+
+        That makes the guards defence against this contract rather than against
+        a reachable state, and the contract is the thing worth checking. A
+        collector that hand-builds a not-ok result *with* rows would break
+        every one of them at once, silently, and this is what would notice.
+
+        Asked of the source: a literal is the only way to write one.
+        """
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        PAYLOAD = {"stdout", "hops", "rules", "resolvers", "interfaces",
+                   "listeners", "owners", "lifetime", "policies", "moved"}
+        carrying = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            pairs = {k.value: v for k, v in zip(node.keys, node.values)
+                     if isinstance(k, ast.Constant)}
+            ok = pairs.get("ok")
+            if not (isinstance(ok, ast.Constant) and ok.value is False):
+                continue
+            for key in PAYLOAD & set(pairs):
+                value = pairs[key]
+                # An empty literal is the shape the three existing ones use,
+                # and it says the same thing the absent key does.
+                empty = (isinstance(value, (ast.List, ast.Dict, ast.Tuple))
+                         and not getattr(value, "elts", getattr(value, "keys", [])))
+                if not empty:
+                    carrying.append("line %d: ok False with %s" % (node.lineno, key))
+        self.assertEqual(sorted(carrying), [],
+                         "a not-ok result carries data, so every `if not "
+                         "res.get('ok')` guard downstream now decides something "
+                         "no test drives")
+
     def test_the_harness_replaces_every_collector_the_module_has(self):
         """The thing this class claims about itself, asserted rather than
         stated. It used to name seventeen collectors in a tuple while the tool

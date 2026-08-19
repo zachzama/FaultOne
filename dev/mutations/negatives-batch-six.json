@@ -18,5 +18,11 @@
   "label": "a box broadly relaying is reported as holding traffic back",
   "old": "    broadly_relaying = forwarded * RELAY_RATIO >= arrived",
   "new": "    broadly_relaying = False"
+ },
+ {
+  "label": "a not-ok result is allowed to carry rows",
+  "file": "faultone.py",
+  "old": "                \"resolvers\": []}",
+  "new": "                \"resolvers\": [{\"server\": \"10.0.0.53\"}]}"
  }
 ]

@@ -1021,7 +1021,7 @@ function hopList(col, names){
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
-          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}${h.queue_ms ? ' queued +' + h.queue_ms + 'ms' : ''}</span>
       </div>${fanoutLine(h)}${
         // The network and the name on the line under the address, in that
         // order: the top row stays four fixed columns - hop, address, bar,

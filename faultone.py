@@ -9431,6 +9431,12 @@ def build_probe_column(hops, target, baseline_path=None):
             "pmtu": hop.get("pmtu"),
             "ms": round(avg, 1) if avg is not None else None,
             "delta_ms": round(delta, 1) if delta >= 1 else None,
+            # And how much of that step is waiting rather than travelling. The
+            # page drew the step alone, so a verdict naming this hop for its
+            # queue pointed at a row showing only that it was slow.
+            "queue_ms": (hop.get("queue_delta_ms")
+                         if (hop.get("queue_delta_ms") or 0) >= QUEUE_HOP_DRAWN_MS
+                         else None),
             "timed_out": bool(hop.get("timed_out")),
             "loss_pct": hop.get("loss_pct"),
             "probes": len(hop.get("times_ms") or []),
@@ -12625,6 +12631,13 @@ LATENCY_WALL_SHARE = 0.5
 QUEUE_HOP_MS = 20
 QUEUE_HOP_SHARE = 0.5
 
+# Waiting on one hop worth drawing beside it in the path panel. Lower than the
+# bar for naming a hop, because a number on a row is context and naming a hop
+# is a claim - the reader wants to see the shape of it either way, and a path
+# where three hops queue 8ms each is telling them something the finding
+# correctly declines to say.
+QUEUE_HOP_DRAWN_MS = 5
+
 # Round trip past which the distance explanation runs out. Light in fibre
 # covers about 200,000 km/s, so the far side of the planet and back is roughly
 # 250ms and the longest real terrestrial paths measure 250-300ms. 400ms leaves
@@ -15349,6 +15362,32 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
             whose = ("past this site's edge" +
                      (" (%s)" % qj["asn"] if qj.get("asn") else "") +
                      ", so it is congestion on somebody else's link")
+        # A second reading of the same thing, from a different column. The gap
+        # between best and average says packets waited; the spread says they
+        # waited by different amounts each time, which is what a queue does and
+        # a longer route does not. mtr counts it over every cycle and the tool
+        # has only ever spent it on a call-quality score.
+        #
+        # Two independent measurements agreeing is worth saying out loud, and
+        # so is their disagreeing: a wide gap with a narrow spread is a hop
+        # that was slower for a while rather than one that is queuing now.
+        spread = [(h.get("jitter_ms") if h.get("jitter_ms") is not None
+                   else h.get("stdev_ms"), h) for h in hops]
+        spread = [(v, h) for v, h in spread if v is not None]
+        widest = max(spread, key=lambda vh: vh[0])[1] if spread else None
+        if widest is None:
+            confirms = ""
+        elif widest.get("hop") == qj["hop"]:
+            confirms = (" The widest spread on this path is at that hop too, so two "
+                        "readings from different columns agree about where: packets "
+                        "wait there, and they wait by a different amount each time. "
+                        "That is what a queue does and what a longer route does not.")
+        else:
+            confirms = (f" The widest spread on this path is at hop {widest['hop']} "
+                        f"instead, so the two readings disagree about where. A wide "
+                        f"gap with a narrow spread is a hop that was slower for a "
+                        f"while rather than one queuing now - look at both before "
+                        f"taking either to anyone.")
         for hop in hops:
             if hop.get("hop") == qj["hop"]:
                 hop["blame"] = {"code": "queue_builds_at_hop", "severity": "warning"}
@@ -15367,7 +15406,7 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                   f"that waiting appears. It is {whose}. This is not the same "
                   f"question as which hop adds the most delay: the longest link on a "
                   f"path is usually just the longest link, and it is the one holding "
-                  f"traffic that somebody can do something about."),
+                  f"traffic that somebody can do something about." + confirms),
         })
 
     wj = path_insight.get("worst_jump")
@@ -18825,7 +18864,7 @@ function hopList(col, names){
         <span class="hbar"><span style="width:${Math.max(2, h.share_pct || 0)}%"></span></span>
         <span class="ht">${h.timed_out ? 'no reply'
           : h.ms == null ? 'no timing'
-          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}</span>
+          : escapeHtml(String(h.ms)) + 'ms'}${h.delta_ms ? ' +' + h.delta_ms + 'ms' : ''}${h.queue_ms ? ' queued +' + h.queue_ms + 'ms' : ''}</span>
       </div>${fanoutLine(h)}${
         // The network and the name on the line under the address, in that
         // order: the top row stays four fixed columns - hop, address, bar,
@@ -19679,6 +19718,14 @@ def _render_path(report, out, tint, width):
             extra.append(f"MOS {h['mos']}")
         if h.get("delta_ms"):
             extra.append(f"+{h['delta_ms']}ms")
+        # How much of that step is waiting rather than travelling. The verdict
+        # can name a hop on this evidence, and the panel underneath it drew the
+        # step and not the part of it anyone can act on - so the report carried
+        # the reasoning for its own headline and did not show it. Drawn from
+        # the same floor the finding uses, and only where there is enough of it
+        # to mean something: every hop varies a little.
+        if (h.get("queue_delta_ms") or 0) >= QUEUE_HOP_DRAWN_MS:
+            extra.append(f"queued +{h['queue_delta_ms']}ms")
         # mtr reports a standard deviation over many cycles, traceroute the
         # spread of three probes. The MOS calculation already treats either as
         # the jitter estimate; the display was gated on the traceroute one
@@ -19725,6 +19772,17 @@ def _render_path(report, out, tint, width):
                      if share_pct is not None and total else "")
             out.append(f"  -> biggest latency jump: +{wj['delta_ms']}ms at hop {wj['hop']} "
                        f"({wj['host']}){share}, {where}")
+    # Beside it, and often about a different hop: the biggest jump is where the
+    # distance is and this is where the waiting is. Printed whenever there is
+    # one to print, including when it agrees, because two lines naming the same
+    # hop is itself the answer to the question the reader is about to ask.
+    qj = report.get("worst_queue_jump")
+    if qj and (qj.get("queue_ms") or 0) >= QUEUE_HOP_DRAWN_MS:
+        share = (f", {qj['share_pct']}% of all the delay that varies"
+                 if qj.get("share_pct") is not None else "")
+        out.append(f"  -> most of the waiting: +{qj['queue_ms']}ms at hop {qj['hop']} "
+                   f"({qj['host']}){share}"
+                   + (f" ({qj['asn']})" if qj.get("asn") else ""))
 
 def _render_neighbours(report, out, tint, width):
     """Which switch port this device is on."""

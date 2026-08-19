@@ -33,5 +33,35 @@
   "label": "the named hop is not marked on the picture",
   "old": "                hop[\"blame\"] = {\"code\": \"queue_builds_at_hop\", \"severity\": \"warning\"}",
   "new": "                pass"
+ },
+ {
+  "label": "the panel goes back to drawing the step and not the waiting",
+  "old": "        if (h.get(\"queue_delta_ms\") or 0) >= QUEUE_HOP_DRAWN_MS:\n            extra.append(f\"queued +{h['queue_delta_ms']}ms\")",
+  "new": "        pass"
+ },
+ {
+  "label": "the summary line naming where the waiting is disappears",
+  "old": "    qj = report.get(\"worst_queue_jump\")\n    if qj and (qj.get(\"queue_ms\") or 0) >= QUEUE_HOP_DRAWN_MS:",
+  "new": "    qj = None\n    if qj:"
+ },
+ {
+  "label": "the page's rows lose it, so the viewer cannot draw it",
+  "old": "            \"queue_ms\": (hop.get(\"queue_delta_ms\")\n                         if (hop.get(\"queue_delta_ms\") or 0) >= QUEUE_HOP_DRAWN_MS\n                         else None),",
+  "new": "            \"queue_ms\": None,"
+ },
+ {
+  "label": "every row draws its waiting, however little of it there is",
+  "old": "        if (h.get(\"queue_delta_ms\") or 0) >= QUEUE_HOP_DRAWN_MS:",
+  "new": "        if (h.get(\"queue_delta_ms\") or 0) >= 0.0:"
+ },
+ {
+  "label": "the spread is spent on the call score alone again",
+  "old": "        if widest is None:\n            confirms = \"\"\n        elif widest.get(\"hop\") == qj[\"hop\"]:",
+  "new": "        if True:\n            confirms = \"\"\n        elif widest.get(\"hop\") == qj[\"hop\"]:"
+ },
+ {
+  "label": "the second reading is reported as agreeing whatever it says",
+  "old": "        elif widest.get(\"hop\") == qj[\"hop\"]:",
+  "new": "        elif True:"
  }
 ]

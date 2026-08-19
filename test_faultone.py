@@ -15983,9 +15983,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1036),
-            "compressed": (len(gzip.compress(raw, 9)), 313),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 216),
+            "on disk": (len(raw), 1040),
+            "compressed": (len(gzip.compress(raw, 9)), 314),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 217),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19775,6 +19775,73 @@ class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
         rep = mod.diagnose("8.8.8.8", None, quick=False)
         self.assertIn("queue_builds_at_hop", [f["code"] for f in rep["findings"]])
         self.assertEqual(rep["worst_queue_jump"]["hop"], 2)
+
+    def test_the_panel_draws_the_waiting_it_named_the_hop_for(self):
+        """The verdict can name a hop on this evidence and the panel underneath
+        drew the step and not the part of it anyone can act on - so the report
+        carried the reasoning for its own headline and did not show it.
+
+        Both lines, because they are the point: the biggest jump and most of
+        the waiting are different hops here, and a reader who sees only the
+        first goes to the wrong one."""
+        mod = fresh()
+        setup, kwargs = S["queue_builds_at_hop"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        text = mod.render_text_report(rep, color=False, width=100)
+        row = next(l for l in text.splitlines()
+                   if l.strip().startswith("3 ") and "dns.google" in l)
+        self.assertIn("queued +57.0ms", row)
+        self.assertIn("biggest latency jump: +118.5ms at hop 2", text)
+        self.assertIn("most of the waiting: +57.0ms at hop 3", text)
+        # And not on the row that queues a millisecond. Every hop varies a
+        # little, and a word on every row is a column of noise rather than a
+        # measurement - the same reason the jitter figure has a floor.
+        quiet = next(l for l in text.splitlines()
+                     if l.strip().startswith("2 ") and "198.51.100.63" in l)
+        self.assertNotIn("queued", quiet)
+
+    def test_the_page_draws_it_too(self):
+        """The terminal and the viewer read the same rows, and the viewer had
+        the same blind spot - it drew delta_ms alone."""
+        mod = fresh()
+        setup, kwargs = S["queue_builds_at_hop"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        rows = nd.build_probe_column(rep["hops"], "8.8.8.8")["hops"]
+        third = next(r for r in rows if r["hop"] == 3)
+        self.assertEqual(third["queue_ms"], 57.0)
+        second = next(r for r in rows if r["hop"] == 2)
+        self.assertIsNone(second["queue_ms"])       # 1ms of it, not worth a word
+        self.assertIn("h.queue_ms", nd.VIEWER_TEMPLATE)
+
+    def test_the_spread_is_read_as_a_second_witness(self):
+        """mtr counts a deviation over every cycle and the tool spent it only
+        on a call score. The gap between best and average says packets waited;
+        the spread says they waited by a different amount each time, which is
+        what a queue does and a longer route does not."""
+        mod = fresh()
+        setup, kwargs = S["queue_builds_at_hop"]
+        setup(mod)
+        rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queue_builds_at_hop")
+        self.assertIn("widest spread on this path is at that hop too", said)
+
+    def test_it_says_so_when_the_two_readings_disagree(self):
+        """Hop 2 swings widely and queues a millisecond; hop 3 queues 59ms and
+        barely varies. A wide gap with a narrow spread is a hop that was slower
+        for a while rather than one queuing now, and saying "confirmed" there
+        would be the second measurement being spent to agree with the first."""
+        mod = fresh()
+        mtr(mod, [self.hop(1, "10.0.0.1", 1.5, 1.4),
+                  dict(self.hop(2, "198.51.100.63", 20.0, 19.0), StDev=60.0),
+                  dict(self.hop(3, "dns.google (8.8.8.8)", 80.0, 21.0), StDev=5.0)])
+        rep = mod.diagnose("8.8.8.8", None, quick=False)
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queue_builds_at_hop")
+        self.assertIn("widest spread on this path is at hop 2 instead", said)
+        self.assertIn("slower for a while", said)
 
     def test_a_path_with_no_queue_names_no_hop(self):
         """Every path has a hop holding the most of whatever varies. Naming one

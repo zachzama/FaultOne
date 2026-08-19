@@ -33,5 +33,35 @@
   "label": "a witness that never answered is reported as the one that did",
   "old": "        if port:\n            # The same object the export carries, so the sentence and the\n            # evidence cannot describe different witnesses.\n            raw[\"egress_witnesses\"] = asked\n            return asked[-1]",
   "new": "        raw[\"egress_witnesses\"] = asked\n        return asked[-1]"
+ },
+ {
+  "label": "the route to nowhere can be the headline again",
+  "old": "        if (code in PATH_DERIVED and ((raw or {}).get(\"path_off_route\") or aimed_nowhere)",
+  "new": "        if (code in PATH_DERIVED and (raw or {}).get(\"path_off_route\")"
+ },
+ {
+  "label": "a route to nowhere lifts the verdict to critical",
+  "old": "                   if not (aimed_nowhere and f.get(\"code\") in PATH_DERIVED)],",
+  "new": "                   ],"
+ },
+ {
+  "label": "the strip fails the internet stage on a route to nowhere",
+  "old": "        codes -= PATH_DERIVED\n        critical -= PATH_DERIVED",
+  "new": "        pass"
+ },
+ {
+  "label": "only the codes are trimmed, so the critical path finding still lifts the stage",
+  "old": "        codes -= PATH_DERIVED\n        critical -= PATH_DERIVED",
+  "new": "        codes -= PATH_DERIVED"
+ },
+ {
+  "label": "a target somebody named is treated as one nobody asked for",
+  "old": "    return ((raw or {}).get(\"target_chosen_by\") == \"this tool\"\n            and \"target_alone_unreachable\" in (codes or ()))",
+  "new": "    return \"target_alone_unreachable\" in (codes or ())"
+ },
+ {
+  "label": "the zone strip lights the way out on a route to nowhere",
+  "old": "                and not (nowhere and f.get(\"code\") in PATH_DERIVED)]",
+  "new": "                ]"
  }
 ]

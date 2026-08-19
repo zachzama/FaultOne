@@ -1197,6 +1197,40 @@ just not the carrier's, so it stays critical. When the tool picked the target
 itself, it is a warning: grading its own default choice as a critical network
 fault is the tool manufacturing its own headline.
 
+### And nothing measured on the way there
+
+Moving the owner off the carrier is worth little on its own. The trace stops
+somewhere short of an address this box was never going to reach, and *"100%
+loss at the last hop"* still sat above the finding that explained it - which is
+a carrier ticket about a route the box's traffic does not take.
+
+So when the tool picked the target and that target alone is unreachable, every
+`PATH_DERIVED` finding is treated the way an off-route trace already was. It
+stays in the report, beside the finding that says why, and four things stop
+acting on it:
+
+| | |
+|---|---|
+| the verdict | cannot name it as the answer |
+| the verdict's severity | is not lifted by it - otherwise the warning comes straight back as critical one level up, since 100% loss is critical on its own terms |
+| the stage strip | does not fail the internet stage on it, in a report whose whole point is that this box's internet works |
+| the zone strip | does not light the way out on it - the first thing on the page, and it read *connects out to FAULT* |
+
+Four, not one, and each was found only by looking at the rendered page after
+fixing the one before it. The stage strip needed two doors closed by itself:
+the finding belongs in the internet stage's *warn* set rather than its fail set
+- the stage asks whether traffic gets off this site, and the finding exists
+because something answered - and a critical path finding was still raising the
+stage through the warn set afterwards.
+
+That is the general shape here. A severity that has been reasoned about
+carefully in one place leaks through every other place that recomputes it from
+the raw findings, and the only way to see it is to render the report and read
+it as a stranger.
+
+None of it applies when somebody named the target. Where the path to a
+destination you expect to reach breaks is exactly what you were asking.
+
 ## Two cables are two faults
 
 Findings about an interface carry which one they came from. Corroboration
@@ -1412,7 +1446,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **193** | Distinct conclusions it can reach and state in plain language. 159 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **159** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1748 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1755 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 193 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2215,7 +2249,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1748 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1755 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3742,7 +3776,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1748 tests, no dependencies, no network, a few seconds, so they run
+1755 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

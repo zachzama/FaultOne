@@ -114,6 +114,30 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
+## A severity leaks through every place that recomputes it
+
+Worth knowing before touching a verdict again, because it cost four passes.
+
+`target_alone_unreachable` is a warning when the tool picked the target itself:
+grading its own default choice as a critical network fault is the tool
+manufacturing its own headline. Setting that severity fixed nothing on its own.
+The report still said critical, because three other places derive their own
+state from the raw findings rather than from the verdict, and a critical
+`path_loss` measured toward the dead target came through every one of them:
+
+1. `_verdict_severity` lifts the verdict to match the worst thing it explains.
+2. `build_stages` fails a stage on a critical finding sitting in its warn set.
+3. `build_sides` lights a zone from any critical finding facing it.
+
+Each was found only by rendering the page after fixing the one before it, and
+the last one - `connects out to FAULT` - is the first thing a reader sees. None
+of them would have shown up in a test asserting the verdict.
+
+So: after changing what a severity means, render the report and read it as a
+stranger. The suite covers what the tool concludes and very little about what
+the page says, and these three are the places a conclusion gets recomputed
+behind its back.
+
 ## Settled: the suite no longer reads the machine it runs on
 
 CI was red on every push from 2026-08-16 to 2026-08-18 - all four jobs, for

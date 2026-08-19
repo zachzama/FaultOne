@@ -15957,9 +15957,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1021),
-            "compressed": (len(gzip.compress(raw, 9)), 308),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 214),
+            "on disk": (len(raw), 1025),
+            "compressed": (len(gzip.compress(raw, 9)), 310),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 215),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -19723,6 +19723,93 @@ class TestOneDeadDestinationIsNotADeadUplink(unittest.TestCase):
                      if f["code"] == "target_alone_unreachable")
         self.assertEqual(found["severity"], "critical")
         self.assertEqual(rep["raw"]["target_chosen_by"], "the operator")
+
+    def test_the_route_to_nowhere_is_not_the_headline(self):
+        """The second half of it, and the half that matters on a real report.
+
+        Moving the owner off the carrier is worth little while "100% loss at
+        the last hop" still outranks it: that is a carrier ticket about a route
+        to nowhere. The trace stops short of an address this box was never
+        going to reach, so every hop reading taken on the way there describes a
+        route its traffic does not take - which is the reason an off-route
+        trace cannot be the answer either, and this reuses that gate.
+        """
+        rep, codes = self.run_it(None, True)
+        self.assertIn("path_loss", codes)             # still reported
+        self.assertEqual(rep["verdict"]["based_on"][0], "target_alone_unreachable")
+        self.assertIn("path_loss", rep["verdict"]["explains"])
+
+    def test_a_route_to_nowhere_does_not_make_the_verdict_critical(self):
+        """100% loss to an address nobody asked about is critical on its own
+        terms, and _verdict_severity lifts a verdict to match what it explains.
+        So the warning this tool was just stopped from calling critical came
+        straight back as critical one level up."""
+        rep, _ = self.run_it(None, True)
+        self.assertEqual(rep["verdict"]["severity"], "warning")
+        self.assertEqual(next(f["severity"] for f in rep["findings"]
+                              if f["code"] == "path_loss"), "critical")
+
+    def test_the_strip_does_not_say_the_internet_is_down(self):
+        """The line most people act on. A box whose internet demonstrably works
+        must not carry INTERNET: FAIL, and it did twice over - once because
+        this finding was put in the stage's fail set, and once because the
+        critical path finding raised it through the warn set afterwards."""
+        rep, _ = self.run_it(None, True)
+        stages = {st["stage"]: st["state"] for st in rep["stages"]}
+        self.assertEqual(stages["internet"], "warn")
+
+    def test_the_first_thing_on_the_page_does_not_say_the_way_out_is_broken(self):
+        """The zone strip is drawn above everything and read before anything.
+        The fourth place this had to be said - after the verdict, its severity
+        and the stage strip - and the loudest: FAULT on the way out, over a box
+        whose way out demonstrably carries traffic."""
+        rep, _ = self.run_it(None, True)
+        upstream = next(z for z in rep["sides"] if z["side"] == "upstream")
+        self.assertEqual(upstream["state"], "warn")
+        rep, _ = self.run_it("203.0.113.77", True)
+        upstream = next(z for z in rep["sides"] if z["side"] == "upstream")
+        self.assertEqual(upstream["state"], "fail")
+
+    def test_a_loop_on_the_way_to_nowhere_is_not_the_answer(self):
+        """`loop` is the one path finding that outranks this one, so it is the
+        only place the verdict gate is visible - and it is the exact shape the
+        report that started all this had: a false routing loop, critical, at
+        the top of a page about a destination the box was never going to reach.
+
+        Two mutations survived a run because nothing asserted this. The gate
+        was right and untested, which reads identically to wrong.
+        """
+        findings = [{"code": "loop", "severity": "critical", "layer": 3,
+                     "message": "m"},
+                    {"code": "target_alone_unreachable", "severity": "warning",
+                     "layer": 3, "message": "m"}]
+        chosen = nd.build_verdict(list(findings),
+                                  raw={"target_chosen_by": "this tool"})
+        self.assertEqual(chosen["based_on"][0], "target_alone_unreachable")
+        # And a destination somebody named keeps it: where the path to
+        # something you expect to reach loops is exactly what you asked.
+        asked = nd.build_verdict(list(findings),
+                                 raw={"target_chosen_by": "the operator"})
+        self.assertEqual(asked["based_on"][0], "loop")
+
+    def test_the_stage_says_which_findings_put_it_there(self):
+        """The `because` list is drawn, and it is where the operator/tool split
+        shows on the strip. Both runs fail or warn the internet stage; only one
+        of them cites loss on a route to nowhere as the reason."""
+        rep, _ = self.run_it(None, True)
+        internet = next(st for st in rep["stages"] if st["stage"] == "internet")
+        self.assertEqual(internet["because"], ["target_alone_unreachable"])
+        rep, _ = self.run_it("203.0.113.77", True)
+        internet = next(st for st in rep["stages"] if st["stage"] == "internet")
+        self.assertIn("path_loss", internet["because"])
+
+    def test_a_target_somebody_named_still_fails_the_stage(self):
+        """None of this applies when the destination is one somebody expects to
+        reach. Where the path to it breaks is exactly what they were asking."""
+        rep, _ = self.run_it("203.0.113.77", True)
+        stages = {st["stage"]: st["state"] for st in rep["stages"]}
+        self.assertEqual(stages["internet"], "fail")
+        self.assertEqual(rep["verdict"]["severity"], "critical")
 
     def test_the_witnesses_come_from_the_box_and_not_from_a_constant(self):
         """Any address written into this function is a guess about where the

@@ -8796,13 +8796,20 @@ STAGE_RULES = [
     # A routing loop means traffic never arrives, so it fails the stage rather
     # than merely warning it.
     ("internet", {"inet_unreachable", "destination_unresponsive",
-                  "target_alone_unreachable", "loop",
+                  "loop",
                   # One address failing while its neighbours succeed is a
                   # failure of this stage for whoever uses that address, even
                   # though the run's own probe reached the target.
                   "source_cannot_reach",
                   "conntrack_drops_live"},
      {"inet_partial_loss", "inet_loss_unmeasured", "path_loss", "trace_stalls",
+      # Not a failure of this stage: the stage asks whether traffic gets off
+      # this site, and the finding exists because something answered. One
+      # destination not answering is worth a mark and is not the uplink being
+      # down - which was the sentence this whole finding was written to stop.
+      # A run where somebody named the target raises it to critical, and
+      # build_stages fails the stage on the finding's own severity anyway.
+      "target_alone_unreachable",
       "latency_wall", "latency_high", "tcp_retransmits", "path_admin_prohibited",
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
@@ -9029,10 +9036,38 @@ def finding_relation(code, verdict):
     return None
 
 
+def _aimed_nowhere(raw, codes):
+    """Was the path walked toward a destination nobody asked this box to reach?
+
+    True when the tool picked the target itself and that target alone does not
+    answer - the box reaches what it depends on and not this one address. The
+    trace then stops somewhere short of somewhere it was never going, and every
+    hop reading taken on the way there describes a route this box's traffic
+    does not take.
+
+    Three things read this and they have to agree, which is why it is a
+    function. The verdict must not name a path finding as the answer; the
+    verdict's severity must not be lifted by one; and the stage strip must not
+    fail the internet stage on one - the strip being the line most people act
+    on, and "internet: FAIL" being the exact sentence this was written to stop
+    printing about a box whose internet is working.
+    """
+    return ((raw or {}).get("target_chosen_by") == "this tool"
+            and "target_alone_unreachable" in (codes or ()))
+
+
 def build_stages(findings, raw=None, checked_ports=False):
     """Reduce the findings to pass/warn/fail per stage of the chain."""
     raw = raw or {}
     codes = {f.get("code") for f in findings if f.get("severity") != "ok"}
+    critical = {f.get("code") for f in findings if f.get("severity") == "critical"}
+    if _aimed_nowhere(raw, codes):
+        # Both sets, because the lift below reads the second one. Trimming only
+        # `codes` left the stage failing anyway: 100% loss to an address nobody
+        # asked about is critical on its own terms, sits in the warn set, and
+        # raised the stage through a door the trim did not cover.
+        codes -= PATH_DERIVED
+        critical -= PATH_DERIVED
     stages = []
     for name, fail_codes, warn_codes in STAGE_RULES:
         # Our own TLS listeners are checked on every run, so the ports stage
@@ -9062,7 +9097,6 @@ def build_stages(findings, raw=None, checked_ports=False):
             # A critical finding must not leave its stage reading "warn" - the
             # strip is the summary someone acts on, and it has to agree with
             # the severity beside it.
-            critical = {f.get("code") for f in findings if f.get("severity") == "critical"}
             state = "fail" if critical & warn_codes else "warn"
         else:
             state = "pass"
@@ -9943,6 +9977,7 @@ def build_sides(findings, raw=None):
                   "traffic it carries goes" if side == "upstream" else detail)
                  for side, label, detail in order]
     rank = {"pass": 0, "warn": 1, "fail": 2}
+    nowhere = _aimed_nowhere(raw, {f.get("code") for f in findings})
     out = []
     for side, label, detail in order:
         # Findings facing this zone, and findings this zone owns.
@@ -9965,7 +10000,13 @@ def build_sides(findings, raw=None):
         # questions, and the summary below has to answer the right one.
         loud = [f for f in findings
                 if f.get("severity") in ("warning", "critical")
-                and f.get("code") not in VERDICT_EXEMPT]
+                and f.get("code") not in VERDICT_EXEMPT
+                # Nothing measured on the route to nowhere lights a zone. The
+                # fourth place this had to be said: the verdict, its severity,
+                # the stage strip, and here - and this one is the first thing
+                # on the page, drawing "connects out to FAULT" over a box whose
+                # way out demonstrably works.
+                and not (nowhere and f.get("code") in PATH_DERIVED)]
         facing = [f for f in loud if finding_side(f.get("code")) == side]
         owning = [f for f in loud
                   if cause_owner_side(f.get("code")) == side
@@ -10530,15 +10571,30 @@ def build_verdict(findings, quick=False, raw=None):
     # those describe a risk, not a cause.
     live_critical = any(f["severity"] == "critical" and f.get("code") not in LATENT
                         for f in real)
+    # A path walked toward a destination nobody asked for, which alone does not
+    # answer. The trace stops somewhere short of an address this box was never
+    # expected to reach, and the loss and latency measured on the way there
+    # describe a route its traffic does not take - the same reason an off-route
+    # trace cannot be the answer.
+    #
+    # This is the second half of one dead destination not being a dead uplink.
+    # Moving the owner off the carrier is worth little while "90% loss at the
+    # last hop" still sits above it as the headline, which is a carrier ticket
+    # about a route to nowhere.
+    #
+    # Only when the tool picked the target. A destination somebody named is one
+    # they expect to reach, and where the path to it breaks is exactly what
+    # they were asking.
+    aimed_nowhere = _aimed_nowhere(raw, by_code)
     for code, owner, headline, next_step in VERDICT_RULES:
         matches = by_code.get(code)
         if not matches:
             continue
-        # Measured on a route the traffic does not take. Not dropped - the
-        # report still carries it, beside the finding that says why - but it
-        # cannot be the answer while there is an answer that was measured on
-        # the right one.
-        if (code in PATH_DERIVED and (raw or {}).get("path_off_route")
+        # Measured on a route the traffic does not take, or toward somewhere it
+        # was never going. Not dropped - the report still carries it, beside
+        # the finding that says why - but it cannot be the answer while there
+        # is an answer that was measured on the right one.
+        if (code in PATH_DERIVED and ((raw or {}).get("path_off_route") or aimed_nowhere)
                 and any(f["severity"] != "ok"
                         and f.get("code") not in PATH_DERIVED
                         and f.get("code") not in VERDICT_EXEMPT
@@ -10663,7 +10719,15 @@ def build_verdict(findings, quick=False, raw=None):
             "based_on": [code] + corroborating,
             "severity": _verdict_severity(
                 matches[0]["severity"],
-                [code] + corroborating + [f.get("code") for f in explains],
+                [code] + corroborating
+                + [f.get("code") for f in explains
+                   # A consequence measured on the route to nowhere does not
+                   # lift this. 100% loss to an address nobody asked for is
+                   # critical on its own terms and is the same non-event as the
+                   # cause: letting it lift the verdict put "critical" back
+                   # over a target this tool picked for itself, which is the
+                   # headline it was just stopped from manufacturing.
+                   if not (aimed_nowhere and f.get("code") in PATH_DERIVED)],
                 findings),
             "detail": matches[0]["message"],
         }

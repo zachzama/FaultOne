@@ -7083,6 +7083,51 @@ def subnet24(ip):
     return ".".join(parts[:3]) if len(parts) == 4 else None
 
 
+# What an AS number says about itself when nothing else names it. IANA's own
+# registry, which is a closed set of facts rather than a judgement - the same
+# reason the DNS rcodes and the ICMP unreachable codes are borrowed here and
+# the list of networks that matter is not.
+#
+# It answers the question a bare number cannot on a core router with no PTR:
+# not who runs this, but what kind of thing it is. A private number on a path
+# is somebody's internal fabric and will not be in any routing registry, which
+# is worth knowing before opening a ticket with a number nobody can look up.
+ASN_RANGES = (
+    # Kept short, because every use of this is inside a parenthesis in the
+    # middle of a sentence. What each one means at length belongs in the
+    # reference, not in the fifth clause of a finding.
+    (0, 0, "reserved"),                                                # RFC 7607
+    (23456, 23456, "a 16-bit placeholder, not the real number"),       # RFC 6793
+    (64496, 64511, "documentation range"),                             # RFC 5398
+    (64512, 65534, "private, in no registry"),                         # RFC 6996
+    (65535, 65535, "reserved"),                                        # RFC 7300
+    (65536, 65551, "documentation range"),                             # RFC 5398
+    (4200000000, 4294967294, "private, in no registry"),               # RFC 6996
+    (4294967295, 4294967295, "reserved"),                              # RFC 7300
+)
+
+
+def asn_kind(asn):
+    """What the number itself says, or None for an ordinary public one.
+
+    A core router usually has no PTR, so on most of a path the number is all
+    there is - and a number is only a name if somebody can look it up. These
+    ranges are the cases where nobody can, and saying so is worth more than
+    the digits: a ticket raised against a private AS goes nowhere, because it
+    belongs to whoever runs the network the hop sits in and to no registry.
+    """
+    if not asn:
+        return None
+    digits = str(asn).upper().lstrip("AS")
+    if not digits.isdigit():
+        return None
+    number = int(digits)
+    for low, high, what in ASN_RANGES:
+        if low <= number <= high:
+            return what
+    return None
+
+
 def asn_with_name(row, shown=None):
     """"AS15169, dns.google" where both are known, "AS15169" where only one is.
 
@@ -7110,9 +7155,19 @@ def asn_with_name(row, shown=None):
     if not asn:
         return None
     net = (row or {}).get("network")
-    if not net or net in asn or net == shown:
-        return asn
-    return "%s, %s" % (asn, net)
+    parts = [asn]
+    # `shown` is usually the full hostname and `net` its registrable part, so
+    # equality is the wrong test: core-rtr-07.corp.internal has already said
+    # corp.internal, and repeating it is a word for nothing.
+    already = bool(shown and (shown == net or str(shown).endswith("." + str(net))))
+    if net and net not in asn and not already:
+        parts.append(net)
+    # After the name, not instead of it: a private number can still have a PTR,
+    # and then both halves are true and say different things.
+    kind = asn_kind(asn)
+    if kind:
+        parts.append(kind)
+    return ", ".join(parts)
 
 
 def annotate_hops(hops, gateway=None, target=None, sent_from=None):
@@ -7211,9 +7266,15 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
         h["enters_network"] = None
         # A PTR name on a private hop is the site's own naming, not a network
         # boundary; marking it as a handoff buries the one that matters.
+        #
+        # Not a boundary is not the same as not worth keeping, and this used to
+        # delete the name as well as decline to draw a line at it. On an
+        # internal path that name is the most useful thing there is:
+        # `edge-rtr-01.corp.internal` says which device and whose estate, where
+        # a private AS number says only that nobody outside can look it up. The
+        # local variable is cleared for the handoff test; the hop keeps its own.
         if h.get("private"):
             net = None
-            h["network"] = None
         if net and net != last_net:
             # enters_network marks the boundary itself; handoff_from is set only
             # when we know which network it came from (None at the first named
@@ -15417,6 +15478,13 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
         if qj.get("private"):
             whose = ("inside this network, so it is congestion on equipment somebody "
                      "here can look at")
+            # The number still says something on an internal path, even though
+            # the side does not: a private AS is in no registry, so a ticket
+            # raised against it goes to whoever runs this estate and nowhere
+            # else. The hop's own name has usually said which estate already.
+            named_as = asn_with_name(qj, shown=qj.get("host"))
+            if named_as:
+                whose += " (%s)" % named_as
         else:
             whose = ("past this site's edge" +
                      (" (%s)" % asn_with_name(qj, shown=qj.get("host"))

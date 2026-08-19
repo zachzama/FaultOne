@@ -15983,8 +15983,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1044),
-            "compressed": (len(gzip.compress(raw, 9)), 315),
+            "on disk": (len(raw), 1047),
+            "compressed": (len(gzip.compress(raw, 9)), 316),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
         for label, (measured, quoted) in claims.items():
@@ -19930,6 +19930,114 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         self.assertEqual(nd.asn_with_name(row, shown="dns.google"), "AS15169")
         self.assertEqual(nd.asn_with_name(row, shown="somethingelse"),
                          "AS15169, dns.google")
+
+    def test_the_number_says_what_kind_of_network_it_is(self):
+        """The question a bare number cannot answer on a core router with no
+        PTR: not who runs this, but what kind of thing it is. IANA's own
+        registry is a closed set of facts, which is the borrowable kind - the
+        same reason the DNS rcodes and the ICMP unreachable codes are here and
+        a list of the networks that matter is not."""
+        self.assertEqual(nd.asn_kind("AS65001"), "private, in no registry")
+        self.assertEqual(nd.asn_kind("AS4200000007"), "private, in no registry")
+        self.assertEqual(nd.asn_kind("AS64500"), "documentation range")
+        self.assertEqual(nd.asn_kind("AS23456"),
+                         "a 16-bit placeholder, not the real number")
+        self.assertEqual(nd.asn_kind("AS65535"), "reserved")
+
+    def test_each_range_starts_and_stops_where_the_registry_says(self):
+        """Borrowing a closed set of facts is only worth anything if the edges
+        come with it. A mutation moving the private range one number lower
+        survived a whole run: every fixture sat comfortably inside its band, so
+        nothing noticed 64511 changing sides.
+
+        The pairs are the boundaries themselves, taken from IANA rather than
+        from this file - documentation ends at 64511 and private begins at
+        64512, and the 32-bit block runs to 4294967294 with the last number
+        reserved."""
+        for number, expect in ((64495, None),
+                               (64496, "documentation range"),
+                               (64511, "documentation range"),
+                               (64512, "private, in no registry"),
+                               (65534, "private, in no registry"),
+                               (65535, "reserved"),
+                               (65536, "documentation range"),
+                               (65551, "documentation range"),
+                               (65552, None),
+                               (4199999999, None),
+                               (4200000000, "private, in no registry"),
+                               (4294967294, "private, in no registry"),
+                               (4294967295, "reserved"),
+                               (0, "reserved"),
+                               (1, None)):
+            with self.subTest(asn=number):
+                self.assertEqual(nd.asn_kind("AS%d" % number), expect)
+
+    def test_an_ordinary_public_number_says_nothing_extra(self):
+        """Almost every hop on almost every path. A label on all of them is a
+        column of noise, and it is the ones that cannot be looked up that are
+        worth a word."""
+        for asn in ("AS15169", "AS2914", "AS1", "AS4199999999", "AS131072"):
+            with self.subTest(asn=asn):
+                self.assertIsNone(nd.asn_kind(asn))
+
+    def test_it_survives_whatever_the_trace_wrote(self):
+        """mtr writes AS15169, some builds write a bare number, and a hop with
+        no answer writes something that is not one at all."""
+        self.assertEqual(nd.asn_kind("65001"), "private, in no registry")
+        for junk in (None, "", "AS???", "*", "ASN", "AS-1", "AS 65001"):
+            with self.subTest(junk=junk):
+                self.assertIsNone(nd.asn_kind(junk))
+
+    def test_the_kind_comes_after_the_name_not_instead_of_it(self):
+        """A private number can still have a PTR, and then both halves are true
+        and say different things: one is what to call it, the other is that
+        nobody outside can look it up."""
+        self.assertEqual(
+            nd.asn_with_name({"asn": "AS65001", "network": "corp.example"}),
+            "AS65001, corp.example, private, in no registry")
+
+    INTERNAL = [
+        {"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.5,
+         "Best": 1.4, "Wrst": 2.0, "StDev": 0.2},
+        {"count": 2, "host": "edge-rtr-01.corp.internal (10.20.0.1)", "Loss%": 0.0,
+         "Snt": 30, "Avg": 120.0, "Best": 119.0, "Wrst": 122.0, "StDev": 0.8,
+         "ASN": "AS65001"},
+        {"count": 3, "host": "core-rtr-07.corp.internal (10.30.0.1)", "Loss%": 0.0,
+         "Snt": 30, "Avg": 180.0, "Best": 122.0, "Wrst": 300.0, "StDev": 40.0,
+         "ASN": "AS65001"}]
+
+    def internal_run(self):
+        mod = fresh()
+        mtr(mod, self.INTERNAL)
+        return mod, mod.diagnose("10.30.0.1", None, quick=False)
+
+    def test_a_private_hop_keeps_the_name_it_was_given(self):
+        """The name is the most useful thing on an internal path.
+        `edge-rtr-01.corp.internal` says which device and whose estate; a
+        private AS number says only that nobody outside can look it up.
+
+        The handoff logic deleted it, because a PTR on a private hop is the
+        site's own naming rather than a network boundary - which is a good
+        reason not to draw a line there and no reason at all to throw the name
+        away."""
+        _mod, rep = self.internal_run()
+        third = next(h for h in rep["hops"] if h["hop"] == 3)
+        self.assertEqual(third["network"], "corp.internal")
+        self.assertEqual(third["display"], "core-rtr-07.corp.internal")
+        # Still not a boundary, which was the point of the original rule.
+        self.assertIsNone(third["enters_network"])
+        self.assertEqual(rep["networks_crossed"], [])
+
+    def test_the_finding_names_the_device_not_only_the_estate(self):
+        """"an edge router" sends somebody looking. The exact name is the root
+        cause already located."""
+        _mod, rep = self.internal_run()
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "queue_builds_at_hop")
+        self.assertIn("Hop 3 (core-rtr-07.corp.internal)", said)
+        self.assertIn("AS65001, private, in no registry", said)
+        # And not the estate twice: the hostname has already said it.
+        self.assertNotIn("corp.internal, private", said)
 
     def test_it_reaches_the_page(self):
         """The number travels with the jump; the name has to travel with it or

@@ -1,11 +1,57 @@
 [
- {"label": "the name is dropped, so only the number is ever shown",
-  "old": "    return \"%s, %s\" % (asn, net)", "new": "    return asn"},
- {"label": "the name is repeated where the sentence just printed it",
-  "old": "    if not net or net in asn or net == shown:", "new": "    if not net or net in asn:"},
- {"label": "a hop with a name and no number reads as a network",
+ {
+  "label": "a hop with a name and no number reads as a network",
   "old": "    asn = (row or {}).get(\"asn\")\n    if not asn:\n        return None",
-  "new": "    asn = (row or {}).get(\"asn\")\n    if not asn:\n        return (row or {}).get(\"network\")"},
- {"label": "the name never travels with the number",
-  "old": "                             \"network\": worst_queue.get(\"network\"),", "new": ""}
+  "new": "    asn = (row or {}).get(\"asn\")\n    if not asn:\n        return (row or {}).get(\"network\")"
+ },
+ {
+  "label": "the name never travels with the number",
+  "old": "                             \"network\": worst_queue.get(\"network\"),",
+  "new": ""
+ },
+ {
+  "label": "the number's own meaning goes unread",
+  "old": "    kind = asn_kind(asn)\n    if kind:\n        parts.append(kind)",
+  "new": "    pass"
+ },
+ {
+  "label": "a public number is labelled as if it were private",
+  "old": "    for low, high, what in ASN_RANGES:\n        if low <= number <= high:\n            return what\n    return None",
+  "new": "    return \"private, in no registry\""
+ },
+ {
+  "label": "the private range starts one too high",
+  "old": "    (64512, 65534, \"private, in no registry\"),                         # RFC 6996",
+  "new": "    (64513, 65534, \"private, in no registry\"),                         # RFC 6996"
+ },
+ {
+  "label": "32-bit private numbers are not recognised",
+  "old": "    (4200000000, 4294967294, \"private, in no registry\"),               # RFC 6996",
+  "new": "    (4200000000, 4200000000, \"private, in no registry\"),               # RFC 6996"
+ },
+ {
+  "label": "a private hop loses its name again",
+  "old": "        if h.get(\"private\"):\n            net = None",
+  "new": "        if h.get(\"private\"):\n            net = None\n            h[\"network\"] = None"
+ },
+ {
+  "label": "a private hop is drawn as a network boundary",
+  "old": "        if h.get(\"private\"):\n            net = None",
+  "new": "        if False:\n            net = None"
+ },
+ {
+  "label": "the estate is repeated after the hostname that just said it",
+  "old": "    already = bool(shown and (shown == net or str(shown).endswith(\".\" + str(net))))",
+  "new": "    already = bool(shown and shown == net)"
+ },
+ {
+  "label": "a private hop's number is not reported at all",
+  "old": "            named_as = asn_with_name(qj, shown=qj.get(\"host\"))\n            if named_as:\n                whose += \" (%s)\" % named_as",
+  "new": "            pass"
+ },
+ {
+  "label": "the name is dropped, so only the number is ever shown",
+  "old": "    if net and net not in asn and not already:\n        parts.append(net)",
+  "new": "    if False:\n        parts.append(net)"
+ }
 ]

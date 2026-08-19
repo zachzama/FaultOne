@@ -1241,8 +1241,31 @@ What is already here costs nothing. The handoff logic derives each hop's PTR
 domain to say which operator's network the path entered, so where a hop has
 both they are printed together - `AS15169, dns.google`, one for the ticket and
 one for the reader - and the name is dropped where the sentence has just
-printed it. Core routers usually have no PTR at all, so the number stands alone
-often. That is the honest state of it rather than a gap.
+printed it. Core routers usually have no PTR at all, so the number often stands alone -
+and where it does, the number still says something about itself. IANA's
+registry is a closed set of facts, which is the borrowable kind:
+
+| range | what it says |
+|---|---|
+| 64512-65534, 4200000000-4294967294 | `private, in no registry` - somebody's own fabric, and a ticket raised against the number goes nowhere |
+| 64496-64511, 65536-65551 | `documentation range` - a lab, or a device configured with an example |
+| 23456 | `a 16-bit placeholder, not the real number` |
+| 0, 65535, 4294967295 | `reserved` - should not be on a path at all |
+
+Nothing is said about an ordinary public number, which is almost every hop on
+almost every path: a label on all of them is a column of noise, and the ones
+worth a word are the ones nobody can look up.
+
+**The device, not only the estate.** A PTR on a private hop is the site's own
+naming rather than a network boundary, so the handoff logic declines to draw a
+line there - and it used to delete the name as well. Those are different
+things. `edge-rtr-01.corp.internal` says which box and whose estate, and on an
+internal path it is the most useful thing on the page: "an edge router" sends
+somebody looking, and the exact name is the root cause already located. The hop
+keeps its name now and still creates no handoff.
+
+The estate is not repeated where the hostname has already said it -
+`core-rtr-07.corp.internal` has, so the number prints beside it alone.
 
 **The spread is a second witness.** mtr counts a deviation over every cycle and
 the tool spent it on a call-quality score alone. The gap between best and
@@ -1550,7 +1573,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **195** | Distinct conclusions it can reach and state in plain language. 161 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **161** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1773 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1780 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 195 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2353,7 +2376,7 @@ If the interpreter is older, the tool prints the version it needs and exits
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1773 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1780 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3885,7 +3908,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1773 tests, no dependencies, no network, a few seconds, so they run
+1780 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

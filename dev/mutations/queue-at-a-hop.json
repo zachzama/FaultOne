@@ -1,0 +1,37 @@
+[
+ {
+  "label": "the hop floor is ignored, so there is no queue to find",
+  "old": "        floor = h.get(\"best_ms\")",
+  "new": "        floor = None"
+ },
+ {
+  "label": "a hop's own queue is not measured against the hop before it",
+  "old": "            h[\"queue_delta_ms\"] = round(max(h[\"queue_ms\"] - (prev_queue or 0.0), 0), 1)",
+  "new": "            h[\"queue_delta_ms\"] = h[\"queue_ms\"]"
+ },
+ {
+  "label": "any hop holding the most waiting is named, however little that is",
+  "old": "    if (qj and qj[\"queue_ms\"] >= QUEUE_HOP_MS\n            and (qj.get(\"share_pct\") or 0) >= 100 * QUEUE_HOP_SHARE):",
+  "new": "    if qj:"
+ },
+ {
+  "label": "the share test goes, so a hop no worse than its neighbours is named",
+  "old": "            and (qj.get(\"share_pct\") or 0) >= 100 * QUEUE_HOP_SHARE):",
+  "new": "            and True):"
+ },
+ {
+  "label": "the queue's share is taken of the whole round trip, not of the waiting",
+  "old": "        queue_share = min(round(100.0 * worst_queue[\"queue_delta_ms\"] / queue_total), 100)",
+  "new": "        queue_share = min(round(100.0 * worst_queue[\"queue_delta_ms\"] / (hops[-1].get(\"avg_ms\") or queue_total)), 100)"
+ },
+ {
+  "label": "the cable outranks the queue again",
+  "old": "    (\"queue_builds_at_hop\", \"whoever owns the hop the queue is on\",",
+  "new": "    (\"queue_builds_at_hop_moved\", \"whoever owns the hop the queue is on\","
+ },
+ {
+  "label": "the named hop is not marked on the picture",
+  "old": "                hop[\"blame\"] = {\"code\": \"queue_builds_at_hop\", \"severity\": \"warning\"}",
+  "new": "                pass"
+ }
+]

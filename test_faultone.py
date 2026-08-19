@@ -15983,9 +15983,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1030),
-            "compressed": (len(gzip.compress(raw, 9)), 311),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 215),
+            "on disk": (len(raw), 1036),
+            "compressed": (len(gzip.compress(raw, 9)), 313),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 216),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -18918,6 +18918,9 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
 
     NAMES_A_HOP = {
         "latency_wall": lambda rep: [rep["worst_jump"]["hop"]],
+        # A different hop from the wall above, on purpose and often in fact:
+        # one is where the distance is and one is where the waiting is.
+        "queue_builds_at_hop": lambda rep: [rep["worst_queue_jump"]["hop"]],
         "loop": lambda rep: list(rep["loop_at"]["hops"]),
         # Named by role, not by number - which hop is the destination depends
         # on the path. Both assert traffic is not reaching it, so a clean
@@ -19687,6 +19690,108 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
     def test_the_template_no_longer_talks_to_a_server(self):
         for gone in ("/api/", "loadMeta", "runCommand", "diagnoseBtn"):
             self.assertNotIn(gone, nd.VIEWER_TEMPLATE, f"{gone} outlived the server")
+
+
+class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
+    """Two questions about a path that get confused for each other.
+
+    `latency_wall` names the hop adding the most delay. On a long path that is
+    the longest link doing exactly what it is for, and nobody fixes a subsea
+    cable. `queue_builds_at_hop` names the hop adding the most delay that
+    *varies*, which is a queue and belongs to somebody.
+
+    mtr has reported a Best per hop since the parser was written and nothing
+    ever read it, which is the same reason the tool could not say why a path
+    was slow: the floor was measured and thrown away at both scales.
+    """
+
+    def report(self):
+        mod = fresh()
+        setup, kwargs = S["queue_builds_at_hop"]
+        setup(mod)
+        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def test_the_two_name_different_hops(self):
+        """The property the fixture exists for. Its first version put both on
+        one hop, which proved nothing and passed."""
+        rep = self.report()
+        self.assertEqual(rep["worst_jump"]["hop"], 2)
+        self.assertEqual(rep["worst_queue_jump"]["hop"], 3)
+
+    def test_the_queue_is_the_answer_and_the_cable_is_not(self):
+        """Both fire here. The wall is 119ms on one link whose best and average
+        agree to a millisecond - distance, and no ticket moves it. The queue is
+        58ms of waiting, which is congestion with an owner."""
+        v = self.report()["verdict"]
+        self.assertEqual(v["based_on"][0], "queue_builds_at_hop")
+        self.assertIn("latency_wall", v["explains"])
+        self.assertIn("hop the queue is on", v["owner"])
+
+    def test_the_hop_floor_comes_from_mtr_where_it_has_one(self):
+        """Best per hop, not the synthesised single sample. A traceroute has
+        three probes and their minimum answers the same question less well;
+        mtr counted ten cycles and reported the answer."""
+        rep = self.report()
+        third = next(h for h in rep["hops"] if h["hop"] == 3)
+        self.assertEqual(third["floor_ms"], 122.0)
+        self.assertEqual(third["queue_ms"], 58.0)
+
+    def hop(self, n, host, avg, best):
+        return {"count": n, "host": host, "Loss%": 0.0, "Snt": 30, "Avg": avg,
+                "Best": best, "Wrst": avg * 2, "StDev": 1.0}
+
+    def codes_for(self, hubs):
+        mod = fresh()
+        mtr(mod, hubs)
+        return [f["code"] for f in
+                mod.diagnose("8.8.8.8", None, quick=False)["findings"]]
+
+    def test_waiting_spread_across_the_path_names_nobody(self):
+        """Three hops each adding 25ms of waiting. Every one of them clears the
+        millisecond bar and none of them holds most of it, so the sentence
+        "this hop holds the waiting" is not true of any and is not said.
+
+        Isolated deliberately: removing the share test left this caught only by
+        a structural check about unused constants, which is a pass that says
+        nothing about the rule."""
+        codes = self.codes_for([
+            self.hop(1, "10.0.0.1", 1.5, 1.4),
+            self.hop(2, "198.51.100.63", 51.0, 26.0),
+            self.hop(3, "198.51.100.77", 101.0, 51.0),
+            self.hop(4, "dns.google (8.8.8.8)", 151.0, 76.0)])
+        self.assertNotIn("queue_builds_at_hop", codes)
+
+    def test_the_hop_that_adds_the_waiting_is_named_not_the_last_one(self):
+        """Hop times are round trips from here, so the waiting accumulates. Hop
+        2 adds 50ms of it and hop 3 adds five more - and hop 3 carries the
+        larger total purely by being further along.
+
+        Without the subtraction the last hop wins every path, which is the same
+        mistake `delta_ms` exists to avoid for the delay itself."""
+        mod = fresh()
+        mtr(mod, [self.hop(1, "10.0.0.1", 1.5, 1.4),
+                  self.hop(2, "198.51.100.63", 60.0, 10.0),
+                  self.hop(3, "dns.google (8.8.8.8)", 75.0, 20.0)])
+        rep = mod.diagnose("8.8.8.8", None, quick=False)
+        self.assertIn("queue_builds_at_hop", [f["code"] for f in rep["findings"]])
+        self.assertEqual(rep["worst_queue_jump"]["hop"], 2)
+
+    def test_a_path_with_no_queue_names_no_hop(self):
+        """Every path has a hop holding the most of whatever varies. Naming one
+        on a path where nothing waits is the failure the wall's own share test
+        was written to prevent, one measurement over."""
+        mod = fresh()
+        mtr(mod, [{"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30,
+                   "Avg": 1.5, "Best": 1.4, "Wrst": 2.0, "StDev": 0.2},
+                  {"count": 2, "host": "198.51.100.63", "Loss%": 0.0, "Snt": 30,
+                   "Avg": 20.4, "Best": 20.0, "Wrst": 21.0, "StDev": 0.3},
+                  {"count": 3, "host": "dns.google (8.8.8.8)", "Loss%": 0.0,
+                   "Snt": 30, "Avg": 22.0, "Best": 21.5, "Wrst": 23.0,
+                   "StDev": 0.4}])
+        rep = mod.diagnose("8.8.8.8", None, quick=False)
+        self.assertNotIn("queue_builds_at_hop",
+                         [f["code"] for f in rep["findings"]])
+        self.assertFalse([h for h in rep["hops"] if h.get("blame")])
 
 
 class TestOneDeadDestinationIsNotADeadUplink(unittest.TestCase):
@@ -21590,6 +21695,26 @@ def _(nd): trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  100.64.0.1 (100.64.0.
 @scenario("latency_wall")
 def _(nd): trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms\n 2  100.64.0.1 (100.64.0.1)  620.0 ms\n"
                      " 3  8.8.8.8 (8.8.8.8)  640.0 ms\n")
+
+@scenario("queue_builds_at_hop")
+def _(nd):
+    """Where the waiting is, which is not where the distance is.
+
+    Hop 2 is a long link - 119ms of it - and queues nothing: its best and its
+    average agree to within a millisecond. Hop 3 costs 3ms more at its best and
+    swings 58ms above that, which is a queue.
+
+    So the wall lands on hop 2 and the queue on hop 3, which is the whole point
+    of having both. The first version of this fixture put them on the same hop
+    and proved nothing while passing.
+    """
+    mtr(nd, [
+        {"count": 1, "host": "10.0.0.1", "Loss%": 0.0, "Snt": 30, "Avg": 1.5,
+         "Best": 1.4, "Wrst": 2.0, "StDev": 0.2},
+        {"count": 2, "host": "198.51.100.63", "Loss%": 0.0, "Snt": 30, "Avg": 120.0,
+         "Best": 119.0, "Wrst": 122.0, "StDev": 0.8, "ASN": "AS64500"},
+        {"count": 3, "host": "dns.google (8.8.8.8)", "Loss%": 0.0, "Snt": 30,
+         "Avg": 180.0, "Best": 122.0, "Wrst": 300.0, "StDev": 40.0, "ASN": "AS15169"}])
 
 @scenario("path_loss")
 def _(nd): mtr(nd, [

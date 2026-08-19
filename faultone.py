@@ -7090,7 +7090,7 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
 
     No extra packets are sent - this is arithmetic on the trace we already have.
     """
-    prev_avg = None
+    prev_avg = prev_queue = None
     for h in hops:
         times = [t for t in (h.get("times_ms") or []) if t is not None]
         avg = sum(times) / len(times) if times else None
@@ -7112,6 +7112,26 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
             h["delta_ms"] = None
         if avg is not None:
             prev_avg = avg
+
+        # The same floor-and-queue split as the round trip, one hop at a time.
+        # mtr reports Best per hop and nothing has ever read it; a traceroute
+        # gives three probes, whose minimum answers the same question less
+        # precisely. What the hop costs when nothing is queued is the floor;
+        # what it costs on average, less that, is time spent waiting.
+        #
+        # Cumulative, because every hop's time is a round trip from here - so
+        # the waiting a single hop *adds* is the increase over the hop before
+        # it, the same arithmetic delta_ms already does for the total.
+        floor = h.get("best_ms")
+        if floor is None and times:
+            floor = min(times)
+        h["floor_ms"] = round(floor, 1) if floor is not None else None
+        if avg is not None and floor is not None:
+            h["queue_ms"] = round(max(avg - floor, 0), 1)
+            h["queue_delta_ms"] = round(max(h["queue_ms"] - (prev_queue or 0.0), 0), 1)
+            prev_queue = h["queue_ms"]
+        else:
+            h["queue_ms"] = h["queue_delta_ms"] = None
 
         # Call quality at this hop, where we know enough to say. mtr supplies
         # loss and spread; a plain traceroute doesn't, so this stays absent
@@ -7248,7 +7268,25 @@ def annotate_hops(hops, gateway=None, target=None, sent_from=None):
         # Deltas are clamped at zero, so they can't quite sum to the total;
         # capping keeps a rounding artefact from reading as "more than all".
         worst_share = min(round(100.0 * worst["delta_ms"] / total_ms), 100)
+    # And where the waiting is, which is not the same hop as where the delay
+    # is. The worst jump is the biggest single addition to the round trip, and
+    # on a long stable path that is simply the longest link - a subsea cable
+    # doing exactly what it is for. The biggest addition to the *variable* part
+    # is a queue, and it has an owner worth naming.
+    queued = [h for h in hops if h.get("queue_delta_ms")]
+    worst_queue = max(queued, key=lambda h: h["queue_delta_ms"]) if queued else None
+    queue_total = next((h["queue_ms"] for h in reversed(hops)
+                        if h.get("queue_ms") is not None), None)
+    queue_share = None
+    if worst_queue and queue_total:
+        queue_share = min(round(100.0 * worst_queue["queue_delta_ms"] / queue_total), 100)
     return {
+        "worst_queue_jump": {"hop": worst_queue["hop"],
+                             "queue_ms": worst_queue["queue_delta_ms"],
+                             "host": worst_queue.get("display") or worst_queue.get("host"),
+                             "asn": worst_queue.get("asn"),
+                             "private": worst_queue.get("private"),
+                             "share_pct": queue_share} if worst_queue else None,
         "networks_crossed": networks,
         "double_nat": double_nat,
         "balanced_hops": balanced,
@@ -8043,6 +8081,13 @@ VERDICT_RULES = [
      "It answered rather than went silent, which means the decision is "
      "configuration rather than a fault. Read the rule set on that hop - and "
      "if it is not yours, the answer is whoever runs it, not the carrier."),
+    ("queue_builds_at_hop", "whoever owns the hop the queue is on",
+     "One hop holds most of the delay that varies between probes",
+     "This is the congestion, named down to the hop. It is not the hop that "
+     "adds the most delay - the longest link on a path is usually just the "
+     "longest link - it is the one packets wait at, which is the part anyone "
+     "can act on. Take it to whoever owns that hop, with the best and average "
+     "times for it as the evidence."),
     ("latency_wall", "see the finding - it names the segment",
      "A single hop adds most of the round-trip delay",
      "Everything past that hop inherits the delay; take it up with whoever owns "
@@ -8390,7 +8435,7 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
 #: They stay in the report, next to the finding that says why they are suspect.
 PATH_DERIVED = frozenset({
     "loop", "same_router_twice", "path_loss", "path_loss_cosmetic",
-    "latency_wall", "double_nat", "nat_observed", "cgnat", "trace_stalls",
+    "latency_wall", "queue_builds_at_hop", "double_nat", "nat_observed", "cgnat", "trace_stalls",
     "path_admin_prohibited", "trace_took_another_route",
 })
 
@@ -8678,6 +8723,7 @@ FINDING_SIDE.update({
     "target_alone_unreachable": "upstream",
     "inet_partial_loss": "upstream",
     "latency_is_queuing": "upstream",
+    "queue_builds_at_hop": "upstream",
     "inet_loss_unmeasured": "upstream",
     "inet_icmp_filtered": "upstream",
     "path_loss": "upstream",
@@ -8823,7 +8869,7 @@ STAGE_RULES = [
       # A run where somebody named the target raises it to critical, and
       # build_stages fails the stage on the finding's own severity anyway.
       "target_alone_unreachable",
-      "latency_wall", "latency_high", "latency_is_queuing",
+      "latency_wall", "latency_high", "latency_is_queuing", "queue_builds_at_hop",
       "tcp_retransmits", "path_admin_prohibited",
       # The uplink is this site's internet stage, whoever owns the congestion.
       "uplink_saturated", "saturation_bursts", "uplink_busy", "egress_blocked",
@@ -9750,6 +9796,7 @@ FINDING_CLASS = {
 "inet_unreachable": ("communicationsAlarm", "routingFailure"),
 "inet_partial_loss": ("communicationsAlarm", "transmissionError"),
 "latency_is_queuing": ("qualityOfServiceAlarm", "congestion"),
+"queue_builds_at_hop": ("qualityOfServiceAlarm", "congestion"),
 "inet_loss_unmeasured": ("communicationsAlarm", "transmissionError"),
 "path_loss": ("communicationsAlarm", "transmissionError"),
 "loop": ("communicationsAlarm", "routingFailure"),
@@ -12566,6 +12613,18 @@ CONGESTION_MASQUERADE = {
 LATENCY_WALL_MS = 100
 LATENCY_WALL_SHARE = 0.5
 
+# What a single hop has to add to the *varying* part of the round trip, and
+# what share of all of it, before that hop is named as where a queue is.
+#
+# The same pair as the wall above and for the same reason - the finding's
+# sentence claims one hop holds most of the waiting, so "most" has to be
+# measured - but a much lower floor in milliseconds. A wall is about distance
+# and 100ms is a continent; a queue of 20ms on one hop is already a link
+# carrying more than it comfortably can, and is worth naming because unlike
+# distance somebody can fix it.
+QUEUE_HOP_MS = 20
+QUEUE_HOP_SHARE = 0.5
+
 # Round trip past which the distance explanation runs out. Light in fibre
 # covers about 200,000 km/s, so the far side of the planet and back is roughly
 # 250ms and the longest real terrestrial paths measure 250-300ms. 400ms leaves
@@ -15271,6 +15330,46 @@ def _findings_from_the_walk(findings, hops, path_insight, target):
                        f"worth knowing before chasing an inbound-access problem on the device.",
         })
 
+    qj = path_insight.get("worst_queue_jump")
+    if (qj and qj["queue_ms"] >= QUEUE_HOP_MS
+            and (qj.get("share_pct") or 0) >= 100 * QUEUE_HOP_SHARE):
+        # Where the waiting is, which is rarely where the delay is. The wall
+        # below names the hop that adds the most milliseconds, and on a long
+        # path that is the longest link doing exactly what it is for - a subsea
+        # cable is not a fault. This names the hop that adds the most
+        # *variable* milliseconds, which is a queue, and a queue has an owner.
+        #
+        # Both can fire on one path and name different hops. That is not a
+        # contradiction and the two sentences say so: one is where the distance
+        # is, the other is where the congestion is.
+        if qj.get("private"):
+            whose = ("inside this network, so it is congestion on equipment somebody "
+                     "here can look at")
+        else:
+            whose = ("past this site's edge" +
+                     (" (%s)" % qj["asn"] if qj.get("asn") else "") +
+                     ", so it is congestion on somebody else's link")
+        for hop in hops:
+            if hop.get("hop") == qj["hop"]:
+                hop["blame"] = {"code": "queue_builds_at_hop", "severity": "warning"}
+                break
+        findings.append({
+            "severity": "warning",
+            "code": "queue_builds_at_hop",
+            "layer": 3,
+            "message": (
+                f"Hop {qj['hop']}"
+                + (f" ({qj['host']})" if qj.get("host") else "")
+                + f" adds {qj['queue_ms']:.0f}ms of the delay that varies between "
+                  f"probes - {qj['share_pct']}% of all of it on this path. Every hop's "
+                  f"best time is what it costs with nothing queued, and its average "
+                  f"less that is time packets spent waiting; this is the hop where "
+                  f"that waiting appears. It is {whose}. This is not the same "
+                  f"question as which hop adds the most delay: the longest link on a "
+                  f"path is usually just the longest link, and it is the one holding "
+                  f"traffic that somebody can do something about."),
+        })
+
     wj = path_insight.get("worst_jump")
     end_to_end = max((h.get("avg_ms") or 0) for h in hops) if hops else 0
     wall_share = (wj["delta_ms"] / end_to_end) if (wj and end_to_end) else 0
@@ -15349,6 +15448,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         hops = []
         path_source = None
         path_insight = {"demarc_hop": None, "worst_jump": None,
+                        "worst_queue_jump": None,
                         "networks_crossed": [], "double_nat": [], "loop_at": None,
                         "cgnat_hop": None}
     else:
@@ -17626,6 +17726,9 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         "hops": hops,
         "demarc_hop": path_insight.get("demarc_hop"),
         "worst_jump": path_insight.get("worst_jump"),
+        # Where the waiting is, beside where the delay is. Two answers to two
+        # questions that get confused for each other, so they travel together.
+        "worst_queue_jump": path_insight.get("worst_queue_jump"),
         "baseline_path": baseline_path,
         "networks_crossed": path_insight.get("networks_crossed") or [],
         "double_nat": path_insight.get("double_nat") or [],

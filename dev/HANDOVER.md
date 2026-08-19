@@ -114,6 +114,42 @@ calls collectors something else.
 Still over 120 lines, in order: `render_text_report` 295, `_check_flows` 252,
 `_check_ports` 217, `analyze_tcp_flows` 205, `build_verdict` 195.
 
+## Collectors are a registry now, not a naming convention
+
+`@collector` registers every function that reaches outside the process into
+`COLLECTORS`, and the harness stubs what is in there. It used to derive that
+list from the `cmd_` and `_read_` prefixes, which is a naming convention doing
+an interface's job - and the job went undone the moment somebody wrote a reader
+without thinking about the name. That is exactly what `_sysfs_names` was.
+
+Three things worth knowing before touching it.
+
+**The guard covers commands as well as files now.** It looked for `os.listdir`
+and `open("/proc...")` only, so it covered thirteen of fifty-six collectors and
+a mutation removing the decorator from `cmd_kernel_log` survived a whole run.
+It also checks calls to `run`, `run_first_understood`, `run_first_usable`,
+`create_connection`, `getaddrinfo` and `gethostbyaddr`.
+
+**Four functions are plumbing, not collectors**, and are listed as such in the
+guard: `run`, the two `run_first_*` wrappers, and `connect_from`. A collector is
+a question about the box; these are what carries one. Stubbing them would hide
+the collector bugs the registry exists to surface. The list lives in the test
+rather than in the tool, because the tool never reads it and `TestNoSecondCopy`
+correctly rejects a constant nothing reads.
+
+**Registering `_link_stats_bsd`, `_link_modes_bsd` and `_tcp_counters_bsd`
+changed no observable behaviour**, and that is honest rather than a gap:
+`fresh()` pins `OS_NAME` to Linux, so their branch never runs in the corpus.
+They are defence for a platform the scenarios do not describe. Two mutations
+against them survived until they were rewritten to remove the compatibility
+fallback as well - equivalent mutants, not holes.
+
+The fallback: `fresh()` and `DiagnoseHarness.collectors()` fall back to the
+prefix scan when the module has no `COLLECTORS`. That path exists only for
+`dev/equivalence.py`, which runs the current tests against a previous
+`faultone.py` to prove a refactor changed no answer - and that copy predates
+the registry.
+
 ## A severity leaks through every place that recomputes it
 
 Worth knowing before touching a verdict again, because it cost four passes.

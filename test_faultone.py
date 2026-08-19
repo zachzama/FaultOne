@@ -15987,7 +15987,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1048),
+            "on disk": (len(raw), 1050),
             "compressed": (len(gzip.compress(raw, 9)), 317),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
@@ -20260,9 +20260,12 @@ class DiagnoseHarness(unittest.TestCase):
     #: list is the thing that went stale.
     @staticmethod
     def collectors():
-        return sorted(n for n in dir(nd)
-                      if (n.startswith("cmd_") or n.startswith("_read_"))
-                      and callable(getattr(nd, n)))
+        # The registry, not the prefixes. A naming convention cannot be
+        # enforced and was not: `_sysfs_names` read /sys/class/net with neither
+        # prefix, so this list did not contain it and nothing stubbed it.
+        return sorted(getattr(nd, "COLLECTORS", None) or
+                      [n for n in dir(nd)
+                       if n.startswith(("cmd_", "_read_")) and callable(getattr(nd, n))])
 
     @staticmethod
     def _unavailable(name):
@@ -20481,23 +20484,51 @@ class DiagnoseHarness(unittest.TestCase):
         with open(nd.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
         HOST = {"listdir", "readlink", "getloadavg"}
+        # Reading a file is half of it, and the smaller half: forty of the
+        # fifty-six collectors shell out. A mutation removing the decorator
+        # from `cmd_kernel_log` survived a whole run because this only looked
+        # for file reads, so the check covered thirteen of them.
+        LEAVES = {"run", "run_first_understood", "run_first_usable",
+                  "create_connection", "getaddrinfo", "gethostbyaddr"}
+        # The three ways out of the process. Everything else that leaves it has
+        # to go through one of them and be registered, which is what this
+        # checks - so a new reader cannot reach the host by calling `run` from
+        # somewhere nobody thought to stub.
+        #
+        # They are not collectors. A collector is a question about the box;
+        # these are the plumbing that carries one, and stubbing the plumbing
+        # would hide the collector bugs the registry exists to surface. Kept
+        # here rather than in the tool, because the tool never reads it and a
+        # constant nothing reads is what `TestNoSecondCopy` exists to reject.
+        PLUMBING = {"run", "run_first_understood", "run_first_usable",
+                    "connect_from"}
         missed = []
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
-            if fn.name.startswith(("cmd_", "_read_")):
+            # Registered, not named. The prefix was a convention and a
+            # convention cannot be enforced: this asked whether the author had
+            # chosen the right name, and the answer for `_sysfs_names` was no.
+            # It now asks whether the function is in the registry the harness
+            # actually stubs, which is the thing that has to be true.
+            if fn.name in nd.COLLECTORS or fn.name in PLUMBING:
                 continue
             for node in ast.walk(fn):
                 if (isinstance(node, ast.Attribute) and node.attr in HOST
                         and isinstance(node.value, ast.Name)
                         and node.value.id == "os"):
                     missed.append("%s (os.%s)" % (fn.name, node.attr))
+                if isinstance(node, ast.Call):
+                    called = (node.func.id if isinstance(node.func, ast.Name)
+                              else getattr(node.func, "attr", None))
+                    if called in LEAVES:
+                        missed.append("%s (%s)" % (fn.name, called))
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                         and node.func.id == "open" and node.args
                         and isinstance(node.args[0], ast.Constant)
                         and str(node.args[0].value).startswith(("/proc", "/sys", "/etc"))):
                     missed.append("%s (open %s)" % (fn.name, node.args[0].value))
         self.assertEqual(sorted(set(missed)), [],
-                         "these reach the host and are not named as collectors, "
-                         "so nothing stubs them")
+                         "these reach the host and are not registered with "
+                         "@collector, so nothing stubs them")
 
     def test_the_operating_system_is_asked_once_and_read_from_one_name(self):
         """`OS_NAME = platform.system()` is the largest host input in the tool.
@@ -20881,8 +20912,14 @@ def fresh():
     # overwritten the name there is no way back to it. Twenty-eight collectors
     # are still unstubbed here; each one that gets a baseline will take a test
     # like that with it, so the door has to exist before the stubbing does.
-    mod.AS_WRITTEN = {n: getattr(mod, n) for n in dir(mod)
-                      if n.startswith(("cmd_", "_read_")) and callable(getattr(mod, n))}
+    # dev/equivalence.py runs these tests against a *previous* faultone.py to
+    # check a refactor changed no scenario's answer, and that copy predates the
+    # registry. The prefix scan is what the harness used before it existed, so
+    # it is the right fallback and it is only ever reached by that harness.
+    mod.AS_WRITTEN = dict(getattr(mod, "COLLECTORS", None) or
+                          {n: getattr(mod, n) for n in dir(mod)
+                           if n.startswith(("cmd_", "_read_"))
+                           and callable(getattr(mod, n))})
     quiet_time = types.ModuleType("time")
     quiet_time.__dict__.update(time.__dict__)
     quiet_time.sleep = lambda s: None

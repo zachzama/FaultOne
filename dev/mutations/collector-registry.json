@@ -1,0 +1,29 @@
+[
+ {
+  "label": "a host reader is written without the decorator",
+  "old": "@collector\ndef _read_sysfs_names(base):",
+  "new": "def _read_sysfs_names(base):"
+ },
+ {
+  "label": "a command runner is written without the decorator",
+  "old": "@collector\ndef cmd_kernel_log():",
+  "new": "def cmd_kernel_log():"
+ },
+ {
+  "label": "the registry is populated but the harness ignores it",
+  "file": "test_faultone.py",
+  "old": "        return sorted(getattr(nd, \"COLLECTORS\", None) or\n                      [n for n in dir(nd)\n                       if n.startswith((\"cmd_\", \"_read_\")) and callable(getattr(nd, n))])",
+  "new": "        return []"
+ },
+ {
+  "label": "the decorator registers nothing",
+  "old": "    COLLECTORS[fn.__name__] = fn\n    return fn",
+  "new": "    return fn"
+ },
+ {
+  "label": "the registry keeps the stub instead of the function as written",
+  "file": "test_faultone.py",
+  "old": "    mod.AS_WRITTEN = dict(getattr(mod, \"COLLECTORS\", None) or\n                          {n: getattr(mod, n) for n in dir(mod)\n                           if n.startswith((\"cmd_\", \"_read_\"))\n                           and callable(getattr(mod, n))})",
+  "new": "    mod.AS_WRITTEN = {}"
+ }
+]

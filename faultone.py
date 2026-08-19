@@ -100,6 +100,31 @@ if sys.version_info < MIN_PYTHON:
 
 OS_NAME = platform.system()  # 'Linux', 'Darwin' (macOS), or 'Windows'
 
+
+#: Every function that reaches outside this process, by name.
+#:
+#: The test harness stubs what is in here. It used to derive that list from the
+#: `cmd_` and `_read_` prefixes, which is a naming convention doing an
+#: interface's job - and the job went undone the moment somebody wrote a reader
+#: without thinking about the name. `_sysfs_names` walked /sys/class/net with
+#: neither prefix, so nothing stubbed it, and it took down every Linux CI job
+#: for days while passing here, because a Mac has no /sys for the branch to
+#: reach. A decorator cannot be forgotten in the same silent way: the guard
+#: below asks the source which functions touch the host and requires each of
+#: them to be in this registry, and it answers the same on every platform.
+#:
+#: Names, mapped to the function as written. The harness replaces attributes on
+#: a module copy, so it needs the names; a test of a collector's own behaviour
+#: needs the original, which is what the values are for.
+COLLECTORS = {}
+
+
+def collector(fn):
+    """Mark a function as one that reads the host, and register it as one."""
+    COLLECTORS[fn.__name__] = fn
+    return fn
+
+
 # The address every probe leaves from, when one was asked for. None means the
 # kernel chooses, which is right for a box with one address and wrong for the
 # box this exists for.
@@ -467,12 +492,14 @@ def kernel_source_address():
     return None
 
 
+@collector
 def cmd_interfaces():
     if OS_NAME == "Windows":
         return run(["ipconfig", "/all"])
     return run_first_usable([["ip", "addr", "show"], ["ifconfig", "-a"]])
 
 
+@collector
 def cmd_routes():
     if OS_NAME == "Windows":
         return run(["route", "print"])
@@ -480,6 +507,7 @@ def cmd_routes():
                             fallback=kernel_routes)
 
 
+@collector
 def cmd_arp():
     if OS_NAME == "Windows":
         return run(["arp", "-a"])
@@ -487,6 +515,7 @@ def cmd_arp():
                             fallback=kernel_neighbours)
 
 
+@collector
 def cmd_listen_ports():
     if OS_NAME == "Windows":
         return run(["netstat", "-an"])
@@ -553,6 +582,7 @@ def _source_flag(tool, source=None):
     return ["-s", source]
 
 
+@collector
 def cmd_ping(target, count=4, wait=2, source=None):
     if not valid_target(target):
         return bad_target()
@@ -575,6 +605,7 @@ def cmd_ping(target, count=4, wait=2, source=None):
     ])
 
 
+@collector
 def cmd_traceroute(target):
     if not valid_target(target):
         return bad_target()
@@ -777,6 +808,7 @@ def _one_ttl(listener, sender, address, ttl, timeout):
         return hop
 
 
+@collector
 def cmd_dns(target):
     if not valid_target(target):
         return bad_target()
@@ -860,6 +892,7 @@ def parse_mtr_json(text):
     return hops
 
 
+@collector
 def cmd_mtr(target, cycles=10):
     """Per-hop loss over many cycles. Returns None when mtr isn't available."""
     if not valid_target(target) or not which("mtr"):
@@ -952,6 +985,7 @@ def parse_ethtool_optics(text):
     return out
 
 
+@collector
 def cmd_optics(iface):
     """SFP/optical diagnostics for one interface, or None if it isn't fibre."""
     if not which("ethtool") or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,32}", iface or ""):
@@ -977,6 +1011,7 @@ def trace_reached(hops, target):
     return any(h.get("host") == target or h.get("display") == target for h in hops[-2:])
 
 
+@collector
 def cmd_traceroute_tcp(target, port=443):
     """Trace with TCP SYN probes instead of ICMP/UDP.
 
@@ -1069,6 +1104,7 @@ def parse_ethtool(text):
     return out
 
 
+@collector
 def cmd_ethtool(iface):
     """Negotiated link state for one interface, or None if ethtool isn't there."""
     if not which("ethtool") or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,32}", iface or ""):
@@ -1224,6 +1260,7 @@ def parse_resolvers(text):
     return servers
 
 
+@collector
 def _read_resolvers(with_reason=False):
     found, seen, reason = [], set(), None
     if OS_NAME == "Windows":
@@ -1264,6 +1301,7 @@ def _answer_summary(answers, keep=3):
     return shown + (f" (+{len(answers) - keep} more)" if len(answers) > keep else "")
 
 
+@collector
 def cmd_dns_health(probe_name="google.com", check_hijack=True):
     """Query each configured resolver individually and compare them."""
     resolvers, unreadable = _read_resolvers(with_reason=True)
@@ -1477,6 +1515,7 @@ def parse_lldp_keyvalue(text):
     return [r for r in ifaces.values() if r.get("switch") or r.get("port") or r.get("chassis_mac")]
 
 
+@collector
 def cmd_lldp():
     """Neighbour switch and port per interface, or None when lldpd isn't here."""
     for argv in (["lldpctl", "-f", "keyvalue"],
@@ -1798,6 +1837,7 @@ def der_validity(der):
 GATEWAY_ERRORS = {502, 503, 504}
 
 
+@collector
 def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
     """Ask this box's own service for a response, not just a connection.
 
@@ -1874,6 +1914,7 @@ def cmd_own_http(port, timeout=5, address="127.0.0.1", tls=False):
     return result
 
 
+@collector
 def cmd_own_tls(port, timeout=5, address="127.0.0.1"):
     """The certificate this box is serving, as a client on the internet sees it.
 
@@ -1941,6 +1982,7 @@ def cmd_own_tls(port, timeout=5, address="127.0.0.1"):
     return result
 
 
+@collector
 def cmd_tls_check_local(port, server_name, timeout=5, address="127.0.0.1"):
     """A verified handshake to this box, presenting `server_name`."""
     out = {}
@@ -2021,6 +2063,7 @@ def _cert_dates(cert, out):
                 out["not_yet_valid_days"] = ahead
 
 
+@collector
 def cmd_tls_check(host, port=443, timeout=5):
     """Complete a TLS handshake and report what came back.
 
@@ -2433,6 +2476,7 @@ def parse_udp_sockets(text):
             "listen_ports": ports_in_order({l["port"] for l in listeners})}
 
 
+@collector
 def cmd_udp_sockets():
     """This box's datagram listeners, and what is waiting behind them.
 
@@ -2623,6 +2667,7 @@ def parse_proxy_stats(text):
     return out
 
 
+@collector
 def cmd_haproxy_stats():
     """The proxy's own view of its backends, if it is willing to give one."""
     if OS_NAME == "Windows":
@@ -2649,6 +2694,7 @@ def cmd_haproxy_stats():
             "error": "no proxy stats socket found here"}
 
 
+@collector
 def cmd_socket_states():
     """This device's own TCP sockets, by state."""
     if OS_NAME == "Windows":
@@ -2779,6 +2825,7 @@ def parse_lsof_owners(text):
     return out
 
 
+@collector
 def cmd_socket_owners():
     """The process behind each TCP socket, from whichever command can say.
 
@@ -2946,6 +2993,7 @@ def parse_nft_ruleset(text):
     return {"rules": rules, "policies": policies}
 
 
+@collector
 def cmd_firewall_counters():
     """Every rule's packet count, from whichever tool this box uses.
 
@@ -3162,6 +3210,7 @@ def parse_qdisc(text):
     return out
 
 
+@collector
 def cmd_qdisc():
     """What this box's own egress queues are doing.
 
@@ -3756,6 +3805,7 @@ def find_arp_conflicts(entries):
 # traffic, and reading it needs no privileges and records nothing.
 # ---------------------------------------------------------------------------
 
+@collector
 def _read_snmp_counters_linux():
     """The counters in /proc/net/snmp, by protocol.
 
@@ -3797,6 +3847,7 @@ def _tcp_counters_linux():
     return _read_snmp_counters_linux()
 
 
+@collector
 def _tcp_counters_bsd():
     res = run(["netstat", "-s", "-p", "tcp"], timeout=10)
     if not res.get("ok"):
@@ -3826,6 +3877,7 @@ def _tcp_counters_bsd():
     return out
 
 
+@collector
 def _read_tcp_counters():
     return _tcp_counters_linux() if OS_NAME == "Linux" else _tcp_counters_bsd()
 
@@ -3948,6 +4000,7 @@ TLS_HANDSHAKE_RATIO = 4
 TLS_HANDSHAKE_FLOOR_MS = 250
 
 
+@collector
 def _read_softnet():
     """Receive-backlog statistics, summed across CPUs.
 
@@ -3971,6 +4024,7 @@ def _read_softnet():
     return {"softnet_processed": processed, "softnet_dropped": dropped} if rows else {}
 
 
+@collector
 def _read_listen_drops():
     """TcpExt counters for connections dropped because a listen queue was full."""
     try:
@@ -4021,6 +4075,7 @@ def _read_listen_drops():
     return {}
 
 
+@collector
 def _read_load_average():
     """(one-minute load, CPU count), or (None, 0) where that isn't readable.
 
@@ -4099,6 +4154,7 @@ def _proc_stat_rows(path):
     return rows
 
 
+@collector
 def _read_sysfs_names(base):
     """Interface names under a sysfs directory, or nothing if it is not there.
 
@@ -4123,6 +4179,7 @@ def _read_sysfs_names(base):
         return []
 
 
+@collector
 def _read_text(path):
     """A small file's contents, or None if it isn't there.
 
@@ -4138,6 +4195,7 @@ def _read_text(path):
         return None
 
 
+@collector
 def _read_conntrack():
     """Connection-tracking table pressure, and whether it has actually refused.
 
@@ -4168,6 +4226,7 @@ def _read_conntrack():
     return out
 
 
+@collector
 def _read_neigh_table(base="/proc"):
     """How full the neighbour table is, and whether it has already overflowed.
 
@@ -4239,6 +4298,7 @@ def _bond_members_linux(base="/sys/class/net"):
     return out
 
 
+@collector
 def _read_server_limits():
     """Ceilings a box serving traffic hits, none of which are the network.
 
@@ -4282,6 +4342,7 @@ def parse_server_limits(port_range, file_nr, somaxconn):
     return out
 
 
+@collector
 def _read_thermal_throttle(base="/sys/devices/system/cpu"):
     """How many times this CPU has been clocked down to save itself.
 
@@ -4316,6 +4377,7 @@ def _read_thermal_throttle(base="/sys/devices/system/cpu"):
     return out
 
 
+@collector
 def _read_kernel_drops():
     """Everything this box drops on its own, in one reading."""
     out = {}
@@ -4350,6 +4412,7 @@ def _read_kernel_drops():
     return out
 
 
+@collector
 def _read_orphans(base="/proc"):
     """Sockets torn down without being closed, against the ceiling on them.
 
@@ -4422,6 +4485,7 @@ def parse_ntpq_peers(text):
     return None, False if "remote" in (text or "") else None
 
 
+@collector
 def cmd_clock_sync():
     """Is this device's clock disciplined, and how far out is it?
 
@@ -4457,6 +4521,7 @@ def cmd_clock_sync():
             "error": "no time daemon available to ask (chronyc, timedatectl or ntpq)"}
 
 
+@collector
 def cmd_kernel_drops(sample_seconds=0, baseline=None):
     """Loss this device inflicts on itself: NIC backlog and accept queues."""
     if OS_NAME != "Linux":
@@ -4555,6 +4620,7 @@ def _klog_lines(text, now_monotonic=None, epoch_now=None):
     return out
 
 
+@collector
 def cmd_kernel_log():
     """What the kernel already recorded, with the times attached.
 
@@ -4614,6 +4680,7 @@ def cmd_kernel_log():
     return res
 
 
+@collector
 def cmd_tcp_health(sample_seconds=0, baseline=None):
     """Retransmission rate for this box's own TCP traffic.
 
@@ -5319,6 +5386,7 @@ def analyze_tcp_flows(flows, truncated=False, listen_ports=None):
     return out
 
 
+@collector
 def cmd_tcp_flows(listen_ports=None):
     """Per-connection TCP statistics for the connections this box has open."""
     if OS_NAME != "Linux" or not which("ss"):
@@ -5441,6 +5509,7 @@ LINK_FLAP_PER_DAY = 2
 LINK_FLAP_BASELINE = 2
 
 
+@collector
 def _read_uptime_seconds():
     """How long this box has been up, or None where that isn't readable.
 
@@ -5496,6 +5565,7 @@ VIRTUAL_NIC_DRIVERS = {
 }
 
 
+@collector
 def _read_link_drivers_linux(base="/sys/class/net"):
     """The kernel driver behind each interface, from the sysfs symlink.
 
@@ -5557,6 +5627,7 @@ def _link_stats_linux(base="/sys/class/net"):
     return stats
 
 
+@collector
 def _link_stats_bsd():
     """macOS/BSD: parse `netstat -i -b -n`, using only the <Link#...> rows so
     per-address-family rows don't double-count."""
@@ -5595,6 +5666,7 @@ def _link_stats_bsd():
     return stats
 
 
+@collector
 def _read_link_stats():
     if OS_NAME == "Linux":
         stats = _link_stats_linux()
@@ -5688,6 +5760,7 @@ def _delta(before, after, key):
     return b - a
 
 
+@collector
 def cmd_link_stats(sample_seconds=0, sample=None, progress=None):
     """Collect per-interface error counters, optionally sampling twice.
 
@@ -5975,6 +6048,7 @@ def parse_ifconfig_modes(text):
     return modes
 
 
+@collector
 def _link_modes_bsd():
     """macOS/BSD: pull mtu and the negotiated media line out of `ifconfig -a`."""
     res = run(["ifconfig", "-a"])
@@ -5983,6 +6057,7 @@ def _link_modes_bsd():
     return parse_ifconfig_modes(res.get("stdout", ""))
 
 
+@collector
 def cmd_link_modes():
     """Per-interface negotiated speed, duplex, and configured MTU.
 
@@ -6077,6 +6152,7 @@ def _dont_fragment_ping(payload, target):
     return ["ping", "-M", "do", "-s", str(payload), "-c", "1", "-W", "2"] + src + [target]
 
 
+@collector
 def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
     """Find the largest packet that actually reaches the target unfragmented.
 
@@ -6123,6 +6199,7 @@ def cmd_path_mtu(target, iface_mtu=STANDARD_MTU):
             "signalled_mtu": signalled, "attempts": attempts}
 
 
+@collector
 def cmd_check_port(host, port, timeout=5):
     """Check if a port is reachable via TCP connect (doesn't require root or special tools)."""
     if not valid_target(host):
@@ -6677,6 +6754,7 @@ def discards_the_target(routes, target_ip):
     return best
 
 
+@collector
 def cmd_route_to(target):
     """Ask the kernel which route it would use to reach the target."""
     if not valid_target(target):
@@ -11517,6 +11595,7 @@ def count_udp_flows(ports, paths=CONNTRACK_PATHS):
     return None
 
 
+@collector
 def cmd_udp_tunnels(raw=None):
     """The count of datagram tunnels arriving at this box's own listeners.
 
@@ -16937,6 +17016,7 @@ def proxy_answers(host, port, timeout=3):
            {"status": None, "status_line": first.strip()}
 
 
+@collector
 def cmd_proxy_reachable(cfg, timeout=3):
     """Can this box open a connection to the proxy it is told to use, and is it
     allowed through once it has.
@@ -19643,6 +19723,7 @@ def parse_scutil_proxy(text):
     return out
 
 
+@collector
 def cmd_proxy_config():
     """How this box is told to reach the internet, if it is told anything.
 

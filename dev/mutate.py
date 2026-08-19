@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Break a rule on purpose and see whether the suite objects.
 
-    python3 dev/mutate.py dev/mutations           # every stored set (slow, ~1h)
+    python3 dev/mutate.py dev/mutations           # every stored set
     python3 dev/mutate.py dev/mutations/both-sides.json   # one of them
     python3 dev/mutate.py --anchors               # do the stored sets still apply
     python3 dev/mutate.py --self-test             # check this file works
@@ -37,15 +37,26 @@ Mutations are given as JSON so a set can be kept beside the work it belongs to:
 
 `file` defaults to faultone.py. An anchor that does not appear exactly once is
 reported as a bad mutation rather than run, because a mutation that edits
-nothing survives every time and reads as a coverage gap.
+nothing survives every time and reads as a coverage gap. Those are found up
+front, without running anything, since a bad anchor is a string count.
+
+Mutations run in parallel, one tree per worker. Each is a whole suite run of
+its own and they have nothing to say to each other, so the only reason this was
+serial is that it was written that way: thirteen mutations cost fourteen
+sequential suite runs, about a quarter of an hour, and the same set on a
+fourteen-core machine is closer to two minutes. The control still runs first
+and alone - it is a gate on whether any of the rest means anything.
 """
+import concurrent.futures
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IGNORE = shutil.ignore_patterns("_branch_sweep_*", ".git", "__pycache__",
@@ -101,6 +112,62 @@ def apply_one(tree, mutation, sources):
     return None
 
 
+def workers_for(n):
+    """How many suite runs to have in flight.
+
+    Each one is a single-process, CPU-bound suite run in a tree of its own, and
+    this process does nothing but wait on them - so the count is cores, less one
+    so the machine stays usable while a long set runs.
+    """
+    cpus = os.cpu_count() or 2
+    return max(1, min(n, cpus - 1))
+
+
+def one_mutation(tree, mutation, sources):
+    """Restore the tree, apply one mutation, and run. ('caught'|'survived'|'bad', detail).
+
+    The restore is per run rather than per set because a worker's tree is
+    reused: mutations must not accumulate into a tree that fails for a reason
+    none of them names, which is the thing this harness exists to avoid.
+    """
+    for name, text in sources.items():
+        with open(os.path.join(tree, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    problem = apply_one(tree, mutation, sources)
+    if problem:
+        return "bad", problem
+    broken = does_not_import(tree)
+    if broken:
+        return "bad", broken
+    names = run_suite(tree)
+    return ("caught", names) if names else ("survived", None)
+
+
+def in_parallel(trees, jobs, sources):
+    """Run every (label, mutation) across the trees, yielding as each finishes.
+
+    Yielded rather than collected so a long set still reports while it runs.
+    A tree is checked out for the length of one mutation and handed back, so
+    there are exactly as many trees as workers however many mutations there are.
+    """
+    free = queue.Queue()
+    for tree in trees:
+        free.put(tree)
+
+    def work(item):
+        label, mutation = item
+        tree = free.get()
+        try:
+            return (label,) + one_mutation(tree, mutation, sources)
+        finally:
+            free.put(tree)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(trees)) as pool:
+        futures = [pool.submit(work, item) for item in jobs]
+        for future in concurrent.futures.as_completed(futures):
+            yield future.result()
+
+
 def main(argv):
     if "--self-test" in argv:
         return self_test()
@@ -132,12 +199,30 @@ def main(argv):
             with open(os.path.join(REPO, name), encoding="utf-8") as fh:
                 sources[name] = fh.read()
 
+    survived, bad, jobs = [], [], []
+    # Anchors first, and without a tree. A bad anchor is a string count, and
+    # finding it after a suite run costs a minute to learn the file moved.
+    for m in mutations:
+        label = m.get("label") or m["old"][:40]
+        name = m.get("file", "faultone.py")
+        seen = sources.get(name, "").count(m["old"])
+        if name not in sources:
+            bad.append((label, "no such file: %s" % name))
+        elif seen != 1:
+            bad.append((label, "anchor matched %d times, not once" % seen))
+        else:
+            jobs.append((label, m))
+    for label, why in bad:
+        print("  %-46s BAD MUTATION  %s" % (label[:46], why), flush=True)
+
+    started = time.monotonic()
     base = tempfile.mkdtemp()
-    tree = os.path.join(base, "repo")
-    shutil.copytree(REPO, tree, ignore=IGNORE)
+    workers = workers_for(len(jobs))
     try:
+        control = os.path.join(base, "control")
+        shutil.copytree(REPO, control, ignore=IGNORE)
         print("control: an unchanged tree, to prove a failure means something", flush=True)
-        noise = run_suite(tree)
+        noise = run_suite(control)
         if noise:
             print("  the suite fails before anything is mutated, so every result "
                   "below would be noise:", flush=True)
@@ -145,34 +230,32 @@ def main(argv):
                 print("    %s" % n, flush=True)
             return 1
         print("  clean\n", flush=True)
+        if not jobs:
+            return 1
 
-        survived, bad = [], []
-        for m in mutations:
-            label = m.get("label") or m["old"][:40]
-            # Restored from the originals every time, so mutations cannot
-            # accumulate into a tree that fails for a reason none of them names.
-            for name, text in sources.items():
-                with open(os.path.join(tree, name), "w", encoding="utf-8") as fh:
-                    fh.write(text)
-            problem = apply_one(tree, m, sources)
-            if problem:
-                bad.append((label, problem))
-                print("  %-46s BAD MUTATION  %s" % (label[:46], problem), flush=True)
-                continue
-            broken = does_not_import(tree)
-            if broken:
-                bad.append((label, broken))
-                print("  %-46s BAD MUTATION  %s" % (label[:46], broken), flush=True)
-                continue
-            names = run_suite(tree)
-            if names:
+        # The control's tree is one of them - it is already a clean copy, and
+        # every run restores the sources into whichever tree it is handed.
+        trees = [control]
+        for i in range(workers - 1):
+            tree = os.path.join(base, "worker-%d" % i)
+            shutil.copytree(REPO, tree, ignore=IGNORE)
+            trees.append(tree)
+        print("  %d mutation(s) across %d tree(s)\n" % (len(jobs), len(trees)), flush=True)
+
+        for label, kind, detail in in_parallel(trees, jobs, sources):
+            if kind == "bad":
+                bad.append((label, detail))
+                print("  %-46s BAD MUTATION  %s" % (label[:46], detail), flush=True)
+            elif kind == "caught":
                 print("  %-46s caught     %2d  %s"
-                      % (label[:46], len(names), ", ".join(n[5:44] for n in names[:2])), flush=True)
+                      % (label[:46], len(detail),
+                         ", ".join(n[5:44] for n in detail[:2])), flush=True)
             else:
                 survived.append(label)
                 print("  %-46s SURVIVED" % label[:46], flush=True)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+    print("\n  %.0fs" % (time.monotonic() - started), flush=True)
 
     print("\n%d of %d mutation(s) survived%s"
           % (len(survived), len(mutations) - len(bad),

@@ -306,11 +306,18 @@ assertions in the suite check message text; almost all of them check words.
 
 **Run against all 62: 53 survived.** Nine were already covered.
 
-**Now 30 survive**, down from 53. Twelve test edits have closed
-`clock_skewed`, `queue_builds_at_hop`, the standing-versus-bursting sentence,
-`latency_high`, `latency_is_queuing`, the port timing breakdown, the jitter
-pair, `throughput_limited_by`, `path_loss`, `tls_handshake_slow` and
-`syncookies_historical`.
+**Now 25 survive**, down from 53. Fifteen test edits, closing `clock_skewed`,
+`queue_builds_at_hop`, the standing-versus-bursting sentence, `latency_high`,
+`latency_is_queuing`, the port timing breakdown, the jitter pair,
+`throughput_limited_by`, `path_loss`, `tls_handshake_slow`,
+`syncookies_historical`, `inet_partial_loss`, `gw_partial_loss`,
+`gw_loss_unmeasured` and `link_flapping`.
+
+**The remaining set was mischaracterised once and it is worth not repeating.**
+It was called "renderers and a thin tail"; measuring it said 17 of 30 were
+still finding messages, including `_check_gateway` and `_check_internet`, which
+fire on every run. Sort the survivors by the function that owns them before
+deciding anything about their value.
 
 Four of the first five were **this week's own work** - tests I wrote that assert
 the sentence while the figures the finding turns on went unchecked. The pattern

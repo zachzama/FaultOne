@@ -14908,9 +14908,17 @@ class TestKernelLog(unittest.TestCase):
         klog(m, "[10.0] Linux version 5.15.0\n[11.0] eth0: NIC Link is Up\n",
              uptime=86_400)
         counters(m, carrier_changes=900)
-        codes = [f.get("code") for f in
-                 m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        found = m.diagnose("8.8.8.8", None, quick=False)["findings"]
+        codes = [f.get("code") for f in found]
         self.assertIn("link_flapping", codes)
+        # The rate is what makes this actionable and it was unchecked. 898
+        # rather than the 900 the fixture names: `counters` seeds a before and
+        # an after, and the finding counts the change between them - which is
+        # the sort of thing an assertion on the number catches and an assertion
+        # on the sentence does not.
+        self.assertIn("carrier 898 time(s) over 1.0 days of uptime - "
+                      "about 898.0 a day",
+                      next(f["message"] for f in found if f["code"] == "link_flapping"))
 
     def test_only_the_tail_of_a_huge_ring_buffer_is_kept(self):
         """A ring buffer is megabytes of boot messages followed by the lines
@@ -23350,6 +23358,11 @@ class TestEveryFindingFires(unittest.TestCase):
         ping_map(mod, gw_loss=25, inet_loss=100, sent=20)
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertEqual(report["verdict"]["based_on"][0], "gw_partial_loss")
+        # As above, for the gateway: the rate and the sample behind it.
+        self.assertIn("Intermittent packet loss (25%, 5 of 20 probes) to the "
+                      "gateway (10.0.0.1)",
+                      next(f["message"] for f in report["findings"]
+                           if f["code"] == "gw_partial_loss"))
 
     def test_every_latent_code_exists_and_is_never_critical(self):
         """A latent finding describes a risk. If one is emitted as critical the
@@ -24098,6 +24111,12 @@ class TestEveryFindingFires(unittest.TestCase):
         codes = [f.get("code") for f in report["findings"]]
         self.assertIn("inet_partial_loss", codes)
         self.assertNotIn("inet_loss_unmeasured", codes)
+        # The rate and the sample it came from. Both survived a mutation
+        # replacing them with zero: this finding fires on almost every degraded
+        # run, so a wrong figure here is wrong on most reports the tool makes.
+        self.assertIn("Packet loss (25%, 5 of 20 probes) reaching 8.8.8.8",
+                      next(f["message"] for f in report["findings"]
+                           if f["code"] == "inet_partial_loss"))
 
     def test_more_than_one_lost_probe_counts_even_in_a_small_sample(self):
         """Two of four is not a rate-limited reply; it is half the traffic."""
@@ -24113,6 +24132,12 @@ class TestEveryFindingFires(unittest.TestCase):
         codes = [f.get("code") for f in report["findings"]]
         self.assertIn("gw_loss_unmeasured", codes)
         self.assertNotIn("gw_partial_loss", codes)
+        # The percentage is the thing this finding exists to disown - it says
+        # the number is an artefact of the sample size - so printing the wrong
+        # one would undo the whole point. It was unchecked.
+        self.assertIn("At 4 probes that reads as 25% because nothing smaller",
+                      next(f["message"] for f in report["findings"]
+                           if f["code"] == "gw_loss_unmeasured"))
 
     def test_retransmission_that_was_not_needed_is_not_loss(self):
         """The hole a packet capture would find first: every retransmit-based

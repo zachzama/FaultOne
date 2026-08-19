@@ -3308,8 +3308,22 @@ class TestDelayThatWillNotSitStill(unittest.TestCase):
         sided_flows(m, jittery_sock("10.0.0.90", "44120", rtt, var, port="5432"))
         return [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
 
+    def said(self, rtt, var, code="path_jitter_backends"):
+        m = fresh()
+        sided_flows(m, jittery_sock("10.0.0.90", "44120", rtt, var, port="5432"))
+        found = m.diagnose("8.8.8.8", None, quick=False)["findings"]
+        return next((f["message"] for f in found if f["code"] == code), "")
+
     def test_variance_at_half_the_round_trip_is_reported(self):
         self.assertIn("path_jitter_backends", self.codes(80.0, 50.0))
+
+    def test_it_reports_the_variance_it_measured_against_the_trip_it_measured(self):
+        """The two numbers are the finding - a jitter figure with no round trip
+        beside it says nothing about whether it matters. Both placeholders
+        survived a mutation replacing them with zero, because the only tests
+        here assert which code fired."""
+        said = self.said(80.0, 50.0)
+        self.assertIn("50ms of variance on a 80ms trip", said)
 
     def test_a_long_but_steady_path_is_not(self):
         """200ms that never moves is distance. The absolute figure alone would
@@ -3748,6 +3762,34 @@ class TestWhichPartOfTheAnswerTookTheTime(unittest.TestCase):
         note = next(f for f in findings if f["code"] == "own_service_timing")
         self.assertIn("waiting for the service", note["message"])
         self.assertEqual(note["severity"], "ok")
+
+    def test_the_split_it_reports_is_the_split_it_measured(self):
+        """The phase breakdown is the whole value of this finding - three
+        numbers with three different owners - and nothing asserted any of them.
+        Every placeholder in this message survived a mutation replacing it with
+        zero, because the test above serves a real request and cannot know what
+        the numbers will be.
+
+        Built rather than served, so they are known."""
+        res = {"ok": True, "status": 200, "ms": 260.0,
+               "phases": {"connect_ms": 2.0, "tls_ms": 8.0, "wait_ms": 250.0}}
+        note = next(f for f in nd._own_service_timing(res, 8443)
+                    if f["code"] == "own_service_timing")
+        said = note["message"]
+        self.assertIn("Port 8443 answered in 260ms", said)
+        self.assertIn("2ms was getting a connection", said)
+        self.assertIn("8ms was the TLS handshake", said)
+        self.assertIn("250ms was waiting for the service itself", said)
+
+    def test_a_plaintext_listener_reports_no_handshake_phase(self):
+        """There was no handshake, so there is no number for one - and the
+        sentence has to lose the clause rather than print a zero."""
+        res = {"ok": True, "status": 200, "ms": 12.0,
+               "phases": {"connect_ms": 2.0, "wait_ms": 10.0}}
+        said = next(f["message"] for f in nd._own_service_timing(res, 8080)
+                    if f["code"] == "own_service_timing")
+        self.assertIn("Port 8080 answered in 12ms", said)
+        self.assertNotIn("TLS handshake", said)
 
     def test_it_is_context_and_never_a_verdict(self):
         """What counts as slow depends entirely on what the service does, and a

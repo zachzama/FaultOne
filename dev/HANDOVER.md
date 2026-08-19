@@ -192,9 +192,30 @@ narrowed to the one that is true - text that could not be a host never becomes
 one - and that is worth more than the version that would have passed by
 accident.
 
-Seventeen of the 121 examined, four survivors: two real gaps, two equivalent
-mutants. Roughly 104 still unexamined, at about six mutations per two-minute
-run.
+**Batch four: six, all caught.** The firewall window, the baseline comparison
+and the call score are all genuinely covered.
+
+**Batch five: five, one real gap.** `count_the_hops_in` skips a peer that is
+not an IPv4 address, and nothing drove it - every fixture has IPv4 peers, so
+deleting the guard sends a ping per side to an address the tool had already
+decided not to ask. Asserted on *what was pinged* rather than on the answer,
+which is the technique `test_quick_mode_pings_no_peer_for_a_distance` already
+uses and says why.
+
+Two more mutations came out of that batch rather than being fixed, and the
+reasons are different:
+
+- **`if inbound:` in the same function is an equivalent mutant.** Setting
+  `hops_in` to None and leaving the key absent read the same through `.get()`,
+  and nothing distinguishes them anywhere.
+- **`if quick:` is not a unique anchor** - it appears five times. A mutation
+  whose anchor matches more than once is reported as bad rather than run, which
+  is the harness working; anchor on the function's own line instead.
+
+**Twenty-eight of the 121 examined, six survivors: three real gaps, three
+equivalent mutants.** Roughly 93 still unexamined, at about six mutations per
+two-minute run. The rate has held at about one real finding per nine
+mutations across five batches.
 
 ## Open: phase A, `findings` from out-parameter to return value
 

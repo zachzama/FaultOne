@@ -6902,6 +6902,38 @@ class TestHowManyHopsItTookToReachUs(unittest.TestCase):
         self.assertEqual(peers & set(pinged), set(),
                          "a side's peer was pinged on --quick")
 
+    def test_a_peer_that_is_not_an_ipv4_address_is_never_pinged_for_distance(self):
+        """The TTL trick reads an IPv4 reply's hop count. A peer that is not one
+        - an IPv6 address, or a name - has nothing to read, and the guard that
+        skips it had no test: a mutation deleting it survived.
+
+        Asserted on what was pinged rather than on the answer, for the reason
+        the quick-mode test above gives. Without the guard this sends a packet
+        per side to an address the tool had already decided not to ask.
+        """
+        pinged = []
+        legs = [{"side": "client", "peer": "2001:db8::1"},
+                {"side": "backend", "peer": "db.internal"},
+                {"side": "other", "peer": ""}]
+        mod = fresh()
+        mod.cmd_ping = lambda t, c=4, w=2: (pinged.append(t) or
+                                            {"ok": False, "cmd": "ping", "stdout": ""})
+        mod.count_the_hops_in(legs)
+        self.assertEqual(pinged, [])
+        self.assertEqual([s.get("hops_in") for s in legs], [None, None, None])
+
+    def test_an_ipv4_peer_still_is(self):
+        """So the test above cannot pass by nothing ever being pinged."""
+        pinged = []
+        legs = [{"side": "backend", "peer": "10.0.0.90"}]
+        mod = fresh()
+        mod.cmd_ping = lambda t, c=4, w=2: (pinged.append(t) or {
+            "ok": True, "cmd": "ping",
+            "stdout": "64 bytes from %s: icmp_seq=1 ttl=57 time=9.0 ms\n" % t})
+        mod.count_the_hops_in(legs)
+        self.assertEqual(pinged, ["10.0.0.90"])
+        self.assertEqual(legs[0]["hops_in"], 7)
+
     def test_the_site_edge_is_drawn_where_the_path_leaves_the_site(self):
         """The boundary between this site's network and somebody else's is the
         one annotation that answers who to escalate to, and the page lost it

@@ -1,0 +1,27 @@
+[
+ {
+  "label": "an optic reporting every flag Off is reported as raising them",
+  "old": "            if value.lower() == \"on\":\n                (out[\"alarms\"] if \"alarm\" in key else out[\"warnings\"]).append(m.group(1).strip())",
+  "new": "            if True:\n                (out[\"alarms\"] if \"alarm\" in key else out[\"warnings\"]).append(m.group(1).strip())"
+ },
+ {
+  "label": "a threshold line is read as a reading",
+  "old": "        if key.endswith(\"threshold\"):\n            continue",
+  "new": "        if False:\n            continue"
+ },
+ {
+  "label": "the hops back are counted on a quick run that never asked",
+  "old": "def count_the_hops_in(legs, quick=False):",
+  "new": "def count_the_hops_in(legs, quick=False):\n    quick = False"
+ },
+ {
+  "label": "a peer that is not IPv4 is asked for a TTL anyway",
+  "old": "        if not _looks_like_ipv4(peer):",
+  "new": "        if False:"
+ },
+ {
+  "label": "an optic with no alarms still lights the finding",
+  "old": "        if p.get(\"alarms\"):",
+  "new": "        if p.get(\"alarms\") is not None:"
+ }
+]

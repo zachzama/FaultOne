@@ -1,0 +1,32 @@
+[
+ {
+  "label": "a rule that does not stop a packet is counted as one that did",
+  "old": "        if rule.get(\"verdict\") not in STOPS_A_PACKET:\n            continue",
+  "new": "        if False:\n            continue"
+ },
+ {
+  "label": "a rule that appeared mid-run is counted from zero",
+  "old": "        if key not in was:\n            continue",
+  "new": "        if False:\n            continue"
+ },
+ {
+  "label": "a counter that did not move is reported as having moved",
+  "old": "        if gained > 0:\n            moved.append(dict(rule, gained=gained))",
+  "new": "        if gained >= 0:\n            moved.append(dict(rule, gained=gained))"
+ },
+ {
+  "label": "a call score is computed without a round trip to score",
+  "old": "    if avg_ms is None:\n        return None, None",
+  "new": "    avg_ms = 0.0 if avg_ms is None else avg_ms"
+ },
+ {
+  "label": "a field missing from one report is reported as a change",
+  "old": "        if before is None or after is None:",
+  "new": "        if False:"
+ },
+ {
+  "label": "two identical reports are reported as different",
+  "old": "        if before != after:",
+  "new": "        if before == after or before != after:"
+ }
+]

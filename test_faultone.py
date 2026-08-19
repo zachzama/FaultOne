@@ -10226,6 +10226,45 @@ class TestAskingEachInstanceRatherThanTheBox(unittest.TestCase):
         self.assertIn("answered a TCP connect and no ping",
                       found["source_cannot_reach"]["message"])
 
+    def test_that_sentence_names_only_the_addresses_it_is_about(self):
+        """The test above asserts the phrase appears and nothing else, so three
+        mutations of the line that builds it survived a run: dropping the TCP
+        test, dropping the ping test, and removing the guard that keeps the
+        sentence out entirely.
+
+        The sentence is about addresses that answered TCP *and not* ping. An
+        address that answered both is not one of them, and neither is one that
+        answered neither - naming those turns an explanation into a claim about
+        addresses it is not true of."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0", reached=False, tcp="open"),
+            self._row("10.0.0.6", "igb0", reached=True, tcp="open"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout")])
+        said = found["source_cannot_reach"]["message"]
+        after = said[said.index("answered a TCP connect"):]
+        self.assertIn("10.0.0.5", said)
+        self.assertNotIn("10.0.0.6", after)    # answered both, so not this case
+        self.assertNotIn("10.0.1.10", after)   # answered neither
+
+    def test_nothing_is_said_when_no_address_answered_tcp_alone(self):
+        """The guard, driven. Without it the sentence is written with an empty
+        list of addresses in front of it, on every report where some address
+        failed - which is most of them."""
+        found = self._matrix([
+            self._row("10.0.0.5", "igb0"),
+            self._row("10.0.1.10", "ixla1", reached=False, tcp="timeout")])
+        self.assertNotIn("answered a TCP connect",
+                         found["source_cannot_reach"]["message"])
+
+    def test_an_address_this_box_does_not_hold_is_not_graded_as_a_fault(self):
+        """It failed in the kernel before a packet left, so it is an instance
+        that is not here rather than a path that is not working. The tint said
+        so and nothing checked it."""
+        self.assertEqual(nd._reaches_tint({"held": False}), "warning")
+        self.assertEqual(nd._reaches_tint({"held": True, "reached": False,
+                                           "tcp": "timeout"}), "critical")
+        self.assertEqual(nd._reaches_tint({"held": True, "reached": True}), "ok")
+
     def test_a_whole_interface_failing_is_said_as_one_thing(self):
         """Which is the unit somebody acts on. Four addresses failing on one
         interface is one instance cut off, not four faults."""

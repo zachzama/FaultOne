@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a box nothing connects to still draws its inbound zone as measured",
+  "old": "        if side == \"downstream\" and not serving and not mine:\n            state = \"skip\"",
+  "new": "        if False:\n            state = \"skip\""
+ },
+ {
+  "label": "an inbound finding no longer overrides the skip",
+  "old": "        if side == \"downstream\" and not serving and not mine:",
+  "new": "        if side == \"downstream\" and not serving:"
+ },
+ {
+  "label": "an address the box does not hold is graded as a fault rather than absent",
+  "old": "    if row.get(\"held\") is False:\n        return \"warning\"",
+  "new": "    if False:\n        return \"warning\""
+ },
+ {
+  "label": "the TCP-answered sentence is written when nothing answered TCP",
+  "old": "    if not by_tcp:\n        return \"\"",
+  "new": "    if False:\n        return \"\""
+ },
+ {
+  "label": "an address that answered a ping is counted as TCP-only",
+  "old": "    by_tcp = [r for r in reached if r.get(\"tcp\") == \"open\" and not r.get(\"reached\")]",
+  "new": "    by_tcp = [r for r in reached if r.get(\"tcp\") == \"open\"]"
+ }
+]

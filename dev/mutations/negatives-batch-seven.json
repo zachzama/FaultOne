@@ -1,0 +1,32 @@
+[
+ {
+  "label": "faults facing opposite ways corroborate each other again",
+  "old": "    return a == b or \"local\" in (a, b)",
+  "new": "    return True"
+ },
+ {
+  "label": "a local fault stops corroborating anything",
+  "old": "    return a == b or \"local\" in (a, b)",
+  "new": "    return a == b"
+ },
+ {
+  "label": "two faults on different interfaces are one fault again",
+  "old": "    return one is None or two is None or one == two",
+  "new": "    return True"
+ },
+ {
+  "label": "a scope nobody recorded stops matching anything",
+  "old": "    return one is None or two is None or one == two",
+  "new": "    return one == two"
+ },
+ {
+  "label": "weak evidence corroborates like any other finding",
+  "old": "                         and f.get(\"code\") not in WEAK_EVIDENCE",
+  "new": "                         and True"
+ },
+ {
+  "label": "a finding counted from others corroborates the cause it was counted from",
+  "old": "                         and f.get(\"code\") not in derived_from",
+  "new": "                         and True"
+ }
+]

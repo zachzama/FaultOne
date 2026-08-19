@@ -13412,6 +13412,11 @@ def _which_question_answered(reached, failed):
     stops it reading as a contradiction when the row beside it shows a
     handshake completing.
     """
+    # The TCP test is redundant and kept for the sentence it makes: a row is
+    # only in `reached` if it pinged or answered TCP, so "did not ping"
+    # already means "answered TCP" here. A mutation deleting it survives,
+    # and correctly - the invariant is established by the caller's split
+    # rather than by anything in this function.
     by_tcp = [r for r in reached if r.get("tcp") == "open" and not r.get("reached")]
     if not by_tcp:
         return ""

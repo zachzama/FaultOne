@@ -248,6 +248,43 @@ depends on conventions rather than guarantees. Only delete when the later line
 subsumes the earlier one for **any** input, which is what happened to the
 group-size guard in `_check_idle_endpoint` and has not happened since.
 
+## Batches seven and eight
+
+**Seven: six mutations on the verdict reasoning, all caught.** `_sides_can_agree`,
+`_same_scope`, the `WEAK_EVIDENCE` filter and the `derived_from` filter are
+genuinely covered in both directions. Worth as much as a finding: that is the
+most consequential code in the file.
+
+**Eight: six on the per-source matrix and the zone strip. Four survived, three
+were real** - and all three came from one test asserting a phrase *appears* and
+nothing else.
+
+`_which_question_answered` builds the sentence explaining that an address
+answered TCP and not ping, which on these boxes is the ordinary case rather
+than a fault. Its only test checked that the phrase was present. So nothing
+noticed when the sentence named addresses it is not about (one that answered
+both, one that answered neither), and nothing noticed when the guard keeping it
+out entirely was deleted - which writes the sentence with an empty list of
+addresses in front of it on every report where anything failed.
+
+`_reaches_tint` grades an address the box does not hold as a warning rather
+than a fault - it failed in the kernel before a packet left, so it is an
+instance that is not there rather than a path that is not working. Untested.
+
+The fourth survivor is equivalent and now says so in a comment: a row is only
+in the `reached` list if it pinged **or** answered TCP, so "did not ping"
+already means "answered TCP" inside that function. The invariant comes from the
+caller's split, not from the line.
+
+**Sixty-five of the 121 examined. Seven real gaps, seven equivalent mutants,
+nine explained by one contract.**
+
+*A third pattern, from batch eight:* **a test that asserts a phrase appears
+tests almost nothing.** It does not check which values the phrase names, and it
+does not check that the phrase stays away when it should. Three mutations lived
+in that one gap. Grep the suite for `assertIn` on a message and ask what else
+would still pass.
+
 ## The `ok` guards: a family, and the contract underneath them
 
 The first pattern above turned out to be predictive, so the family was hunted

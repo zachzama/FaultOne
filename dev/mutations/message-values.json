@@ -1,7 +1,312 @@
 [
  {
-  "label": "a value in a message is wrong, the words are not (line 12691)",
+  "label": "a number in a message is wrong, the words are not (line 1245)",
+  "old": "                f\"{timeout:.0f}s\", \"elapsed_ms\": round((time.monotonic() - started) * 1000, 1)}",
+  "new": "                f\"{0:.0f}s\", \"elapsed_ms\": round((time.monotonic() - started) * 1000, 1)}"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 3331)",
+  "old": "            f\"The run queue on this box is {per_cpu:.1f} deep per CPU - a load \"",
+  "new": "            f\"The run queue on this box is {0:.1f} deep per CPU - a load \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 3332)",
+  "old": "            f\"average of {load1:.2f} across {cpus} CPU(s). Work is waiting for a \"",
+  "new": "            f\"average of {0:.2f} across {cpus} CPU(s). Work is waiting for a \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 4110)",
+  "old": "        return f\" Load average is {load1:.2f}.\"",
+  "new": "        return f\" Load average is {0:.2f}.\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 4112)",
+  "old": "        return (f\" Load average is {load1:.2f} across {cpus} CPU(s), so the run queue is \"",
+  "new": "        return (f\" Load average is {0:.2f} across {cpus} CPU(s), so the run queue is \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 4114)",
+  "old": "    return (f\" Load average is {load1:.2f} across {cpus} CPU(s), which is not busy - so the \"",
+  "new": "    return (f\" Load average is {0:.2f} across {cpus} CPU(s), which is not busy - so the \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 4559)",
+  "old": "        lines.append(f\"load average  : {load1:.2f}\" + (f\" across {cpus} CPU(s)\" if cpus else \"\"))",
+  "new": "        lines.append(f\"load average  : {0:.2f}\" + (f\" across {cpus} CPU(s)\" if cpus else \"\"))"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 5729)",
+  "old": "            progress(f\"sampling error counters ({left:.0f}s left)\")",
+  "new": "            progress(f\"sampling error counters ({0:.0f}s left)\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 9479)",
+  "old": "            + (f\", adding {worst['delta_ms']:.0f}ms\" if worst.get(\"delta_ms\") else \"\")",
+  "new": "            + (f\", adding {0:.0f}ms\" if worst.get(\"delta_ms\") else \"\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 11122)",
+  "old": "                               f\"since boot - about {per_day:.0f} a day, none during this run\"",
+  "new": "                               f\"since boot - about {0:.0f} a day, none during this run\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 11359)",
+  "old": "                \"message\": f\"{life['SyncookiesSent']:,} SYN cookie(s) sent over {days:.1f} \"",
+  "new": "                \"message\": f\"{life['SyncookiesSent']:,} SYN cookie(s) sent over {0:.1f} \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 11360)",
+  "old": "                           f\"days of uptime - about {per_day:.0f} a day. None during this \"",
+  "new": "                           f\"days of uptime - about {0:.0f} a day. None during this \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 11517)",
+  "old": "                               f\"since boot with a full accept queue - about {per_day:.0f} a day, \"",
+  "new": "                               f\"since boot with a full accept queue - about {0:.0f} a day, \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 12691)",
   "old": "            \"message\": f\"This device's clock is {abs(offset) / 1000:.0f}s {direction} its time \"",
   "new": "            \"message\": f\"This device's clock is {0:.0f}s {direction} its time \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 12829)",
+  "old": "                           f\"{days:.1f} days of uptime - about {per_day:.1f} a day. It is \"",
+  "new": "                           f\"{0:.1f} days of uptime - about {per_day:.1f} a day. It is \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13065)",
+  "old": "                           f\"the last {secs}s ({drop_pct:.1f}%, {iface['drops']:,} total). A few \"",
+  "new": "                           f\"the last {secs}s ({0:.1f}%, {iface['drops']:,} total). A few \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13572)",
+  "old": "            return f\"{n / size:.1f} {unit}\"",
+  "new": "            return f\"{0:.1f} {unit}\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13573)",
+  "old": "    return f\"{n:.0f} B\"",
+  "new": "    return f\"{0:.0f} B\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13760)",
+  "old": "        \"message\": f\"Port {port} answered in {res.get('ms', 0):.0f}ms, of which \"",
+  "new": "        \"message\": f\"Port {port} answered in {0:.0f}ms, of which \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13761)",
+  "old": "                   f\"{connect:.0f}ms was getting a connection\"",
+  "new": "                   f\"{0:.0f}ms was getting a connection\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13762)",
+  "old": "                   + (f\", {tls:.0f}ms was the TLS handshake\" if tls is not None else \"\")",
+  "new": "                   + (f\", {0:.0f}ms was the TLS handshake\" if tls is not None else \"\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13763)",
+  "old": "                   + f\", and {wait:.0f}ms was waiting for the service itself. Mostly \"",
+  "new": "                   + f\", and {0:.0f}ms was waiting for the service itself. Mostly \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 13808)",
+  "old": "                       + (f\" in {res['ms']:.0f}ms\" if res.get(\"ms\") else \"\")",
+  "new": "                       + (f\" in {0:.0f}ms\" if res.get(\"ms\") else \"\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14400)",
+  "old": "                f\"{side['jitter_ms']:.0f}ms of variance on a {side['rtt_ms']:.0f}ms \"",
+  "new": "                f\"{0:.0f}ms of variance on a {side['rtt_ms']:.0f}ms \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14499)",
+  "old": "                       f\"({lead[1]:.0f}% of the time they spent busy). The full split is \"",
+  "new": "                       f\"({0:.0f}% of the time they spent busy). The full split is \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14500)",
+  "old": "                       f\"{limits['path_pct']:.0f}% waiting on the path, \"",
+  "new": "                       f\"{0:.0f}% waiting on the path, \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14501)",
+  "old": "                       f\"{limits['receiver_pct']:.0f}% on the far end having no window left, \"",
+  "new": "                       f\"{0:.0f}% on the far end having no window left, \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14502)",
+  "old": "                       f\"and {limits['sender_pct']:.0f}% on this box having nothing queued to \"",
+  "new": "                       f\"and {0:.0f}% on this box having nothing queued to \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14811)",
+  "old": "                           f\"{slow[0]['elapsed_ms']:.0f}ms. Every new connection waits on this \"",
+  "new": "                           f\"{0:.0f}ms. Every new connection waits on this \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14908)",
+  "old": "                \"message\": f\"Reaching {target}:{port_num} took {tcp_ms + tls_ms:.0f}ms, and \"",
+  "new": "                \"message\": f\"Reaching {target}:{port_num} took {0:.0f}ms, and \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14909)",
+  "old": "                           f\"{tls_ms:.0f}ms of that was the TLS handshake against \"",
+  "new": "                           f\"{0:.0f}ms of that was the TLS handshake against \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14910)",
+  "old": "                           f\"{tcp_ms:.0f}ms to connect. A handshake is one or two round \"",
+  "new": "                           f\"{0:.0f}ms to connect. A handshake is one or two round \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 14913)",
+  "old": "                           f\"The network delivered the connection in {tcp_ms:.0f}ms.\",",
+  "new": "                           f\"The network delivered the connection in {0:.0f}ms.\","
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15696)",
+  "old": "            shape = (f\" Its slowest probe sits {tail:.0f}ms above its own average, several \"",
+  "new": "            shape = (f\" Its slowest probe sits {0:.0f}ms above its own average, several \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15697)",
+  "old": "                     f\"times the {held:.0f}ms it waits on a normal one - so most packets \"",
+  "new": "                     f\"times the {0:.0f}ms it waits on a normal one - so most packets \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15703)",
+  "old": "            shape = (f\" Its slowest probe is only {tail:.0f}ms above its average against \"",
+  "new": "            shape = (f\" Its slowest probe is only {0:.0f}ms above its average against \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15704)",
+  "old": "                     f\"the {held:.0f}ms it waits normally, so the waiting is spread across \"",
+  "new": "                     f\"the {0:.0f}ms it waits normally, so the waiting is spread across \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15719)",
+  "old": "                + f\" adds {qj['queue_ms']:.0f}ms of the delay that varies between \"",
+  "new": "                + f\" adds {0:.0f}ms of the delay that varies between \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15779)",
+  "old": "                (f\"The very first hop is already {wj['delta_ms']:.0f}ms \"",
+  "new": "                (f\"The very first hop is already {0:.0f}ms \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15782)",
+  "old": "                 f\"Latency jumps {wj['delta_ms']:.0f}ms at hop {wj['hop']} \"",
+  "new": "                 f\"Latency jumps {0:.0f}ms at hop {wj['hop']} \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15894)",
+  "old": "                \"message\": f\"Packet loss along the path to {target}: {final_loss:.0f}% at the \"",
+  "new": "                \"message\": f\"Packet loss along the path to {target}: {0:.0f}% at the \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15914)",
+  "old": "                           f\"{final_loss:.0f}%, so the path is fine - those routers are rate-\"",
+  "new": "                           f\"{0:.0f}%, so the path is fine - those routers are rate-\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15990)",
+  "old": "                    f\"The round trip to {target} averages {avg:.0f}ms against a floor of \"",
+  "new": "                    f\"The round trip to {target} averages {0:.0f}ms against a floor of \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15991)",
+  "old": "                    f\"{floor:.0f}ms, so {variable:.0f}ms of it - {100 * share:.0f}% - is \"",
+  "new": "                    f\"{0:.0f}ms, so {variable:.0f}ms of it - {100 * share:.0f}% - is \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 15993)",
+  "old": "                    f\"{floor:.0f}ms and that part is fixed; the rest is a queue somewhere \"",
+  "new": "                    f\"{0:.0f}ms and that part is fixed; the rest is a queue somewhere \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 16006)",
+  "old": "                    f\"The round trip to {target} averages {avg:.0f}ms and its floor is \"",
+  "new": "                    f\"The round trip to {target} averages {0:.0f}ms and its floor is \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 16007)",
+  "old": "                    f\"{floor:.0f}ms, so {100 * (1 - share):.0f}% of it is there on every \"",
+  "new": "                    f\"{0:.0f}ms, so {100 * (1 - share):.0f}% of it is there on every \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 16008)",
+  "old": "                    f\"single probe and only {variable:.0f}ms of it varies. Nothing on the \"",
+  "new": "                    f\"single probe and only {0:.0f}ms of it varies. Nothing on the \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 16026)",
+  "old": "            \"message\": f\"The round trip to {target} averages {avg:.0f}ms, and this run \"",
+  "new": "            \"message\": f\"The round trip to {target} averages {0:.0f}ms, and this run \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 17023)",
+  "old": "                               f\"At {sent} probes that reads as {loss:.0f}% because nothing \"",
+  "new": "                               f\"At {sent} probes that reads as {0:.0f}% because nothing \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 17033)",
+  "old": "                    \"message\": f\"Intermittent packet loss ({loss:.0f}%\"",
+  "new": "                    \"message\": f\"Intermittent packet loss ({0:.0f}%\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 17422)",
+  "old": "                           f\"{inet_loss:.0f}% only because {sent} probes cannot express \"",
+  "new": "                           f\"{0:.0f}% only because {sent} probes cannot express \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 17432)",
+  "old": "                \"message\": f\"Packet loss ({inet_loss:.0f}%\"",
+  "new": "                \"message\": f\"Packet loss ({0:.0f}%\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20031)",
+  "old": "        out.append(f\"  where the {total_ms:.0f}ms went\")",
+  "new": "        out.append(f\"  where the {0:.0f}ms went\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20114)",
+  "old": "            out.append(f\"  -> no single hop adds most of the delay: the {total:.0f}ms \"",
+  "new": "            out.append(f\"  -> no single hop adds most of the delay: the {0:.0f}ms \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20118)",
+  "old": "            share = (f\", {share_pct}% of the {total:.0f}ms end to end\"",
+  "new": "            share = (f\", {share_pct}% of the {0:.0f}ms end to end\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20175)",
+  "old": "                   f\"latency {cq['avg_ms']:.0f}ms, jitter {(cq.get('jitter_ms') or 0):.0f}ms, \"",
+  "new": "                   f\"latency {0:.0f}ms, jitter {(cq.get('jitter_ms') or 0):.0f}ms, \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20176)",
+  "old": "                   f\"loss {cq['loss_pct']:.0f}%\")",
+  "new": "                   f\"loss {0:.0f}%\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20359)",
+  "old": "            avg = \"-\" if row.get(\"avg_ms\") is None else f\"{row['avg_ms']:.1f} ms\"",
+  "new": "            avg = \"-\" if row.get(\"avg_ms\") is None else f\"{0:.1f} ms\""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20411)",
+  "old": "                    out.append(f\"  {'':<24} {tcp_ms:.0f}ms connect + {tls_ms:.0f}ms \"",
+  "new": "                    out.append(f\"  {'':<24} {0:.0f}ms connect + {tls_ms:.0f}ms \""
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20412)",
+  "old": "                               f\"handshake = {tcp_ms + tls_ms:.0f}ms\")",
+  "new": "                               f\"handshake = {0:.0f}ms\")"
+ },
+ {
+  "label": "a number in a message is wrong, the words are not (line 20414)",
+  "old": "                    out.append(f\"  {'':<24} {p['connect_ms']:.0f}ms to connect\")",
+  "new": "                    out.append(f\"  {'':<24} {0:.0f}ms to connect\")"
  }
 ]

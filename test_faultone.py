@@ -5541,10 +5541,19 @@ class TestLatencyHasItsOwnWords(unittest.TestCase):
         self.assertNotIn("latency_is_queuing", codes)
 
     def test_a_slow_path_is_named_as_delay_not_as_call_quality(self):
-        v = self.verdict(800.0)["verdict"]
+        rep = self.verdict(800.0)
+        v = rep["verdict"]
         self.assertEqual(v["based_on"][0], "latency_high")
         self.assertNotIn("Voice", v["headline"])
         self.assertEqual(v["severity"], "critical")
+        # The figures, not only the sentence. ping_map's floor is nine tenths
+        # of the average, so this path is 800ms with a 720ms floor and 80ms of
+        # it varying - and the finding's whole claim is which of those is
+        # which. A mutation zeroing either survived until this line.
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "latency_high")
+        self.assertIn("averages 800ms and its floor is 720ms", said)
+        self.assertIn("only 80ms of it varies", said)
 
     def test_the_call_score_is_still_reported_underneath(self):
         """Delay is the general statement; what it does to a call is a real
@@ -5570,9 +5579,16 @@ class TestLatencyHasItsOwnWords(unittest.TestCase):
         m.cmd_ping = lambda t, c=4, w=2: {
             "ok": True, "cmd": "ping",
             "stdout": "rtt min/avg/max/mdev = 1.0/900.0/1800.0/5.0 ms\n"}
-        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        found = m.diagnose("8.8.8.8", None, quick=False)["findings"]
+        codes = [f["code"] for f in found]
         self.assertIn("latency_is_queuing", codes)
         self.assertNotIn("call_quality_bad", codes)
+        # 900ms against a 1ms floor: 899ms of it is waiting, which is 100% to
+        # the nearest whole number. The split is the entire finding, so the
+        # numbers are asserted rather than the sentence that carries them.
+        said = next(f["message"] for f in found if f["code"] == "latency_is_queuing")
+        self.assertIn("averages 900ms against a floor of 1ms", said)
+        self.assertIn("899ms of it - 100% - is", said)
 
     def test_loss_still_outranks_delay(self):
         """Traffic that never arrives beats traffic that arrives late."""
@@ -20020,6 +20036,8 @@ class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
                     if f["code"] == "queue_builds_at_hop")
         self.assertIn("bursts rather than a link that is continuously full", said)
         self.assertIn("runs on a schedule", said)
+        self.assertIn("sits 120ms above its own average", said)
+        self.assertIn("the 58ms it waits on a normal one", said)
 
     def test_a_queue_that_is_simply_there_is_called_capacity(self):
         """The same 58ms of waiting, spread across the probes instead of
@@ -20032,6 +20050,7 @@ class TestWhereTheWaitingIsAndWhereTheDistanceIs(unittest.TestCase):
         rep = mod.diagnose("8.8.8.8", None, quick=False)
         said = next(f["message"] for f in rep["findings"]
                     if f["code"] == "queue_builds_at_hop")
+        self.assertIn("only 20ms above its average", said)
         self.assertIn("above its floor most of the time", said)
         self.assertNotIn("runs on a schedule", said)
 
@@ -20203,6 +20222,11 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
                     if f["code"] == "queue_builds_at_hop")
         self.assertIn("Hop 3 (core-rtr-07.corp.internal)", said)
         self.assertIn("AS65001, private, in no registry", said)
+        # And the numbers. A sweep replacing every numeric placeholder in every
+        # finding message with a zero left 53 of 62 alive, these among them:
+        # the sentence was asserted and the figures it turns on were not.
+        self.assertIn("adds 57ms of the delay that varies", said)
+        self.assertIn("98% of all of it", said)
         # And not the estate twice: the hostname has already said it.
         self.assertNotIn("corp.internal, private", said)
 

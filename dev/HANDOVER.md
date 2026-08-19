@@ -212,10 +212,41 @@ reasons are different:
   whose anchor matches more than once is reported as bad rather than run, which
   is the harness working; anchor on the function's own line instead.
 
-**Twenty-eight of the 121 examined, six survivors: three real gaps, three
-equivalent mutants.** Roughly 93 still unexamined, at about six mutations per
-two-minute run. The rate has held at about one real finding per nine
-mutations across five batches.
+**Batch six: six, three survivors, one real.** `_check_discard_route` reads the
+routing table without checking that reading it worked - the same shape as
+`first_hop_from_route` two batches earlier, and it matters more here, because
+naming a discard route is the most decisive finding the tool has and it would
+be drawn from output the run had decided not to trust. Every fixture fails the
+read with no output, so the empty parse below returned the same answer.
+
+The other two were equivalent, and both for the same reason as several before
+them - **an early guard subsumed by a later one**:
+
+- `discards_the_target` checks `not target_ip`, and the `try/except ValueError`
+  four lines down catches `ip_address(None)` anyway.
+- `_check_relay_volume` checks `not client or not backend`, and both are
+  `by_side.get(...) or {}`, so an empty side reaches the `volume_readable` test
+  and returns there.
+
+**Thirty-four of the 121 examined, nine survivors: four real gaps, five
+equivalent mutants.** Roughly 87 still unexamined, at about six mutations per
+two-minute run.
+
+**Two patterns now hold across six batches, and both are worth reading before
+the next one.**
+
+*Every real gap has been a guard whose test exercises a neighbouring path* -
+never a missing test. The bond test checked the parser instead of the finding;
+three separate `ok` guards were handed a failure with no output, so the empty
+parse below them gave the same answer; the TTL guard had no non-IPv4 fixture.
+Each had a test with an accurate name that never reached the line.
+
+*Every equivalent mutant has been an early guard subsumed by a later one.* That
+is worth knowing because the tempting response - delete the redundant guard -
+is usually wrong: they are cheap, they state intent, and the subsumption
+depends on conventions rather than guarantees. Only delete when the later line
+subsumes the earlier one for **any** input, which is what happened to the
+group-size guard in `_check_idle_endpoint` and has not happened since.
 
 ## Open: phase A, `findings` from out-parameter to return value
 

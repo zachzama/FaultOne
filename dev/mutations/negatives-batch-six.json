@@ -1,0 +1,22 @@
+[
+ {
+  "label": "a routing table that could not be read is searched anyway",
+  "old": "    routes = (raw or {}).get(\"routes\") or {}\n    if not routes.get(\"ok\"):\n        return found",
+  "new": "    routes = (raw or {}).get(\"routes\") or {}\n    if False:\n        return found"
+ },
+ {
+  "label": "a side whose volume could not be read is judged on it",
+  "old": "    if not client.get(\"volume_readable\") or not backend.get(\"volume_readable\"):",
+  "new": "    if False:"
+ },
+ {
+  "label": "too little traffic to judge is judged",
+  "old": "    enough_to_judge = arrived >= RELAY_MIN_BYTES",
+  "new": "    enough_to_judge = True"
+ },
+ {
+  "label": "a box broadly relaying is reported as holding traffic back",
+  "old": "    broadly_relaying = forwarded * RELAY_RATIO >= arrived",
+  "new": "    broadly_relaying = False"
+ }
+]

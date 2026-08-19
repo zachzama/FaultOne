@@ -8144,6 +8144,30 @@ class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
         self.assertEqual(nd.parse_discard_routes(
             "default via 10.0.0.1 dev eth0\n10.0.0.0/24 dev eth0\n"), [])
 
+    def test_a_routing_table_that_could_not_be_read_is_not_searched(self):
+        """The `ok` guard on the check, driven. Every fixture that fails the
+        routing read fails it with no output, so the empty parse below returns
+        the same answer and the guard could be deleted with nothing noticing -
+        a mutation did exactly that and survived.
+
+        A command that exits non-zero and still prints is the case it is for,
+        and `ip route` printing a partial table before failing is not exotic.
+        Whatever it printed, this run does not know the routing table, and
+        naming a discard route off it would be the most decisive finding the
+        tool has, drawn from output it decided not to trust.
+        """
+        raw = {"routes": {"ok": False, "error": "exit 2", "stdout": self.ROUTES},
+               "target_ip": "203.0.113.200"}
+        self.assertEqual(nd._check_discard_route(raw, "203.0.113.200"), [])
+
+    def test_a_table_that_was_read_still_names_the_discard(self):
+        """So the test above cannot pass by the finding being unreachable."""
+        raw = {"routes": {"ok": True, "stdout": self.ROUTES},
+               "target_ip": "203.0.113.200"}
+        self.assertEqual([f["code"] for f in
+                          nd._check_discard_route(raw, "203.0.113.200")],
+                         ["target_is_discarded"])
+
     def test_the_target_is_matched_against_the_prefix_not_the_string(self):
         """A /25 is half the /24 above it, and an address in the other half is
         not caught. Substring matching would say it was."""

@@ -6797,7 +6797,19 @@ def annotation_means(flag):
 TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]|!\d{1,3})(?=\s|$)")
 # A deliberate refusal by a policy device, as opposed to a path that is broken
 # or silent. Different owner entirely: somebody configured this.
-TRACE_PROHIBITED = ("!X", "!A", "!T")
+#
+# The letters and the numbers are the same three refusals written two ways.
+# traceroute prints a letter for the codes it has a name for and "!13" for the
+# rest, and which one a box prints depends on its traceroute rather than on
+# what the router said - so a set holding only the letters answers differently
+# on two machines looking at one network. ICMP destination-unreachable codes 9,
+# 10 and 13 are network, host and communication administratively prohibited,
+# which is this finding in the numbering RFC 792 gave it.
+#
+# The test for the numeric half was written when the parser learned to read it,
+# and asserted only `if said:` - so it passed for a year against a rule that
+# never fired. Found by dev/vacuous.py, which is what that file is for.
+TRACE_PROHIBITED = ("!X", "!A", "!T", "!9", "!10", "!13")
 
 
 def parse_traceroute_hops(output):

@@ -10552,8 +10552,12 @@ class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
                  " 2  198.51.100.7 (198.51.100.7)  12.0 ms !13  12.1 ms !13\n")
         r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None, baseline=None)
         said = [f for f in r["findings"] if f["code"] == "path_admin_prohibited"]
-        if said:
-            self.assertIn("code 13", said[0]["message"])
+        # Unconditionally. This asserted `if said:` and passed for as long as
+        # the rule did not fire, which was the whole time - the numeric forms
+        # were missing from TRACE_PROHIBITED, which is the exact gap this test
+        # was written for and says so in its own docstring.
+        self.assertEqual(len(said), 1, [f["code"] for f in r["findings"]])
+        self.assertIn("code 13", said[0]["message"])
 
     def test_the_named_ones_are_unchanged(self):
         self.assertEqual(nd.annotation_means("!X"), "administratively prohibited")
@@ -15983,8 +15987,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1047),
-            "compressed": (len(gzip.compress(raw, 9)), 316),
+            "on disk": (len(raw), 1048),
+            "compressed": (len(gzip.compress(raw, 9)), 317),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
         for label, (measured, quoted) in claims.items():

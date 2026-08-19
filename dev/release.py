@@ -203,6 +203,7 @@ def main():
     for what, cmd in (("the suite", [sys.executable, "test_faultone.py"]),
                       ("dev/deep_e2e.py", [sys.executable, "dev/deep_e2e.py"]),
                       ("dev/audit.py", [sys.executable, "dev/audit.py"]),
+                      ("dev/vacuous.py", [sys.executable, "dev/vacuous.py"]),
                       ("dev/counts.py --check",
                        [sys.executable, "dev/counts.py", "--check"])):
         print(f"running {what}")

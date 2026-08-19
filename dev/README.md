@@ -73,6 +73,44 @@ against the live box.
 Needs the network and an authenticated `gh`, which is why it is here and not in
 the suite. Run it when you tag.
 
+## `vacuous.py`: find tests that pass without asserting anything
+
+```bash
+python3 dev/vacuous.py             # check every test in the suite
+python3 dev/vacuous.py --self-test # check this file works
+```
+
+`mutate.py` asks the expensive question - would this test notice if the rule it
+covers broke - one hand-written mutation at a time. There are 73 of those
+against 1,780 tests, so most of the suite has never been asked anything.
+
+This asks the cheap question of all of them at once, by wrapping the assertion
+methods and watching what each test actually reaches: did it execute an
+assertion, and did that assertion have anything in it. Wrapped rather than
+parsed, because the source says which assertions a test *contains* and only
+running it says which ones a test *reached* - an assertion inside a loop that
+never runs is the case worth finding, and no amount of reading the file shows
+it.
+
+It found the thing it was built for on its first run. `path_admin_prohibited`
+has a numeric form, `!13`, and a test written specifically for it - which
+asserted `if said:` and so passed for as long as the rule did not fire. It
+never fired: `TRACE_PROHIBITED` held the letter forms only, and which one a box
+prints depends on its traceroute rather than on what the router said.
+
+Two lists, and they mean different things. A test that executed no assertion
+and is not named for asserting-by-not-raising is broken; that list is empty and
+the exit code says so. A test whose every assertion compared one empty thing to
+another is a list to *read*: asserting that a list is empty is how this suite
+says a rule stayed quiet, and what this cannot show from outside is whether the
+fixture arranged the situation at all.
+
+The instrument has a control, and needed it. The first version could not see a
+test with zero assertions at all - such a test never reaches the wrapper, so it
+had no row and never appeared - and it reported a clean tree. That is exactly
+the failure it exists to catch, and only the planted tests in `--self-test`
+caught it.
+
 ## `release.py`: cut a release without forgetting half of it
 
 ```bash

@@ -116,3 +116,6 @@ jobs:
           python-version: "3.13"
       - run: python dev/deep_e2e.py
       - run: python dev/audit.py
+      # Asks of all 1,780 tests the cheap question dev/mutate.py asks of 73:
+      # did this test execute an assertion, and did it have anything in it.
+      - run: python dev/vacuous.py

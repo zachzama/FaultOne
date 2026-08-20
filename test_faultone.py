@@ -16887,8 +16887,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1076),
-            "compressed": (len(gzip.compress(raw, 9)), 325),
+            "on disk": (len(raw), 1077),
+            "compressed": (len(gzip.compress(raw, 9)), 326),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
         }
         for label, (measured, quoted) in claims.items():
@@ -20995,6 +20995,72 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         rep = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
         self.assertEqual(rep["worst_queue_jump"]["network"], "dns.google")
         self.assertEqual(rep["worst_queue_jump"]["asn"], "AS15169")
+
+
+class TestAnAddressThatWasHereLastTime(unittest.TestCase):
+    """An instance that failed to start is invisible to every other check.
+
+    Every other way this tool asks "should that address be here" needs
+    somebody to say so: `--source` names one, and `service_address_unserved`
+    only speaks about addresses that are already present. An instance that
+    never came up has no address, no listener and nothing to probe, so it has
+    no row anywhere in the report - three healthy instances read exactly like
+    three healthy and one dead.
+
+    A previous visit is the box's own answer to that, and `own_addresses` was
+    already in the export and never compared. This is what the vendor's own
+    tooling would have told us, taken from the box's history instead.
+    """
+
+    def visits(self, before, after):
+        mod = fresh()
+        setup, kwargs = S["all_clear"]
+        setup(mod)
+        base = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        base["raw"]["own_addresses"] = list(before)
+        current = fresh()
+        setup(current)
+        rep = current.diagnose(quick=False, **dict(scenario_kwargs(kwargs),
+                                                   baseline=base))
+        rep["raw"]["own_addresses"] = list(after)
+        return current.compare_reports(rep, base)
+
+    ADDR = {"address": "10.0.0.77", "prefix": 24, "family": "inet",
+            "interface": "eth1", "scope": "global"}
+
+    def about_addresses(self, changes):
+        return [c for c in changes if "address" in str(c.get("what"))]
+
+    def test_an_address_that_went_away_is_a_regression(self):
+        got = self.about_addresses(self.visits([self.ADDR], []))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["what"], "address 10.0.0.77 on eth1")
+        self.assertEqual((got[0]["before"], got[0]["after"]), ("present", "gone"))
+        self.assertEqual(got[0]["direction"], "worse",
+                         "an instance that vanished has to count as worse or "
+                         "it never reaches a finding")
+
+    def test_a_new_address_is_not_a_regression(self):
+        """As often a deliberate addition as a failover landing here, and the
+        reader knows which. Reported, not graded."""
+        got = self.about_addresses(self.visits([], [self.ADDR]))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["direction"], "neutral")
+
+    def test_an_unchanged_box_says_nothing_about_addresses(self):
+        self.assertEqual(self.about_addresses(self.visits([self.ADDR], [self.ADDR])), [])
+
+    def test_it_names_the_interface_so_the_instance_is_identifiable(self):
+        """On a box running several instances the address alone is a number;
+        the address and its interface is a thing somebody can go and look at."""
+        got = self.about_addresses(self.visits([self.ADDR], []))
+        self.assertIn("eth1", got[0]["what"])
+
+    def test_a_baseline_with_no_addresses_recorded_is_not_a_mass_failure(self):
+        """An older export, or a compacted one, may carry no address list.
+        Reading that as every address having vanished would turn an upgrade
+        into an outage."""
+        self.assertEqual(self.about_addresses(self.visits([], [])), [])
 
 
 class TestTheApplicationThatStoppedReading(unittest.TestCase):

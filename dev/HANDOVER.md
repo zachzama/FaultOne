@@ -95,6 +95,33 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The `sitrep` question, and what it actually exposed
+
+The vendor's own CLI names its instances by path whether or not they hold an
+address. Running it stays declined - see [[deployment-target]]: their tooling
+answers "is the daemon alive" better than this can, its output is undocumented
+and unversioned, and parsing it would make one deployment special in a file
+whose claim is that it runs anywhere.
+
+**But the blind spot it pointed at was real and is now closed.** Every other way
+this tool asks "should that address be here" needs somebody to say so:
+`--source` names one, and `service_address_unserved` only speaks about addresses
+already present. So an instance that failed to start had no address, no
+listener, nothing to probe and no row anywhere - three healthy instances read
+exactly like three healthy and one dead.
+
+`compare_reports` now diffs `own_addresses`, which was in the export all along
+and never read. An address that was here last visit and is gone counts as worse
+and reaches `regression_since_baseline` with the address and interface named; a
+new one is reported and not graded, because it is as often a deliberate
+addition as a failover landing here and the reader knows which. A baseline
+carrying no address list produces nothing, so an older or compacted export
+cannot read as every address vanishing at once.
+
+That is the vendor tool's answer taken from the box's own history instead, and
+it needs `--baseline` - which is the honest limit of it. A first visit to a box
+still cannot see an instance that never came up.
+
 ### Phase C is done: the orderings that carry a reason are declared
 
 `VERDICT_RULES` is a list and its order **is** the priority, so a rule inserted

@@ -10709,6 +10709,34 @@ def compare_reports(current, baseline):
          current.get("gateway_mac"))
     note("path measured with", baseline.get("path_source"), current.get("path_source"))
 
+    # Addresses this box held last time and does not now.
+    #
+    # Every other way this tool asks "should that address be here" needs
+    # somebody to say so - `--source` names one, and `service_address_unserved`
+    # only speaks about addresses that are already present. So an instance that
+    # failed to start is invisible: no address, no listener, nothing to probe,
+    # no row anywhere in the report.
+    #
+    # A previous visit is the box's own answer to that, and it was already in
+    # the export and never read. An address that was here and is not is an
+    # instance that died, a failover that happened, or a config that did not
+    # come back after a reboot - and which of those it is, is exactly what the
+    # reader knows and this tool does not.
+    def addr_map(rep):
+        return {a["address"]: a for a in (_dict(rep).get("raw") or {}).get(
+            "own_addresses") or [] if isinstance(a, dict) and a.get("address")}
+    cur_addr, base_addr = addr_map(current), addr_map(baseline)
+    for address in sorted(set(base_addr) - set(cur_addr)):
+        was = base_addr[address]
+        note("address %s on %s" % (address, was.get("interface") or "?"),
+             "present", "gone", "worse")
+    for address in sorted(set(cur_addr) - set(base_addr)):
+        now = cur_addr[address]
+        # Neutral: a new address is as often a deliberate addition as a
+        # failover landing here, and the reader knows which.
+        note("address %s on %s" % (address, now.get("interface") or "?"),
+             "absent", "present")
+
     # Switch port / VLAN: a device that moved, or a re-patched port, explains a
     # great deal on its own.
     def nb_map(rep):

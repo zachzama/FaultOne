@@ -1,0 +1,17 @@
+[
+ {"label": "an address that went away is not compared at all",
+  "old": "    for address in sorted(set(base_addr) - set(cur_addr)):",
+  "new": "    for address in []:"},
+ {"label": "a vanished address is graded neutral, so it reaches no finding",
+  "old": "             \"present\", \"gone\", \"worse\")",
+  "new": "             \"present\", \"gone\")"},
+ {"label": "a new address is graded as a regression",
+  "old": "        note(\"address %s on %s\" % (address, now.get(\"interface\") or \"?\"),\n             \"absent\", \"present\")",
+  "new": "        note(\"address %s on %s\" % (address, now.get(\"interface\") or \"?\"),\n             \"absent\", \"present\", \"worse\")"},
+ {"label": "the interface is dropped, leaving a bare number",
+  "old": "        note(\"address %s on %s\" % (address, was.get(\"interface\") or \"?\"),",
+  "new": "        note(\"address %s\" % (address,),"},
+ {"label": "the comparison runs the wrong way round",
+  "old": "    for address in sorted(set(base_addr) - set(cur_addr)):",
+  "new": "    for address in sorted(set(cur_addr) - set(base_addr)):"}
+]

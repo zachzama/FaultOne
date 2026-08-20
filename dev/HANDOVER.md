@@ -135,6 +135,25 @@ path traffic takes out and back, and a unit that never started has not failed
 one of them, it has not reached one. Lighting a leg would put a colour on
 something the finding has no reading for.
 
+**And the box can grade some of them itself, which the disclaimer was hiding.**
+`units_failed` says it cannot tell a failed timer from a failed instance, and
+that is true of a unit name read alone and stops being true where this box
+corroborates the unit elsewhere. Two grounds, both local and both first-visit:
+a failed `.socket` unit is a port systemd was holding and is not, and a failed
+`.service` whose own program holds listening sockets here is one dead member of
+a working set. Those move to `unit_failed_that_carries_traffic`, which names
+the ground beside each unit and groups units that share one.
+
+It is a **warning**, not a critical, and the guards are what settled that.
+`test_every_critical_finding_moves_a_stage` refused it twice: everything this
+tool calls critical is the network chain broken, and a unit that never started
+has broken no leg of it. Same argument `clock_skewed` already makes. It ranks
+above nearly every other warning instead.
+
+The matching floor is `UNIT_STEM_FLOOR`, and it is two conditions, not one -
+the unit stem and the process name each have to clear it. The first mutation
+run caught neither, because the single test covering it drove both at once.
+
 The parser gets four tests of its own because `systemctl` writes a table for a
 person - a non-ASCII bullet, a header from any systemctl that does not know
 `--no-legend`, and a description column that wraps. Each is a line that must

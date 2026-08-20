@@ -7960,6 +7960,13 @@ VERDICT_RULES = [
      "Either the address moved to its partner and this is now the standby, or it "
      "was never configured here. Check the failover state before reading anything "
      "else in this report: none of it was measured from the address you asked for."),
+    ("unit_failed_that_carries_traffic", "whatever should have started this, and did not",
+     "Something this box was told to run is not running, and it is not housekeeping",
+     "This box says so about itself: either systemd is holding no port for a "
+     "socket unit that failed, or the same program is serving here under "
+     "another instance. Nothing else in this report can see it - a service that "
+     "never started holds no address and answers no probe - so read this before "
+     "any reading below that calls the network healthy."),
     ("units_failed", "whatever should have started, and did not",
      "Something this box is configured to run is not running",
      "systemd was asked directly, so this needs no previous visit and no "
@@ -9104,6 +9111,7 @@ FINDING_SIDE.update({
     "tcp_flow_loss_clients": "downstream",
     "tcp_return_stalled_clients": "downstream",
     "service_address_unserved": "downstream",
+    "unit_failed_that_carries_traffic": "local",
     "units_failed": "local",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
@@ -9663,6 +9671,12 @@ RP_FILTER_STRICT = 1
 #: the box runs - more than anybody needs to fix a fault, and more than belongs
 #: in a file that gets pasted into a ticket.
 UNITS_NAMED = 6
+
+#: The shortest name that may be matched between a unit and a process. `ss`
+#: reports a process by its comm, which the kernel truncates at 15 characters,
+#: so a unit and its own process often agree only on a prefix - and a prefix
+#: rule with no floor makes "sh" match half the box.
+UNIT_STEM_FLOOR = 4
 
 
 def _check_return_path_filtered(raw, findings):
@@ -10450,6 +10464,8 @@ FINDING_CLASS = {
 "clock_unsynced": ("processingErrorAlarm", "lossOfSynchronisation"),
 # --- the service this box runs, and the one it depends on -------------------
 "service_address_unserved": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"unit_failed_that_carries_traffic": ("processingErrorAlarm",
+                                    "applicationSubsystemFailure"),
 "units_failed": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "service_endpoint_idle": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "own_service_not_accepting": ("processingErrorAlarm", "applicationSubsystemFailure"),
@@ -13071,6 +13087,62 @@ def _check_thermal(stats, counter_window):
         })
     return found
 
+def unit_stem(unit):
+    """The program's name out of a unit name, or None if it is not a service.
+
+    `edge-instance@2.service` is one instance of a template, and the part worth
+    comparing against anything else on this box is `edge-instance`. Only
+    `.service` units answer: a timer, a path or a target named after a program
+    is not that program, and matching those against a running process would
+    read "the daemon is up" off a piece of housekeeping named after it.
+    """
+    if not unit or not unit.endswith(".service"):
+        return None
+    stem = unit[:-len(".service")].split("@")[0].strip()
+    return stem if len(stem) >= UNIT_STEM_FLOOR else None
+
+
+def _units_that_carry_traffic(units, owners):
+    """{unit: why} for the failed units this tool can grade on its own evidence.
+
+    `units_failed` says plainly that a failed timer is housekeeping and a failed
+    instance is an outage and that it cannot tell them apart. That is true of a
+    unit name read alone, and it stops being true where the box says something
+    about the unit elsewhere. Two grounds, both local, both on a first visit:
+
+    - **A `.socket` unit that failed is a listener that is not listening.** No
+      name matching and no inference: socket activation means systemd holds the
+      port, and a failed socket unit is the port unheld. That is this tool's own
+      subject rather than a guess about what the box is for.
+    - **A `.service` whose own program is serving under another instance.**
+      `edge-instance@2.service` failed while a process called `edge-instance`
+      holds listening sockets says the program runs here and this instance of it
+      does not, which is the shape of one dead instance in a pool - the exact
+      case that reads as a healthy box everywhere else in this tool.
+
+    Matched on a prefix in either direction because `ss` reports a process by
+    its comm and the kernel truncates that at 15 characters, with
+    `UNIT_STEM_FLOOR` as the floor so a short name cannot match the box.
+    """
+    serving = {o.get("process") for o in (owners or [])
+               if o.get("state") == "LISTEN" and o.get("process")}
+    graded = {}
+    for unit in units:
+        if unit.endswith(".socket"):
+            graded[unit] = "a port systemd is not holding"
+            continue
+        stem = unit_stem(unit)
+        if not stem:
+            continue
+        for proc in sorted(serving):
+            if len(proc) < UNIT_STEM_FLOOR:
+                continue
+            if stem.startswith(proc) or proc.startswith(stem):
+                graded[unit] = f"{proc} is serving here under another instance"
+                break
+    return graded
+
+
 def _check_failed_units(raw):
     """Things this box is configured to run and is not running.
 
@@ -13082,10 +13154,62 @@ def _check_failed_units(raw):
     It names what failed rather than leaving somebody to infer it from an
     absence, which is the difference between "10.0.0.77 is gone" and
     "the unit that holds 10.0.0.77 is dead".
+
+    Split in two by whether this box says anything about the unit beyond its
+    name. Where it does, the finding grades it and the reader is not asked to;
+    where it does not, the warning keeps its disclaimer, and the disclaimer
+    stays true because it now only covers the units nothing here can grade.
     """
     found = []
     res = (raw or {}).get("failed_units") or {}
     units = res.get("failed_units") or []
+    if not units:
+        return found
+    graded = _units_that_carry_traffic(units, socket_owners(raw))
+    if graded:
+        # Grouped by the ground rather than listed unit by unit. A pool that
+        # went down together produces one reason repeated as many times as
+        # there are instances, and a sentence that says the same clause six
+        # times stops being read at the second one.
+        by_ground = {}
+        for unit in sorted(graded):
+            by_ground.setdefault(graded[unit], []).append(unit)
+        parts, budget, rest = [], UNITS_NAMED, 0
+        for ground in sorted(by_ground):
+            here = by_ground[ground]
+            take = here[:budget]
+            budget -= len(take)
+            rest += len(here) - len(take)
+            if take:
+                parts.append("%s - %s" % (", ".join(take), ground))
+        found.append({
+            # A warning, and for the same reason `clock_skewed` is one:
+            # everything this tool calls critical is the network chain being
+            # broken, and a unit that never started has broken no leg of it.
+            # What it has done is leave work undone, which is worse than most
+            # warnings and is why this outranks nearly all of them - but the
+            # stage strip has no colour for it and a critical over eight green
+            # stages would be the picture contradicting the sentence.
+            "severity": "warning",
+            "layer": 7,
+            "code": "unit_failed_that_carries_traffic",
+            "message": (
+                f"{len(graded)} of the failed unit(s) on this box "
+                f"{'is' if len(graded) == 1 else 'are'} not housekeeping, and "
+                f"this box says so about itself: "
+                + "; ".join(parts)
+                + (f"; and {rest} more like them" if rest else "")
+                + f". A failed socket unit is a port systemd was holding and is "
+                  f"not, and a failed service whose own program is listening "
+                  f"here is one dead member of a working set - neither is a "
+                  f"timer you can leave until Monday. Every other check in this "
+                  f"report would call this box healthy, because something that "
+                  f"never started holds no address, accepts no connection and "
+                  f"leaves nothing to measure. What is failing is not the "
+                  f"network between here and anywhere: it is work this box was "
+                  f"told to do and is not doing."),
+        })
+    units = [u for u in units if u not in graded]
     if not units:
         return found
     shown = units[:UNITS_NAMED]

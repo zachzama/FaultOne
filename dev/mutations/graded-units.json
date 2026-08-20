@@ -1,0 +1,57 @@
+[
+ {
+  "label": "a timer named after a running daemon is graded as the daemon",
+  "old": "    if not unit or not unit.endswith(\".service\"):\n        return None",
+  "new": "    if not unit:\n        return None"
+ },
+ {
+  "label": "the instance number is left on the name that gets matched",
+  "old": "    stem = unit[:-len(\".service\")].split(\"@\")[0].strip()",
+  "new": "    stem = unit[:-len(\".service\")].strip()"
+ },
+ {
+  "label": "a two-letter unit name may match half the box",
+  "old": "    return stem if len(stem) >= UNIT_STEM_FLOOR else None",
+  "new": "    return stem"
+ },
+ {
+  "label": "a two-letter process name may match half the box",
+  "old": "            if len(proc) < UNIT_STEM_FLOOR:\n                continue",
+  "new": "            if False:\n                continue"
+ },
+ {
+  "label": "a process that is merely connected counts as one that serves",
+  "old": "    serving = {o.get(\"process\") for o in (owners or [])\n               if o.get(\"state\") == \"LISTEN\" and o.get(\"process\")}",
+  "new": "    serving = {o.get(\"process\") for o in (owners or []) if o.get(\"process\")}"
+ },
+ {
+  "label": "a failed socket unit is left for the reader to judge",
+  "old": "        if unit.endswith(\".socket\"):",
+  "new": "        if False:"
+ },
+ {
+  "label": "a truncated comm no longer matches the unit it belongs to",
+  "old": "            if stem.startswith(proc) or proc.startswith(stem):",
+  "new": "            if stem == proc:"
+ },
+ {
+  "label": "a graded unit is named twice, once ungraded",
+  "old": "    units = [u for u in units if u not in graded]",
+  "new": "    units = list(units)"
+ },
+ {
+  "label": "the graded list is named whole however long it is",
+  "old": "            take = here[:budget]",
+  "new": "            take = here"
+ },
+ {
+  "label": "the graded finding states no ground for grading",
+  "old": "                parts.append(\"%s - %s\" % (\", \".join(take), ground))",
+  "new": "                parts.append(\", \".join(take))"
+ },
+ {
+  "label": "units sharing a ground are listed separately against it",
+  "old": "        by_ground = {}\n        for unit in sorted(graded):\n            by_ground.setdefault(graded[unit], []).append(unit)",
+  "new": "        by_ground = {}\n        for unit in sorted(graded):\n            by_ground.setdefault(unit, []).append(unit)"
+ }
+]

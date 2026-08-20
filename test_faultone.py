@@ -12247,7 +12247,7 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         # A unit the box was told to run and is not. It has not failed a stage
         # of that chain, it has not reached one, and which units matter is the
         # reader's call - so there is no leg to colour.
-        "units_failed",
+        "units_failed", "unit_failed_that_carries_traffic",
     }
 
     # A column can be lit with all four legs reading OK. Loss and jitter count
@@ -16891,9 +16891,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1083),
-            "compressed": (len(gzip.compress(raw, 9)), 327),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 224),
+            "on disk": (len(raw), 1089),
+            "compressed": (len(gzip.compress(raw, 9)), 329),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 225),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -21211,6 +21211,146 @@ class TestSomethingTheBoxWasToldToRunAndIsNot(unittest.TestCase):
         self.assertIn("yours to say", said)
 
 
+class TestTheFailedUnitsThisBoxCanGradeItself(unittest.TestCase):
+    """Where the box says something about a failed unit beyond its name.
+
+    `units_failed` leaves the judgement to the reader, which is honest about a
+    name read alone and stops being honest the moment this box corroborates the
+    unit elsewhere. Two grounds, both local and both on a first visit: a failed
+    `.socket` unit is a port systemd is not holding, and a failed `.service`
+    whose own program is holding listeners under another instance is one dead
+    member of a working pool.
+
+    The split matters more than the wording. Every graded unit leaves the
+    warning, so the warning's disclaimer keeps applying only to the units
+    nothing here can grade.
+    """
+
+    def run_with(self, units, listeners=()):
+        raw = {"failed_units": {"ok": True, "failed_units": list(units)},
+               "socket_owners": {"ok": True, "owners": [
+                   {"state": "LISTEN", "local_port": "443", "process": p}
+                   for p in listeners]}}
+        return {f["code"]: f["message"] for f in nd._check_failed_units(raw)}
+
+    def test_a_dead_instance_beside_a_serving_sibling_is_graded(self):
+        """The case nothing else in this tool can see. The instance holds no
+        address and accepts no connection, so every measurement here is of the
+        siblings that work and comes back healthy."""
+        out = self.run_with(["edge-instance@2.service"], ["edge-instance"])
+        self.assertIn("unit_failed_that_carries_traffic", out)
+        self.assertIn("edge-instance@2.service",
+                      out["unit_failed_that_carries_traffic"])
+
+    def test_a_failed_socket_unit_needs_no_name_matching(self):
+        """Socket activation means systemd holds the port itself, so a failed
+        socket unit is the port unheld. No inference about what the box is
+        for."""
+        out = self.run_with(["api.socket"])
+        self.assertIn("unit_failed_that_carries_traffic", out)
+        self.assertIn("api.socket - a port systemd is not holding",
+                      out["unit_failed_that_carries_traffic"])
+
+    def test_a_timer_named_after_a_running_daemon_is_not_graded(self):
+        """`nginx-cache.timer` beside a running `nginx` is housekeeping named
+        after a program, not the program. Matching non-service units against
+        processes would read "the daemon is up" off the wrong thing."""
+        out = self.run_with(["nginx-cache.timer"], ["nginx"])
+        self.assertNotIn("unit_failed_that_carries_traffic", out)
+        self.assertIn("nginx-cache.timer", out["units_failed"])
+
+    def test_a_service_nothing_here_corroborates_stays_ungraded(self):
+        out = self.run_with(["backup.service"], ["nginx"])
+        self.assertNotIn("unit_failed_that_carries_traffic", out)
+        self.assertIn("backup.service", out["units_failed"])
+
+    def test_a_graded_unit_leaves_the_warning(self):
+        """Or the warning's "whether these matter is yours to say" would sit
+        next to a finding that just said one of them matters."""
+        out = self.run_with(["edge-instance@2.service", "backup.service"],
+                            ["edge-instance"])
+        self.assertNotIn("edge-instance@2.service", out["units_failed"])
+        self.assertIn("backup.service", out["units_failed"])
+
+    def test_grading_every_unit_leaves_no_warning_at_all(self):
+        out = self.run_with(["edge-instance@2.service"], ["edge-instance"])
+        self.assertNotIn("units_failed", out)
+
+    def test_a_short_process_name_cannot_match_a_long_unit(self):
+        """A prefix rule with no floor makes a two-letter comm match half the
+        unit names on the machine. `ss` itself is the example: it is on every
+        box this runs on, and it is a prefix of `sshd`."""
+        out = self.run_with(["sshd.service"], ["ss"])
+        self.assertNotIn("unit_failed_that_carries_traffic", out)
+
+    def test_a_short_unit_name_cannot_match_a_long_process(self):
+        """The same rule from the other side, which is a separate condition and
+        was covered only by the one above until a mutation said otherwise."""
+        out = self.run_with(["ss.service"], ["sshd-session"])
+        self.assertNotIn("unit_failed_that_carries_traffic", out)
+
+    def test_the_instance_number_is_not_part_of_the_name_matched(self):
+        """`edge@2.service` is an instance of `edge`, and the process running
+        it is called whatever the program is called. Left on, the number only
+        stops mattering where the unit name happens to be the longer of the
+        two - which is why this needs a process name longer than the unit."""
+        out = self.run_with(["edge@2.service"], ["edge-worker"])
+        self.assertIn("unit_failed_that_carries_traffic", out)
+
+    def test_a_comm_truncated_by_the_kernel_still_matches(self):
+        """`ss` reports a process by its comm, which the kernel cuts at 15
+        characters, so the unit and its own process agree on a prefix and
+        nothing more. Requiring equality would miss every long name."""
+        out = self.run_with(["very-long-daemon-name@1.service"],
+                            ["very-long-daemo"])
+        self.assertIn("unit_failed_that_carries_traffic", out)
+
+    def test_a_process_that_is_connected_but_not_listening_does_not_count(self):
+        """The ground is that the program serves here. An outbound connection
+        says it runs, which is not the same claim."""
+        raw = {"failed_units": {"ok": True,
+                                "failed_units": ["edge-instance@2.service"]},
+               "socket_owners": {"ok": True, "owners": [
+                   {"state": "ESTAB", "local_port": "51000",
+                    "process": "edge-instance"}]}}
+        out = {f["code"] for f in nd._check_failed_units(raw)}
+        self.assertNotIn("unit_failed_that_carries_traffic", out)
+
+    def test_it_names_the_ground_and_not_only_the_unit(self):
+        """A reader has to be able to disagree with the reasoning, which means
+        seeing it. Naming the unit alone is the warning's job."""
+        out = self.run_with(["edge-instance@2.service"], ["edge-instance"])
+        self.assertIn("edge-instance@2.service - edge-instance is serving "
+                      "here under another instance",
+                      out["unit_failed_that_carries_traffic"])
+
+    def test_the_graded_list_is_capped_and_counted_like_the_warning(self):
+        units = ["svc%d.socket" % i for i in range(9)]
+        said = self.run_with(units)["unit_failed_that_carries_traffic"]
+        self.assertIn("9 of the failed unit(s)", said)
+        self.assertIn("svc0.socket, svc1.socket", said)
+        self.assertNotIn("svc%d.socket" % nd.UNITS_NAMED, said)
+        self.assertIn("and %d more" % (9 - nd.UNITS_NAMED), said)
+
+    def test_units_sharing_a_ground_are_named_once_against_it(self):
+        """A pool that went down together gives one reason as many times as
+        there are instances, and a sentence saying the same clause six times
+        stops being read at the second one."""
+        said = self.run_with(["a.socket", "b.socket"])[
+            "unit_failed_that_carries_traffic"]
+        self.assertIn("a.socket, b.socket - a port systemd is not holding", said)
+        self.assertEqual(said.count("a port systemd is not holding"), 1)
+
+    def test_no_socket_table_grades_nothing_rather_than_guessing(self):
+        """A box where naming the process behind a socket is not supported is
+        not a box where nothing serves."""
+        raw = {"failed_units": {"ok": True,
+                                "failed_units": ["edge-instance@2.service"]},
+               "socket_owners": {"ok": False, "owners": []}}
+        out = {f["code"] for f in nd._check_failed_units(raw)}
+        self.assertEqual(out, {"units_failed"})
+
+
 class TestTheBoxThatDropsItsOwnReturnTraffic(unittest.TestCase):
     """Asymmetric routing on a box configured to discard it.
 
@@ -22792,7 +22932,23 @@ def _(nd):
     """
     nd.cmd_failed_units = lambda: {
         "ok": True, "cmd": "systemctl list-units --state=failed", "stdout": "",
-        "failed_units": ["edge-instance@2.service", "edge-instance@3.service"]}
+        "failed_units": ["housekeeping.timer", "logrotate.timer"]}
+
+
+@scenario("unit_failed_that_carries_traffic")
+def _(nd):
+    """One instance of a pool dead while its siblings serve.
+
+    The reading nothing else here can make. The instance holds no address and
+    accepts no connection, so every measurement on this box is of the ones that
+    are working - and comes back healthy.
+    """
+    nd.cmd_failed_units = lambda: {
+        "ok": True, "cmd": "systemctl list-units --state=failed", "stdout": "",
+        "failed_units": ["edge-instance@2.service"]}
+    nd.cmd_socket_owners = lambda: {
+        "ok": True, "cmd": "ss -tanp", "owners": [
+            {"state": "LISTEN", "local_port": "443", "process": "edge-instance"}]}
 
 @scenario("service_address_unserved")
 def _(nd):
@@ -25755,8 +25911,10 @@ class TestEveryFindingFires(unittest.TestCase):
         # unit that never started has not failed any of them - it has not
         # reached them. Lighting one would put a colour on a leg this finding
         # has no reading for, and its own sentence leaves it to the reader to
-        # decide whether a given unit matters at all.
-        "units_failed",
+        # decide whether a given unit matters at all. Its graded half is here
+        # for the same reason: knowing the unit carries traffic says which
+        # units matter, not which leg of the chain to colour.
+        "units_failed", "unit_failed_that_carries_traffic",
     }
 
     def test_findings_that_move_no_stage_are_a_decision_not_an_oversight(self):

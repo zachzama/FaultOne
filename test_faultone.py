@@ -16367,7 +16367,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1053),
+            "on disk": (len(raw), 1054),
             "compressed": (len(gzip.compress(raw, 9)), 318),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
@@ -17520,6 +17520,29 @@ class TestTheAddressesThisBoxHolds(unittest.TestCase):
         text = ("2: eth0: <BROADCAST,UP> mtu 1500\n"
                 "    inet 10.20.30.40/32 scope global eth0\n")
         self.assertEqual(nd.service_addresses(self.rows(text)), [])
+
+    def test_the_address_beside_it_has_to_be_one_that_serves(self):
+        """A /128 with only a link-local next to it is a lone host route.
+
+        Every IPv6 interface carries a link-local, so if that counted as the
+        second address then every /128 on the box would read as a service
+        address - the common case, not an edge one. The scope filter is the
+        only thing stopping it and nothing was driving that filter: deleting
+        it changed this answer and no test in the suite noticed."""
+        text = ("2: eth0: <BROADCAST,UP> mtu 1500\n"
+                "    inet6 2001:db8::5/128 scope global\n"
+                "    inet6 fe80::1/64 scope link\n")
+        self.assertEqual(nd.service_addresses(self.rows(text)), [])
+
+    def test_a_real_second_address_still_makes_it_one(self):
+        """The other half, so the test above cannot pass by the shape never
+        being recognised at all."""
+        text = ("2: eth0: <BROADCAST,UP> mtu 1500\n"
+                "    inet6 2001:db8::5/128 scope global\n"
+                "    inet6 2001:db8::9/64 scope global\n"
+                "    inet6 fe80::1/64 scope link\n")
+        self.assertEqual([a["address"] for a in nd.service_addresses(self.rows(text))],
+                         ["2001:db8::5"])
 
     def test_nothing_is_claimed_when_the_interfaces_could_not_be_read(self):
         self.assertEqual(nd.parse_own_addresses({"ok": False, "error": "x"}), [])

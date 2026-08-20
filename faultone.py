@@ -7693,6 +7693,13 @@ def service_addresses(addresses):
         for entry in entries:
             if entry.get("prefix") != host_route.get(entry.get("family")):
                 continue
+            # `o is not entry` cannot change an answer and is kept for the
+            # reader: the `continue` above guarantees this entry's own prefix
+            # *is* the host route, so it can never satisfy the "has a wider
+            # prefix" test below. Untestable by mutation for that reason, and
+            # the mutation is out of the set rather than sitting permanently
+            # red. It stays because an edit to the guard above would otherwise
+            # make this silently wrong.
             if any(o is not entry and o["family"] == entry["family"]
                    and o.get("prefix") not in (None, host_route[o["family"]])
                    for o in entries):
@@ -12205,6 +12212,10 @@ def _check_proxy_backends(raw):
     """
     found = []
     servers = ((raw or {}).get("proxy_stats") or {}).get("servers") or []
+    # Subsumed by `if not down` below for every input - no servers means none
+    # of them are down - so this cannot be caught by a mutation and is not in
+    # the set. Kept as the cheaper statement of the same thing: a read that
+    # found nothing is not a proxy with nothing wrong.
     if not servers:
         return found
     down = [s for s in servers if s["status"] in PROXY_IS_DOWN]

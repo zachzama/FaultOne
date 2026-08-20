@@ -242,6 +242,34 @@ test, and on its own it would prove nothing about the rule - both had a real
 test beside it in the caught list. Check *which* tests caught a mutation before
 counting it as covered.
 
+**Batch thirteen: six mutations, three survivors, one hole and two equivalent -
+which is the sort ratio this list keeps producing.** In
+`negatives-batch-thirteen.json`, now four after the two equivalent ones came out.
+
+The hole is in `service_addresses`. It calls a `/32` or `/128` a service
+address when another address on the same interface has a wider prefix, and the
+scope filter at the top is the only thing stopping a **link-local** counting as
+that second address. Delete the filter and every `/128` on the box reads as a
+service address, because every IPv6 interface carries a link-local - the common
+case, not an edge one - and no test in 1,809 noticed. Two tests now, the second
+being the positive case so the first cannot pass by the shape never being
+recognised.
+
+The two equivalent ones are worth knowing as a pair, because both are subsumed
+by a **guarantee** rather than by a convention, which is the `_serves_traffic`
+handling rather than the `_check_idle_endpoint` one:
+
+- `o is not entry` in the same `any()`. The `continue` above guarantees this
+  entry's prefix *is* the host route, so it can never satisfy the wider-prefix
+  test. Kept, because an edit to that guard would otherwise make it silently
+  wrong.
+- `if not servers: return` in `_check_proxy_backends`, subsumed by `if not
+  down` two lines below for every input.
+
+Both lines carry a comment saying they are untestable and why, and both
+mutations are out of the set - one that can never be caught makes the set
+permanently red and teaches nothing.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
 mutation means the test is real. Two things learned from eleven so far:

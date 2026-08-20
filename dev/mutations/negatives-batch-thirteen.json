@@ -1,0 +1,22 @@
+[
+  {
+    "label": "a lone host route is called a service address with nothing beside it",
+    "old": "            if any(o is not entry and o[\"family\"] == entry[\"family\"]\n                   and o.get(\"prefix\") not in (None, host_route[o[\"family\"]])\n                   for o in entries):",
+    "new": "            if True:"
+  },
+  {
+    "label": "an address that is not a host route is still a service address",
+    "old": "            if entry.get(\"prefix\") != host_route.get(entry.get(\"family\")):\n                continue",
+    "new": "            if False:\n                continue"
+  },
+  {
+    "label": "a link-local address is judged as though it served traffic",
+    "old": "        if entry.get(\"scope\") != \"global\":\n            continue",
+    "new": "        if False:\n            continue"
+  },
+  {
+    "label": "no proxy configured anywhere is still reported as a proxy",
+    "old": "    if not (env or on or pac or wpad):\n        return found",
+    "new": "    if False:\n        return found"
+  }
+]

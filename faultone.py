@@ -16155,6 +16155,13 @@ def _check_every_interface(findings, raw):
         return
     by_code = {}
     for f in findings:
+        # The scope test is not reachable by a mutation and stays anyway. A
+        # finding with no scope carries None or "", and the intersection with
+        # `active` below drops both for every interface list the collectors
+        # can produce - a name that is None would have raised on .startswith
+        # above, and matching "" would need a box with an unnamed interface.
+        # Deleting it is safe today and silently wrong the moment anything
+        # groups on something other than an interface name.
         if f.get("scope") and f["severity"] in ("warning", "critical"):
             by_code.setdefault(f["code"], set()).add(f["scope"])
     for code in sorted(by_code):

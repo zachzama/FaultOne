@@ -1,0 +1,32 @@
+[
+  {
+    "label": "a name under the network it names repeats the network anyway",
+    "old": "    already = bool(shown and (shown == net or str(shown).endswith(\".\" + str(net))))",
+    "new": "    already = bool(shown and shown == net)"
+  },
+  {
+    "label": "a fault on most interfaces is a fault on every interface",
+    "old": "        if len(scopes) < SHARED_FAULT_INTERFACES or scopes != active:",
+    "new": "        if len(scopes) < SHARED_FAULT_INTERFACES:"
+  },
+  {
+    "label": "loopback counts towards how many interfaces this box has",
+    "old": "              if i.get(\"packets\") and not i[\"name\"].startswith(\"lo\")}",
+    "new": "              if i.get(\"packets\")}"
+  },
+  {
+    "label": "an interface that has carried nothing is still an active one",
+    "old": "              if i.get(\"packets\") and not i[\"name\"].startswith(\"lo\")}",
+    "new": "              if not i[\"name\"].startswith(\"lo\")}"
+  },
+  {
+    "label": "the ring and the backlog are two independent complaints",
+    "old": "    \"nic_ring_overruns\": \"backlog\",",
+    "new": "    \"nic_ring_overruns\": \"ring_of_its_own\","
+  },
+  {
+    "label": "the absolute and the relative link speed corroborate each other",
+    "old": "    \"negotiated_below_capacity\": \"link_speed\",",
+    "new": "    \"negotiated_below_capacity\": \"link_speed_relative\","
+  }
+]

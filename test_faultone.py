@@ -3495,17 +3495,20 @@ class TestTheSameFaultOnEveryCable(unittest.TestCase):
     destination is that destination, loss to all of them is the local link -
     applied to the cables, where it was missing."""
 
-    def box(self, bad, total):
+    def iface(self, name, bad=False, packets=10_000_000):
+        return dict(name=name, packets=packets, errors=900 if bad else 0,
+                    drops=0, crc=900 if bad else 0, frame=0, overruns=0,
+                    collisions=0, err_ppm=90 if bad else 0, coll_ppm=0,
+                    unknown_counters=[], delta_errors=40 if bad else 0,
+                    delta_drops=0, delta_packets=2_000, delta_host_errors=0,
+                    delta_length_errors=0, sample_seconds=2, rx_mbps=1, tx_mbps=1,
+                    operstate="up", carrier_changes=0, delta_carrier_changes=0,
+                    rate_series=None, peak_mbps=None, series_seconds=None)
+
+    def box(self, bad, total, alongside=()):
         m = fresh()
-        ifaces = [dict(name=f"eth{i}", packets=10_000_000, errors=900 if i < bad else 0,
-                       drops=0, crc=900 if i < bad else 0, frame=0, overruns=0,
-                       collisions=0, err_ppm=90 if i < bad else 0, coll_ppm=0,
-                       unknown_counters=[], delta_errors=40 if i < bad else 0,
-                       delta_drops=0, delta_packets=2_000, delta_host_errors=0,
-                       delta_length_errors=0, sample_seconds=2, rx_mbps=1, tx_mbps=1,
-                       operstate="up", carrier_changes=0, delta_carrier_changes=0,
-                       rate_series=None, peak_mbps=None, series_seconds=None)
-                  for i in range(total)]
+        ifaces = [self.iface(f"eth{i}", bad=i < bad) for i in range(total)]
+        ifaces += list(alongside)
         m.cmd_link_stats = lambda *a, **k: {"ok": True, "cmd": "s", "stdout": "",
                                             "interfaces": ifaces, "sample_seconds": 2,
                                             "source": "sysfs"}
@@ -3533,6 +3536,31 @@ class TestTheSameFaultOnEveryCable(unittest.TestCase):
 
     def test_three_is_enough_when_it_is_all_of_them(self):
         self.assertEqual(self.box(3, 3)["based_on"][0], "fault_on_every_interface")
+
+    def test_loopback_is_not_one_of_the_cables(self):
+        """Every Linux box has one and it carries traffic, so this is the
+        ordinary shape rather than an edge - and the corpus had no box with a
+        loopback in its interface list, which is why nothing noticed. Counted
+        as an interface it is one that never reports a cable fault, so "all of
+        them" can never be true and the finding stops firing everywhere."""
+        v = self.box(3, 3, alongside=[self.iface("lo")])
+        self.assertEqual(v["based_on"][0], "fault_on_every_interface")
+
+    def test_a_nic_carrying_nothing_is_not_one_of_the_cables(self):
+        """A spare port, or one cabled to nothing. It cannot report a fault on
+        a cable it is not passing traffic over, so requiring it to agree would
+        mean a box with an unused port never reaches this finding - and an
+        unused port is at least as common as none."""
+        v = self.box(3, 3, alongside=[self.iface("eth9", packets=0)])
+        self.assertEqual(v["based_on"][0], "fault_on_every_interface")
+
+    def test_a_working_cable_beside_them_still_stops_it(self):
+        """The pair to the two above: what is skipped is an interface that
+        cannot answer, never one that answers and is fine. A fourth NIC
+        passing traffic without errors is the evidence that whatever the three
+        share is working, and it has to keep stopping this."""
+        v = self.box(3, 3, alongside=[self.iface("eth9")])
+        self.assertNotEqual(v["based_on"][0], "fault_on_every_interface")
 
     def test_a_single_interface_box_never_reaches_it(self):
         """One NIC is always "every interface", and saying so would turn the
@@ -16568,7 +16596,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1056),
+            "on disk": (len(raw), 1057),
             "compressed": (len(gzip.compress(raw, 9)), 319),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
         }

@@ -9,7 +9,7 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,824**, tree clean, `dev/counts.py --check` says nothing is
+Suite green at **1,827**, tree clean, `dev/counts.py --check` says nothing is
 stale, nothing pushed since v1.24.0. No release cut on top of it - the work
 since is tests and four behaviour fixes, one of which changes what a report
 says on a live box, so tag it whenever you like.
@@ -37,10 +37,10 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to eighteen ran on
-  2026-08-19: **52 mutations, 10 holes, 4 equivalent mutants**, in
-  `negatives-batch-ten` through `-eighteen.json`. Forty-eight tests moved
-  from unexamined to known-real. Still the best rate of anything open, and
+- **The empty-only sweep, continued.** Batches ten to nineteen: **58
+  mutations, 12 holes, 5 equivalent mutants**, in `negatives-batch-ten`
+  through `-nineteen.json`. Fifty-four tests moved from unexamined to
+  known-real. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
   **Two predictors now, and the second is easier to search for.** Every hole
@@ -51,9 +51,13 @@ times.
   seventeen found three of its four by reading **a comment that claims the code
   handles N shapes where the fixtures build one**, which is greppable in a way
   that "imagine an input nobody built" is not, and batch eighteen found a
-  live defect the same way within one grep. Start there. What has been swept
-  already: "both spellings", "both forms", "three notations", the ping counter
-  pair. What has not: everything at `grep -n "either\|each of\|all three" `.
+  live defect the same way within one grep. **That seam is now worked out** -
+  batch nineteen swept the rest of the enumerating prose and every claim had
+  fixtures behind it. The productive form of the rule is the sharper one
+  batch nineteen ended on: **look for the input every real box has that no
+  fixture builds.** Loopback was the example; the fixtures are tidier than
+  any machine this runs on, and each way they are tidy is a guard nothing
+  tests.
 
   **And a third ending for a survivor**, which batch fourteen added to the two
   already here. A guard subsumed *inside its own function* is untestable and
@@ -420,6 +424,52 @@ mtime under `~/Library/Caches/com.apple.python/` rather than in `__pycache__`.
 The suite then runs the old code against the new documents and fails on a
 number that is plainly correct in both files. Delete the cached `.pyc` there,
 not just `__pycache__`.
+
+**Batch nineteen: the prose selector swept to exhaustion, six mutations, two
+holes and one equivalent.** In `negatives-batch-nineteen.json`, now five.
+
+**Most of what the selector points at turns out to be covered, and that is the
+headline.** Every claim of the form "N shapes, N spellings, N notations" was
+checked: the three interface headers `ip`/`ifconfig`/`ipconfig` write, mtr's
+`-b` "name (address)" form, the ping source flag riding both command forms, the
+three ways a proxy row arrives with no status, the three netmask notations, and
+BSD's singular-and-plural counter lines. All six have fixtures. The vocabulary
+tables were where this selector paid, and they are done - so treat the grep as
+finished rather than as a seam to keep mining.
+
+**The two holes came from somewhere else, and they sharpen the input rule.**
+`_check_every_interface` builds its set of active interfaces with
+`i.get("packets") and not i["name"].startswith("lo")`, and the fixture builds
+interfaces that are all named `eth*` and all carrying traffic. So neither
+condition was tested - and both are load-bearing on **every real box**. Counted
+as an interface, loopback never reports a cable fault, so "the same fault on
+all of them" can never be true and the finding stops firing anywhere. Same for
+a spare NIC passing nothing. Delete either guard and the rule is silently dead
+in production while the whole suite stays green.
+
+That is worth stating as its own rule, because it is not quite the one above:
+**the input shape no fixture builds is sometimes the shape every real box
+has.** A corpus of tidy fixtures - three NICs, all named alike, all busy - is
+missing the loopback that is on literally every Linux box. Those gaps produce
+false negatives that appear only in the field, which is the expensive kind.
+Three tests now, the third being a clean fourth NIC that still has to stop the
+finding, so the two positives cannot pass by the skip being unconditional.
+
+**The equivalent one is the scope test in the same loop.** A finding with no
+scope carries None or "", and the intersection with `active` two lines below
+drops both for every interface list a collector can produce. It is
+distinguishable only on a box with an interface whose name is the empty string,
+which nothing parses. The line stays with a comment and the mutation is out of
+the set.
+
+**And a prediction that was wrong, which is why the rule is to read the catch.**
+`asn_with_name` matches `shown == net or shown.endswith("." + net)`, and the
+unit tests beside it only ever pass a name equal to the network - so the second
+half looked like a certain gap. It is caught, by a scenario fixture three
+thousand lines away that traces `core-rtr-07.corp.internal` inside
+`corp.internal` and asserts the estate is not printed twice. Checking which
+test caught a mutation is not only for spotting false catches; it is also how
+you find that a guard is covered from somewhere you would never have looked.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

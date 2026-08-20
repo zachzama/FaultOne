@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Zachary Zamarripa. MIT licensed.
 # SPDX-License-Identifier: MIT
-"""Five report pages for showing the tool to someone, written to your Desktop.
+"""Report pages for showing the tool to someone, written to your Desktop.
 
     python3 dev/demos.py                 # write them to ~/Desktop
     python3 dev/demos.py /tmp/demos      # or somewhere else
 
-Why these five, in this order. The first two are the pair worth leading with:
-the same box, the same kind of symptom, opposite directions, and the verdict
-names a different owner for each. That is the whole product in two clicks. The
-next two are faults that belong to the box rather than to either path, and the
-last is a service address nothing is accepting on.
+Nine of them, and the order is the argument rather than a list. **Show the
+first five**, which are the set this file was built around and still the ones
+to lead with:
+
+  1 and 2 are the pair. The same box, the same kind of symptom, opposite
+  directions, and the verdict names a different owner for each. That is the
+  whole product in two clicks and nothing else here beats it.
+  3 and 4 are faults that belong to the box rather than to either path.
+  5 is a service address nothing is accepting on - the box that passes every
+  check in this tool and serves nobody.
+
+The last four are for a reader who has already understood the first five: two
+transport faults with no loss to point at, a queue that is somewhere other than
+here, and the only page that shows a box carrying its users over datagrams.
 
 **Every page comes from the test corpus, never from a live run.** A report is a
 map of the network it was taken on, so a demo taken from a real machine would

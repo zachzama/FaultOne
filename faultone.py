@@ -13442,12 +13442,18 @@ def _check_source_reachability(raw, findings):
     times.
     """
     rows = raw.get("source_matrix") or []
-    if len(rows) < 2:
-        return
     # An address the kernel refused to bind is not a path problem and must not
     # be counted as one. On a box running several instances it is the instance
     # not being here at all - a different fault, with a different owner, and
     # `source_address_not_held` is the finding that says so.
+    #
+    # Read before the comparison below rather than after it, because it is not
+    # a comparison: one address that will not bind is a fact about this box and
+    # needs nothing to be held against. Behind the two-row gate it was silent on
+    # a box with a single global address, and `source_address_not_held` did not
+    # cover that either - it answers `--source <address>`, not `--source all` -
+    # so the one case where the box has one address and cannot use it was
+    # reported by nothing. Found by a surviving mutation on the gate.
     absent = [r for r in rows if r.get("held") is False]
     rows = [r for r in rows if r.get("held") is not False]
     if absent:

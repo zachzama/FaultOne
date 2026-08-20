@@ -1,0 +1,27 @@
+[
+  {
+    "label": "every address failing is reported per address instead of once",
+    "old": "    if not reached or not failed:\n        return",
+    "new": "    if not failed:\n        return"
+  },
+  {
+    "label": "a router answering proxy ARP is reported as an address conflict",
+    "old": "    return [{\"ip\": ip, \"macs\": sorted(macs)} for ip, macs in by_ip.items() if len(macs) > 1]",
+    "new": "    return [{\"ip\": ip, \"macs\": sorted(macs)} for ip, macs in by_ip.items() if len(macs) > 0]"
+  },
+  {
+    "label": "a one-hop difference between two counting methods is a route change",
+    "old": "        differs = out and back and abs(out - back) >= ASYMMETRIC_HOP_GAP",
+    "new": "        differs = out and back and abs(out - back) >= 1"
+  },
+  {
+    "label": "a bind failure is read as a path failure instead of a fact about the box",
+    "old": "    absent = [r for r in rows if r.get(\"held\") is False]\n    rows = [r for r in rows if r.get(\"held\") is not False]",
+    "new": "    absent = [r for r in rows if r.get(\"held\") is False]"
+  },
+  {
+    "label": "an address the kernel will not bind is reported as reaching nothing",
+    "old": "    def got_out(r):\n        return bool(r.get(\"reached\")) or r.get(\"tcp\") == \"open\"",
+    "new": "    def got_out(r):\n        return bool(r.get(\"reached\"))"
+  }
+]

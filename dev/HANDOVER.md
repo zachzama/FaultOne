@@ -196,6 +196,33 @@ So the line stays, with a comment saying it is untestable and why, and the
 mutation is out of the set - a mutation that can never be caught makes the set
 permanently red and teaches nothing.
 
+**Batch ten: five mutations across three rules, one survivor, and the survivor
+was a gap.** In `dev/mutations/negatives-batch-ten.json`.
+
+`_check_source_reachability` opened with `if len(rows) < 2: return` and the
+bind-failure check sat *below* it. Widening the gate to `< 1` survived, which
+said nothing tested the boundary - and reading why found the reason. A bind
+failure is not a comparison: one address the kernel will not send from is a
+fact about this box and needs no second address to be held against. Behind the
+gate it was silent on a box with a single global address, and
+`source_address_not_held` does not cover that either, because it answers
+`--source <address>` and not `--source all`. So a box with one address it
+cannot use was reported by nothing.
+
+The bind check moved above the gate, and the gate then had nothing left to do -
+one address is either reached or failed, and the check below returns on an
+empty half either way, for any input. That is the `_check_idle_endpoint` case
+rather than the `_serves_traffic` one: subsumed for every input rather than
+while a convention holds, so it came out. Three tests cover what it used to
+hold, pinned on the behaviour rather than on the line.
+
+**Two notes on running these.** The mutation that found it had to be deleted
+afterwards - its anchor no longer exists - and replaced with two on what the
+move actually decided. And the control earned its keep: the first re-run
+refused to start because three new tests had made the pinned count stale, which
+would otherwise have read as five rules being well covered when nothing had
+been proved.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
 mutation means the test is real. Two things learned from eleven so far:

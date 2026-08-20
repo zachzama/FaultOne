@@ -13108,6 +13108,40 @@ class TestEveryAddressAsksForItself(unittest.TestCase):
     def test_a_single_row_is_not_a_comparison(self):
         self.assertEqual(self.fired([{"address": "a", "reached": False}]), [])
 
+    def test_one_address_the_kernel_will_not_bind_is_still_reported(self):
+        """A bind failure is not a comparison and does not need a second
+        address to be held against - it is a fact about this box.
+
+        It used to sit behind the two-row gate and say nothing here, and
+        `source_address_not_held` did not cover the case either: that one
+        answers `--source <address>`, not `--source all`. So a box with a
+        single global address it cannot send from was reported by nothing.
+        Found by a mutation on the gate that no test caught."""
+        self.assertEqual(
+            self.fired([{"address": "10.0.0.200", "reached": False, "held": False}]),
+            ["source_address_absent"])
+
+    def test_the_comparison_still_needs_two_to_compare(self):
+        """The gate the case above came out from behind. Removing it changed
+        nothing here, because one address is either reached or failed and the
+        check below returns on an empty half either way - so the boundary is
+        pinned on the behaviour rather than on the line that used to hold it."""
+        for rows in ([{"address": "a", "reached": True}],
+                     [{"address": "a", "reached": False}],
+                     [{"address": "a", "tcp": "open"}]):
+            with self.subTest(rows=rows):
+                self.assertEqual(self.fired(rows), [])
+
+    def test_an_absent_address_beside_a_working_one_reports_both_facts(self):
+        """The absent address must not be counted as a path failure - it is
+        filtered out of the comparison, not fed into it - so a box with one
+        address that will not bind and one that reaches says exactly that and
+        does not also claim a reachability difference."""
+        self.assertEqual(
+            self.fired([{"address": "10.0.0.200", "reached": False, "held": False},
+                        {"address": "10.0.0.5", "reached": True}]),
+            ["source_address_absent"])
+
     def test_the_message_names_both_sides_of_the_difference(self):
         out = []
         nd._check_source_reachability(
@@ -16333,7 +16367,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1052),
+            "on disk": (len(raw), 1053),
             "compressed": (len(gzip.compress(raw, 9)), 318),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }

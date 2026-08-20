@@ -1,0 +1,32 @@
+[
+  {
+    "label": "a multiport rule names only the first port in its list",
+    "old": "    for part in found.group(1).replace(\" \", \"\").split(\",\"):",
+    "new": "    for part in [found.group(1).replace(\" \", \"\").split(\",\")[0]]:"
+  },
+  {
+    "label": "a range is read as its two ends rather than as a bound",
+    "old": "        low, high = int(ends[0]), int(ends[-1])\n        out |= {p for p in serving if p.isdigit() and low <= int(p) <= high}",
+    "new": "        out |= {p for p in serving if p in ends}"
+  },
+  {
+    "label": "a drop on a port this box does not serve is reported anyway",
+    "old": "        out |= {p for p in serving if p.isdigit() and low <= int(p) <= high}",
+    "new": "        out |= set(serving)"
+  },
+  {
+    "label": "an unanswered hop is a host both sides agree on",
+    "old": "            if host and host != \"*\" and hop.get(\"state\") in (\"warn\", \"crit\"):",
+    "new": "            if host and hop.get(\"state\") in (\"warn\", \"crit\"):"
+  },
+  {
+    "label": "the shared hop to name is picked on delay alone, ignoring which is critical",
+    "old": "        return (sum(1 for h in seen.values() if h.get(\"state\") == \"crit\"),\n                max((h.get(\"delta_ms\") or 0) for h in seen.values()))",
+    "new": "        return (0,\n                max((h.get(\"delta_ms\") or 0) for h in seen.values()))"
+  },
+  {
+    "label": "the hop is described from the side it is healthier on",
+    "old": "    worst = max(seen.values(), key=lambda h: (h.get(\"state\") == \"crit\",\n                                              h.get(\"delta_ms\") or 0))",
+    "new": "    worst = min(seen.values(), key=lambda h: (h.get(\"state\") == \"crit\",\n                                              h.get(\"delta_ms\") or 0))"
+  }
+]

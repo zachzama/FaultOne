@@ -3083,16 +3083,31 @@ def rules_that_counted(before, after):
     return sorted(moved, key=lambda r: -r["gained"])
 
 
-def _ports_named_by(rule):
-    """The destination ports a rule names, if it names any."""
+def _ports_named_by(rule, serving):
+    """Which of the ports this box serves a rule names, if it names any.
+
+    Asked this way round rather than "which ports does the rule name", because
+    a rule can name a range. Reading the ends of `--dport 1000:2000` into a set
+    and intersecting it with what this box listens on matches only a service on
+    1000 or on 2000, and says nothing about the thousand ports between them - a
+    box serving 1500 behind that rule was reported by nothing, which is the
+    silence this check exists to break. A range is a bound to test against, and
+    the ports to test are the handful this box actually serves.
+    """
     found = _RULE_DPORT.search(rule.get("rule") or "")
     if not found:
         return set()
     out = set()
     for part in found.group(1).replace(" ", "").split(","):
-        for piece in part.replace("-", ":").split(":"):
-            if piece.isdigit():
-                out.add(piece)
+        # A single port is a range whose ends are the same. Anything that is
+        # not a number is dropped rather than guessed at: the pattern reaches
+        # over the separator into the flag after it, so the last piece of a
+        # rule is routinely empty.
+        ends = [p for p in part.replace("-", ":").split(":") if p.isdigit()]
+        if not ends:
+            continue
+        low, high = int(ends[0]), int(ends[-1])
+        out |= {p for p in serving if p.isdigit() and low <= int(p) <= high}
     return out
 
 
@@ -3122,7 +3137,7 @@ def inbound_drops_on_served_ports(raw):
     for rule in window.get("moved") or []:
         if rule.get("faces") != "in":
             continue
-        hit = _ports_named_by(rule) & serving
+        hit = _ports_named_by(rule, serving)
         if hit:
             out.append(dict(rule, ports=sorted(hit)))
     return out

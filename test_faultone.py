@@ -8272,6 +8272,52 @@ class TestTrafficThisBoxThrowsAwayItself(unittest.TestCase):
                                       {"a": 31, "b": 9, "c": 1, "d": 2},
                                       listening=("8080",)), [])
 
+    # A rule can name more than one port, and iptables spells that two ways.
+    # Every fixture above names exactly one, so what the parser does with a
+    # list or a range was decided once and never checked - and one of the two
+    # answers was wrong.
+    MULTI = ("*filter\n:INPUT ACCEPT [0:0]\n"
+             "[{a}:700] -A INPUT -p tcp -m multiport --dports 80,8443 -j DROP\n"
+             "[{b}:700] -A INPUT -p tcp --dport 1000:2000 -j DROP\nCOMMIT\n")
+
+    def multi(self, before, after, listening):
+        window = nd.firewall_window(
+            dict(nd.parse_iptables_save(self.MULTI.format(**before)), ok=True),
+            dict(nd.parse_iptables_save(self.MULTI.format(**after)), ok=True))
+        return nd.inbound_drops_on_served_ports({
+            "firewall": window, "sockets": {"listen_ports": list(listening)}})
+
+    def test_a_rule_naming_a_list_of_ports_names_the_last_of_them_too(self):
+        got = self.multi({"a": 1, "b": 1}, {"a": 9, "b": 1}, ("8443",))
+        self.assertEqual([f["ports"] for f in got], [["8443"]])
+
+    def test_a_port_in_no_list_the_rule_names_is_not_its_problem(self):
+        """The positive case above cannot pass by the list being read, only by
+        something in it being matched, so this is what says the reading stops
+        where the rule stops."""
+        self.assertEqual(self.multi({"a": 1, "b": 1}, {"a": 9, "b": 1},
+                                    ("9000",)), [])
+
+    def test_a_served_port_inside_a_range_is_a_port_the_rule_names(self):
+        """The end of a range is not the interesting part of it. Read as a
+        pair of ports rather than as a bound, `--dport 1000:2000` matched a
+        service on 1000 or on 2000 and stayed silent about the thousand
+        between them - so the rule dropping this box's own traffic was
+        reported by nothing on every box whose service is not on an end."""
+        got = self.multi({"a": 1, "b": 1}, {"a": 1, "b": 40}, ("1500",))
+        self.assertEqual([f["ports"] for f in got], [["1500"]])
+        # And the sentence names the reader's port rather than the rule's
+        # bounds, which is the one they can look up.
+        self.assertIn("port 1500", nd._check_inbound_filtering({
+            "firewall": nd.firewall_window(
+                dict(nd.parse_iptables_save(self.MULTI.format(a=1, b=1)), ok=True),
+                dict(nd.parse_iptables_save(self.MULTI.format(a=1, b=40)), ok=True)),
+            "sockets": {"listen_ports": ["1500"]}})[0]["message"])
+
+    def test_a_served_port_past_the_end_of_a_range_is_not_named(self):
+        self.assertEqual(self.multi({"a": 1, "b": 1}, {"a": 1, "b": 40},
+                                    ("2001",)), [])
+
     def test_a_datagram_listener_counts_as_serving_that_port(self):
         window = nd.firewall_window(
             dict(nd.parse_iptables_save(self.IPT.format(a=4, b=9, c=1, d=2)), ok=True),
@@ -10027,6 +10073,34 @@ class TestOneRouterBothSidesDependOn(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("203.0.113.9", found[0]["message"])
         self.assertEqual(found[0]["severity"], "critical")
+
+    def test_the_worse_of_two_shared_hops_is_the_one_named_even_if_it_is_faster(self):
+        """Which of two shared hops to name is decided on state first and
+        delay second, and every fixture here agreed on both at once - so the
+        state half was carried by the delay half and nothing said which was
+        deciding. A router that has stopped answering properly is worse news
+        than one that is slow, however few milliseconds it is adding."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(2, "203.0.113.1", "warn", 90), self._hop(3, "203.0.113.9", "crit", 10)],
+            [self._hop(2, "203.0.113.1", "warn", 90), self._hop(3, "203.0.113.9", "crit", 10)]),
+            found)
+        self.assertEqual(len(found), 1)
+        self.assertIn("203.0.113.9", found[0]["message"])
+        self.assertEqual(found[0]["severity"], "critical")
+
+    def test_a_hop_worse_on_one_side_is_described_from_that_side(self):
+        """The hop is one router but it is two measurements, and every fixture
+        made them identical. They are not on a real box: a router degraded
+        toward the clients and merely slow toward the backends is one fault,
+        and reporting it from the healthier side understates it - a warning
+        about 10ms on a leg that is dropping traffic in the other direction."""
+        found = []
+        nd._check_shared_hop(self._legs(
+            [self._hop(2, "203.0.113.1", "crit", 90)],
+            [self._hop(2, "203.0.113.1", "warn", 10)]), found)
+        self.assertEqual([f["severity"] for f in found], ["critical"])
+        self.assertIn("adding 90ms", found[0]["message"])
 
     def test_it_fires_in_its_scenario_and_nowhere_else(self):
         """A finding that claims one owner for both sides has to be sure. It
@@ -16403,9 +16477,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1054),
+            "on disk": (len(raw), 1055),
             "compressed": (len(gzip.compress(raw, 9)), 319),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

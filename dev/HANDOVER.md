@@ -7,14 +7,13 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Start here (as of v1.24.0 plus the laptop's 2026-08-19 batches)
+## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,814**, tree clean, `dev/counts.py --check` says nothing is
-stale, everything pushed. No release cut on top of v1.24.0 - the work below is
-tests and two behaviour fixes, so tag it whenever you like.
+Suite green at **1,820**, tree clean, `dev/counts.py --check` says nothing is
+stale, nothing pushed since v1.24.0. No release cut on top of it - the work
+since is tests and three behaviour fixes, so tag it whenever you like.
 
-Everything is pushed, CI is green on all four jobs, and the release is cut. The
-work in flight is one long thread: **asking whether the suite's tests do
+The work in flight is one long thread: **asking whether the suite's tests do
 anything**, and it has produced five patterns that make the rest of it fast.
 Read them before picking any of it up - every real gap so far has fitted one.
 
@@ -30,24 +29,27 @@ Read them before picking any of it up - every real gap so far has fitted one.
    is a guard whose *earlier* conditions are well covered.
 
 And one rule that has mattered more than any of them: **a survivor is not a
-defect.** Across this work, twelve were real, thirteen were equivalent mutants,
-one was dead code, and nine had a single benign cause. Sort before acting; the
-obvious response to a batch of survivors has been wrong three times.
+defect.** Across this work, sixteen were real, thirteen were equivalent
+mutants, one was dead code, and nine had a single benign cause. Sort before
+acting; the obvious response to a batch of survivors has been wrong three
+times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to sixteen ran on the
-  laptop on 2026-08-19: **39 mutations, 3 holes, 4 equivalent mutants**, in
-  `negatives-batch-ten` through `-sixteen.json`. Thirty-two tests moved from
-  unexamined to known-real. Still the best rate of anything open, and
-  `python3 dev/vacuous.py` still lists what is left.
+- **The empty-only sweep, continued.** Batches ten to seventeen ran on
+  2026-08-19: **45 mutations, 7 holes, 4 equivalent mutants**, in
+  `negatives-batch-ten` through `-seventeen.json`. Thirty-eight tests moved
+  from unexamined to known-real. Still the best rate of anything open, and
+  `python3 dev/vacuous.py` lists the 150 left.
 
-  **The sharpest predictor found so far, and where to aim next.** All three
-  holes were a filter the corpus never exercised *because no scenario produces
-  the input combination* - a one-row source matrix, a `/128` beside only a
-  link-local, two findings from one family. That beats "empty-only" as a
-  selector: look for a guard whose input shape no fixture builds, rather than
-  for a test that asserts on nothing.
+  **Two predictors now, and the second is easier to search for.** Every hole
+  has been a guard the corpus never exercised *because no scenario produces the
+  input combination* - a one-row source matrix, a `/128` beside only a
+  link-local, two findings from one family, a port range, a router worse on one
+  side than the other. That beats "empty-only" as a selector. But batch
+  seventeen found three of its four by reading **a comment that claims the code
+  handles N shapes where the fixtures build one**, which is greppable in a way
+  that "imagine an input nobody built" is not. Start there.
 
   **And a third ending for a survivor**, which batch fourteen added to the two
   already here. A guard subsumed *inside its own function* is untestable and
@@ -335,6 +337,43 @@ is always in its own family, so the family test already excludes the cause. The
 line stays - it says the obvious thing directly, and the family test is a
 judgement that could be narrowed later - with a comment, and the mutation is out
 of the set.
+
+**Batch seventeen: six mutations, four survivors, four holes and one of them a
+live defect.** In `negatives-batch-seventeen.json`. Two on the port a firewall
+rule names, two on which shared router gets described, and two controls that
+were caught first time and are kept for the same reason a control is.
+
+The defect is in `_ports_named_by`. A rule can name a range, and the ends were
+being read into a set and intersected with what this box listens on - which
+matches a service on 1000 or on 2000 and says nothing about the thousand ports
+between them. A box serving 1500 behind `--dport 1000:2000 -j DROP` was
+reported by nothing, and that is the exact silence the check exists to break.
+It now asks the question the other way round: a range is a bound to test
+against, and the ports to test are the handful this box actually serves, so the
+sentence also names the reader's own port rather than the rule's bounds.
+
+The other three were correct code that nothing reached. The multiport list
+already worked; the two in `_check_shared_hop` are a shared hop picked on state
+before delay, and a hop described from the side it is worse on. Both of those
+are single expressions whose two halves moved together in every fixture: every
+trace pair here is identical on both sides, so the side that decides the
+severity was never the side that had a different answer.
+
+**A second selector, and it found three of the four.** The empty-only list did
+not lead here. `_RULE_DPORT` carries a comment saying it reads "both the single
+and the multiport forms", and the entire suite builds one dport shape,
+`--dport 443` - so the comment claims two forms and the corpus builds one. That
+generalises: **a comment that says the code handles N shapes, where the fixtures
+build one**, is as sharp as the input-combination rule and much easier to grep
+for. The same reading found the two in `_check_shared_hop`, where the docstring
+describes one router seen from two directions and every fixture makes the two
+views identical.
+
+Worth knowing about the regex while anyone is in there: `[\d,\s:-]+` reaches
+over the separator into the flag after the port, so `--dport 443 -j DROP`
+captures `443 -` and the last piece of nearly every rule is empty. The
+`isdigit` filter is what drops it, and it looks like defensive noise until you
+know that.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

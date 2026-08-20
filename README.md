@@ -264,33 +264,13 @@ No model is involved. `VERDICT_RULES` is an ordered list you can read, and
 every verdict cites the findings it came from. [The rules, and the numbers
 behind them.](REFERENCE.md#why-the-ranking-is-the-point)
 
-### Where the ordering comes from
-
-An ordered list one person wrote is worth exactly as much as that person's
-judgement, so it is checked against vocabularies other people maintain - not
-their feature lists, but their **closed sets of outcomes**, where every entry
-has to be accounted for:
-
-| | what it settles |
-|---|---|
-| **ITU-T X.733** | event types and probable causes - every finding carries both |
-| **Batfish** flow dispositions | every way a packet can end. Two had no finding here and now do |
-| **HAProxy** check statuses | what a health check can say before it has run |
-| **RFC 4898** tcpEStats | what limits a TCP connection, and what to call it |
-| **RFC 2680 / 3393 / 5481** | how loss and delay variation are defined, and how they must be reported |
-| **`SKB_DROP_REASON_*`** | the kernel's own account of why it dropped a packet - 131 entries |
-| **IANA / RFC 792 / 5398 / 6996** | DNS rcodes, ICMP codes, AS number ranges |
-
-Twice the ordering turned out to have arrived at the standard on its own. The
-three-way split behind "what is holding this connection back" is RFC 4898's
-`SndLimTime{Cwnd,Rwin,Snd}`. The way latency is separated into a floor and a
-queue is PDV, which RFC 5481 describes almost word for word. Neither was copied
-and both now have a test pinning them to the standard they match.
-
-Where they disagreed, the tool changed. A loss figure now says it was measured
-with ICMP echo and names the timeout, because RFC 2680 requires both and a
-reader taking "25%" as a quarter of their traffic is making the exact inference
-that RFC exists to warn against.
+**Where does the ordering come from?** It is validated against closed
+vocabularies other people maintain - ITU-T X.733 for event types and probable
+causes, Batfish's flow dispositions for every way a packet can end, HAProxy's
+check statuses, RFC 4898 for what limits a TCP connection, RFC 2680/3393/5481
+for how loss and delay variation are defined, the kernel's `SKB_DROP_REASON_*`
+for why it drops a packet, and the IANA registries - and twice it turned out to
+have reached the standard on its own.
 
 ## The evidence it ranks
 

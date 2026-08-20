@@ -4213,6 +4213,49 @@ def _read_text(path):
 
 
 @collector
+def _read_rp_filter(base="/proc/sys/net/ipv4/conf"):
+    """Reverse path filtering, per interface, from the kernel's own settings.
+
+    Found by auditing this tool's findings against the kernel's
+    `SKB_DROP_REASON_*` enum - the closed list of every reason it discards a
+    packet. `IP_RPFILTER` was on it and had nothing here, and it is not an
+    obscure one: it is the mechanism that turns asymmetric routing from an
+    oddity into silent, unattributable loss.
+
+    The rule is RFC 3704. Strict mode (1) drops any packet arriving on an
+    interface the kernel would not have used to reply to its source. On a box
+    with one way in and one way out that is free security. On a box where the
+    return path differs from the forward path - two uplinks, a VPN beside a
+    default route, policy routing that only covers one direction - it discards
+    real traffic, on this box, with no ICMP and no log, and every check
+    downstream measures a path the packets never finished crossing.
+
+    Three settings and the effective one is the *maximum* of `all` and the
+    interface's own, which is the part that surprises people: setting an
+    interface to 0 does nothing while `all` is 1.
+    """
+    modes = {}
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return modes
+    for name in names:
+        text = _read_text(os.path.join(base, name, "rp_filter"))
+        if text is None:
+            continue
+        try:
+            modes[name] = int(text.strip())
+        except ValueError:
+            continue
+    everywhere = modes.get("all")
+    if everywhere is not None:
+        for name in modes:
+            if name != "all":
+                modes[name] = max(modes[name], everywhere)
+    return modes
+
+
+@collector
 def _read_conntrack():
     """Connection-tracking table pressure, and whether it has actually refused.
 
@@ -8073,6 +8116,13 @@ VERDICT_RULES = [
      "path. A queue is meant to hold a burst; one this deep and still standing "
      "means more is being sent than the interface is getting away. Look at the "
      "line rate, the shaper on it, and what is filling it."),
+    ("return_path_filtered", "this box, and nobody else",
+     "Traffic is not returning by the route it left, and this box drops that",
+     "Strict reverse path filtering discards any packet arriving on an "
+     "interface the kernel would not have replied out of - no ICMP, no log. "
+     "Either make the routing symmetric or set rp_filter to 2, the loose mode "
+     "RFC 3704 describes for this. The effective value is the larger of `all` "
+     "and the interface's own."),
     ("path_asymmetric", "whoever routes the way back, which is not always who routes the way out",
      "Traffic is not returning by the route it left by",
      "Both directions can look healthy measured on their own while connections "
@@ -9005,6 +9055,7 @@ FINDING_SIDE.update({
     # Named per side by its scope; the finding itself is about a route
     # that leaves one way and comes back another, which faces both.
     "path_asymmetric": "local",
+    "return_path_filtered": "local",
     "forwards_inside_tunnels": "upstream",
     # The collector is off this box, whichever direction the users are.
     "log_egress_stalled": "upstream",
@@ -9146,6 +9197,7 @@ STAGE_RULES = [
      {"service_address_unserved", "service_address_idle", "service_endpoint_idle",
       "tcp_flow_loss_clients", "tcp_return_stalled_clients",
       "path_jitter_clients", "tail_of_clients_slow", "queuing_delay_clients",
+      "return_path_filtered",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure",
       # The rest of the accept path. Overflowing the accept queue is the
@@ -9327,6 +9379,7 @@ RAW_STAGE = {
     # Not a stage of the chain, and deliberately so - see _check_clock.
     "clock": None,
     # Provenance for everything else, and a few bytes each.
+    "rp_filter": "internet",
     "target": None, "target_kind": None, "target_chosen_by": None,
 }
 
@@ -9510,6 +9563,62 @@ HOP_LOSS_WARN_PCT = 5
 #: an off-by-one falls out of that without anything being wrong. Two is a
 #: different route.
 ASYMMETRIC_HOP_GAP = 2
+
+#: The strict setting of net.ipv4.conf.*.rp_filter (RFC 3704). 0 is off and 2
+#: is loose, which accepts a packet if its source is reachable by *any* route -
+#: the mode written for exactly the asymmetric case. Only 1 discards traffic
+#: this tool would otherwise call healthy.
+RP_FILTER_STRICT = 1
+
+
+def _check_return_path_filtered(raw, findings):
+    """Asymmetric routing on a box configured to drop it.
+
+    `_check_asymmetric_path` says traffic is not coming back the way it left,
+    and names a stateful device on the return path as what usually turns that
+    into dead connections. This is the case where the device is **this box**.
+
+    Strict reverse path filtering (RFC 3704) drops any packet arriving on an
+    interface the kernel would not have replied out of. With a symmetric route
+    that is free anti-spoofing and costs nothing. With an asymmetric one it
+    discards real traffic here, with no ICMP and no log line, and every check
+    below measures a path the packets never finished crossing.
+
+    Only said when both are true. Strict filtering on its own is a correct and
+    common setting - reporting it would fire on most hardened boxes - and
+    asymmetry on its own is already reported by the finding above with the
+    right owner. Together they are one fault with a local cause, which is the
+    only combination worth a sentence somebody has to act on.
+    """
+    found = []
+    asymmetric = [f for f in findings if f.get("code") == "path_asymmetric"]
+    if not asymmetric:
+        return found
+    modes = (raw or {}).get("rp_filter") or {}
+    strict = sorted(name for name, mode in modes.items()
+                    if name not in ("all", "default") and mode == RP_FILTER_STRICT)
+    if not strict:
+        return found
+    found.append({
+        "severity": "critical",
+        "layer": 3,
+        "code": "return_path_filtered",
+        "message": (
+            f"Traffic to at least one side is not returning by the route it left "
+            f"by, and this box is configured to drop exactly that: reverse path "
+            f"filtering is strict on {', '.join(strict)}. The kernel discards any "
+            f"packet arriving on an interface it would not have replied out of, "
+            f"with no ICMP back to the sender and nothing in any log - so the "
+            f"connections die here while both directions measure healthy on their "
+            f"own, and every check below this line is describing a path the "
+            f"packets never finished crossing. This is on this box and nobody "
+            f"else's to fix: either make the routing symmetric, or set "
+            f"net.ipv4.conf.{strict[0]}.rp_filter to 2, which is the loose mode "
+            f"RFC 3704 describes for exactly this. Note that the effective value "
+            f"is the larger of `all` and the interface's own, so setting the "
+            f"interface alone does nothing while `all` is 1."),
+    })
+    return found
 
 
 def _check_asymmetric_path(legs):
@@ -10145,6 +10254,7 @@ FINDING_CLASS = {
 "target_alone_unreachable": ("communicationsAlarm", "remoteNodeTransmissionError"),
 "answered_closer_than_the_path": ("communicationsAlarm", "invalidMessageReceived"),
 "path_asymmetric": ("communicationsAlarm", "routingFailure"),
+"return_path_filtered": ("communicationsAlarm", "configurationOrCustomisationError"),
 "shared_hop_degraded": ("communicationsAlarm", "transmissionError"),
 "duplicate_ip": ("communicationsAlarm", "equipmentIdentifierDuplication"),
 "virtual_router_conflict": ("communicationsAlarm", "equipmentIdentifierDuplication"),
@@ -18193,6 +18303,10 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     trace_each_side(_legs, findings, quick)
     count_the_hops_in(_legs, quick)
     findings += _check_asymmetric_path(_legs)
+    # After it, because it only speaks when that one has: the pair is the
+    # finding, and strict filtering on its own is a correct setting.
+    raw["rp_filter"] = _read_rp_filter()
+    findings += _check_return_path_filtered(raw, findings)
     # Last, because it only speaks about findings that already exist.
     _check_cpu_load(findings)
     _check_shared_hop(_legs, findings)

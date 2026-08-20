@@ -16887,9 +16887,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1065),
-            "compressed": (len(gzip.compress(raw, 9)), 322),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 220),
+            "on disk": (len(raw), 1071),
+            "compressed": (len(gzip.compress(raw, 9)), 324),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -20997,6 +20997,92 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         self.assertEqual(rep["worst_queue_jump"]["asn"], "AS15169")
 
 
+class TestTheBoxThatDropsItsOwnReturnTraffic(unittest.TestCase):
+    """Asymmetric routing on a box configured to discard it.
+
+    Found by auditing this tool's findings against the kernel's
+    `SKB_DROP_REASON_*` enum - the closed list of every reason it drops a
+    packet. `IP_RPFILTER` was on that list with nothing here, which is the
+    point of borrowing somebody else's vocabulary: it is a list you have to
+    account for rather than one you wrote.
+
+    `path_asymmetric` already named a stateful device on the return path as
+    what usually turns asymmetry into dead connections. This is the case where
+    that device is this box, and the owner moves accordingly.
+    """
+
+    def run_with(self, modes, asymmetric=True):
+        mod = fresh()
+        setup, kwargs = S["path_asymmetric" if asymmetric else "all_clear"]
+        setup(mod)
+        mod._read_rp_filter = lambda base=None, m=modes: dict(m)
+        return mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+
+    def codes(self, *a, **kw):
+        return [f["code"] for f in self.run_with(*a, **kw)["findings"]]
+
+    def test_strict_filtering_beside_asymmetry_is_named(self):
+        self.assertIn("return_path_filtered",
+                      self.codes({"all": 1, "eth0": 1}))
+
+    def test_it_owns_the_verdict_because_the_cause_is_here(self):
+        """The whole value of the finding. Asymmetry alone points at whoever
+        routes the way back; this points at the box the report is running on,
+        and those are different tickets."""
+        rep = self.run_with({"all": 1, "eth0": 1})
+        self.assertEqual(rep["verdict"]["based_on"][0], "return_path_filtered")
+        self.assertIn("this box", rep["verdict"]["owner"])
+
+    def test_strict_filtering_on_its_own_says_nothing(self):
+        """It is a correct and common setting. Reporting it without the
+        asymmetry would fire on most hardened boxes there are."""
+        self.assertNotIn("return_path_filtered",
+                         self.codes({"all": 1, "eth0": 1}, asymmetric=False))
+
+    def test_asymmetry_on_its_own_is_still_somebody_else_s(self):
+        """And the finding below it keeps its owner."""
+        codes = self.codes({"all": 0, "eth0": 0})
+        self.assertIn("path_asymmetric", codes)
+        self.assertNotIn("return_path_filtered", codes)
+
+    def test_loose_mode_is_not_strict_mode(self):
+        """2 accepts a packet whose source is reachable by any route - the mode
+        RFC 3704 describes for exactly this case, and the fix the message
+        recommends. Reading it as strict would tell somebody to make a change
+        they have already made."""
+        self.assertNotIn("return_path_filtered",
+                         self.codes({"all": 2, "eth0": 2}))
+
+    def test_the_effective_value_is_the_larger_of_all_and_the_interface(self):
+        """The part that surprises people: setting an interface to 0 does
+        nothing while `all` is 1, so a box that looks configured for
+        asymmetric routing still drops the traffic."""
+        import tempfile
+        # A real directory, not a patched `os`. The first version of this set
+        # `mod.os.listdir`, and `mod.os` *is* the shared os module - so it
+        # leaked into every test that ran after it and errored one of them.
+        # The same trap `fresh()` documents for `time`.
+        with tempfile.TemporaryDirectory() as base:
+            for name, mode in (("all", "1"), ("eth0", "0")):
+                os.makedirs(os.path.join(base, name))
+                with open(os.path.join(base, name, "rp_filter"), "w",
+                          encoding="utf-8") as fh:
+                    fh.write(mode + "\n")
+            modes = nd._read_rp_filter(base)
+        self.assertEqual(modes["eth0"], 1, "the interface's own 0 won over all=1")
+        self.assertEqual(modes["all"], 1)
+
+    def test_it_names_the_interface_and_the_setting_to_change(self):
+        """A fault on this box is only worth more than one somewhere else if
+        the report says which knob."""
+        said = next(f["message"] for f in
+                    self.run_with({"all": 1, "eth0": 1})["findings"]
+                    if f["code"] == "return_path_filtered")
+        self.assertIn("strict on eth0", said)
+        self.assertIn("net.ipv4.conf.eth0.rp_filter to 2", said)
+        self.assertIn("larger of `all`", said)
+
+
 class TestTheTailAMedianHides(unittest.TestCase):
     """Some of a side's connections much slower than the rest of it.
 
@@ -22095,6 +22181,7 @@ def fresh():
                   "_read_orphans", "_read_listen_drops", "_read_neigh_table",
                   "_read_kernel_drops", "_read_link_drivers_linux"):
         setattr(mod, _name, lambda *a, **k: {})
+    mod._read_rp_filter = lambda *a, **k: {}
     mod._read_sysfs_names = lambda *a, **k: []
     mod._read_uptime_seconds = lambda *a, **k: None
     mod._read_text = lambda *a, **k: None
@@ -23682,6 +23769,21 @@ def _(nd):
     trace(nd, " 1  10.0.0.1 (10.0.0.1)  1.0 ms  1.1 ms  1.2 ms\n"
               " 2  203.0.113.1 (203.0.113.1)  40.0 ms  * *\n"
               " 3  203.0.113.9 (203.0.113.9)  44.0 ms  44.2 ms  44.4 ms\n")
+
+@scenario("return_path_filtered")
+def _(nd):
+    """The same asymmetry, on a box configured to discard it.
+
+    Found by auditing this tool against the kernel's SKB_DROP_REASON_* enum:
+    IP_RPFILTER was on that list with nothing here, and it is the mechanism
+    that turns asymmetric routing from an oddity into silent loss on this box.
+    """
+    setup, _kw = S["path_asymmetric"]
+    setup(nd)
+    # `all` is 1, so every interface is effectively strict whatever its own
+    # setting says - which is the part that surprises people.
+    nd._read_rp_filter = lambda base="/proc/sys/net/ipv4/conf": {
+        "all": 1, "default": 1, "eth0": 1, "lo": 0}
 
 @scenario("path_asymmetric")
 def _(nd):

@@ -1,0 +1,20 @@
+[
+ {"label": "strict filtering alone is reported as a fault",
+  "old": "    asymmetric = [f for f in findings if f.get(\"code\") == \"path_asymmetric\"]\n    if not asymmetric:\n        return found",
+  "new": "    if False:\n        return found"},
+ {"label": "asymmetry alone is blamed on this box",
+  "old": "    if not strict:\n        return found",
+  "new": "    if False:\n        return found"},
+ {"label": "loose mode is read as strict",
+  "old": "                    if name not in (\"all\", \"default\") and mode == RP_FILTER_STRICT)",
+  "new": "                    if name not in (\"all\", \"default\") and mode)"},
+ {"label": "the all setting stops overriding the interface",
+  "old": "    everywhere = modes.get(\"all\")\n    if everywhere is not None:\n        for name in modes:\n            if name != \"all\":\n                modes[name] = max(modes[name], everywhere)",
+  "new": "    pass"},
+ {"label": "the interface and the knob are not named",
+  "old": "            f\"filtering is strict on {', '.join(strict)}. The kernel discards any \"",
+  "new": "            f\"filtering is strict somewhere. The kernel discards any \""},
+ {"label": "the setting is never read at all",
+  "old": "    raw[\"rp_filter\"] = _read_rp_filter()",
+  "new": "    raw[\"rp_filter\"] = {}"}
+]

@@ -14694,14 +14694,33 @@ class TestOwnTlsListener(unittest.TestCase):
     def test_reading_the_fields_leaves_no_file_behind(self):
         """The decoder takes a path rather than bytes, so a certificate is
         written out and removed again. A tool whose pitch is that it leaves
-        nothing behind has to be held to it, including on the failure path."""
+        nothing behind has to be held to it, including on the failure path.
+
+        Measured in a directory of this test's own rather than in the shared
+        one. Globbing the system temp directory measures every process on the
+        box: the decoder writes its certificate at the top level of it, so a
+        second suite reaching `_cert_names_from_fields` at the wrong moment put
+        a `.pem` in this window that this process never created. That failed
+        about one run in six under `dev/mutate.py`, which runs six suites at
+        once by design - and a test failing for its own reasons inside a
+        mutation run reads as the mutation being caught, which is the one
+        answer that harness must never invent. It reported a traceroute
+        constant as covered by this test.
+        """
         import glob
+        import shutil as _shutil
         import tempfile as _tempfile
-        before = set(glob.glob(os.path.join(_tempfile.gettempdir(), "*.pem")))
+        private = _tempfile.mkdtemp()
+        self.addCleanup(_shutil.rmtree, private, True)
+        was = _tempfile.tempdir
+        _tempfile.tempdir = private
+        self.addCleanup(setattr, _tempfile, "tempdir", was)
         nd._cert_names_from_fields(b"not a certificate at all")
         nd._cert_names_from_fields(b"")
-        after = set(glob.glob(os.path.join(_tempfile.gettempdir(), "*.pem")))
-        self.assertEqual(after - before, set())
+        # A real one too: the failure paths above return before the file is
+        # ever written, so on their own they prove nothing about the cleanup.
+        nd._cert_names_from_fields(self.der_for("/CN=api.internal.example"))
+        self.assertEqual(glob.glob(os.path.join(private, "*.pem")), [])
 
     def der_for(self, subject, san=None):
         """A real certificate's DER, the way getpeercert hands it over."""

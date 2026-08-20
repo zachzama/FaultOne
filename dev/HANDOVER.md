@@ -9,10 +9,26 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,838**, tree clean, `dev/counts.py --check` says nothing is
-stale, nothing pushed since v1.24.0. No release cut on top of it - the work
-since is tests and four behaviour fixes, one of which changes what a report
-says on a live box, so tag it whenever you like.
+Suite green at **1,839**, tree clean, `dev/counts.py --check` says nothing is
+stale, everything pushed. No release cut on top of v1.24.0 - the work since is
+tests and four behaviour fixes, one of which changes what a report says on a
+live box, so tag it whenever you like.
+
+**Two things happened on 2026-08-20 that are worth reading before anything
+else.** A batch of test work went out and **broke CI on 3.7 twice**, both times
+from the same test taking a function's source extent: first `end_lineno`
+(3.8+), then the decorator `lineno` convention that a commit message claimed to
+have handled. Green here, red on the floor, eight minutes each way. The lesson
+is in `TestWhatCountsAsOneOfTheCables` now - the difference is one line number
+and it is reproducible without the interpreter, so it is asserted rather than
+hoped for. And **`gh run watch --exit-status` exited 0 on a red run**: it
+followed a job rather than the run. Poll
+`gh run view <id> --json status,conclusion` and read the *run's* conclusion.
+
+**Next decision waiting, written up below: the Python floor moves to 3.9.**
+Not implemented - the reasoning and the work list are in "Decided, not yet
+done". It has a date on it: the ubuntu-22.04 runner the 3.7 job needs begins
+deprecation on 2026-09-17.
 
 The work in flight is one long thread: **asking whether the suite's tests do
 anything**, and it has produced five patterns that make the rest of it fast.
@@ -37,10 +53,16 @@ times.
 
 **Next, in the order I would take it:**
 
+- **The Python floor**, which is the only thing here with a deadline. See
+  "Decided, not yet done" below; the work is an afternoon and mostly prose.
 - **The empty-only sweep, continued.** Batches ten to twenty-two: **81
   mutations, 31 holes, 5 equivalent mutants**, in `negatives-batch-ten`
   through `-twentytwo.json`. Seventy-seven tests moved from unexamined to
-  known-real. Still the best rate of anything open, and
+  known-real. The lead that has produced the last four batches: **the input
+  every real box has that no fixture builds** - loopback, idle ports, and the
+  four collectors whose fixtures hold no IPv6. Next candidates in that vein,
+  untried: a box's connections to itself on `127.0.0.1` in the socket table,
+  and link-local or multicast routes beside the default. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
   **Two predictors now, and the second is easier to search for.** Every hole
@@ -72,6 +94,88 @@ times.
   rewrite. Hygiene, not a fix - do not let it look urgent.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
+
+## Decided, not yet done: the floor moves from Python 3.7 to 3.9
+
+Nobody ever chose 3.7. It is where `subprocess.run` gained `capture_output`
+and `text`, so it is the oldest version that runs this code - a lower bound
+that got written down as if it were a support commitment. Asked properly on
+2026-08-20, the answer is 3.9, and the reasoning matters more than the number
+because the obvious argument gets it wrong.
+
+**Upstream end-of-life is the wrong lens.** 3.7, 3.8 and 3.9 are all EOL
+upstream (2023-06, 2024-10, 2025-10), which reads like an argument for 3.10 or
+newer. It is not, for two reasons. This tool is never installed - it is piped
+onto a box somebody else owns, during an outage, and a floor above what that
+box has means it prints a sentence and exits where it used to give an answer.
+And the distributions those boxes run keep patching their own interpreter long
+past upstream:
+
+| Platform | `/usr/bin/python3` | supported to |
+|---|---|---|
+| RHEL 9 | **3.9**, "for the whole life cycle of RHEL 9" | 2032-05 |
+| Amazon Linux 2023 | **3.9** "for the life of AL2023"; AWS says do not repoint the symlink | 2028+ |
+| RHEL 8 | 3.6 | 2029-05 |
+| Ubuntu 20.04 | 3.8 | 2030 (ESM) |
+| Ubuntu 22.04 / 24.04 | 3.10 / 3.12 | - |
+
+So **3.9 is a floor and 3.10 is a cliff**: the two platforms most likely to be
+under a vendor appliance both sit exactly on 3.9 and are pinned there for their
+whole lifecycle. 3.10 would exclude both, and is itself EOL in 2026-10, so it
+buys no currency either. Sources: python.org's version table, Red Hat's
+"Installing and using dynamic programming languages" for RHEL 9, and AWS's
+AL2023 Python page.
+
+**What forces the move is CI, not taste.** `actions/python-versions` publishes
+no 3.7 build for `ubuntu-24.04` or `ubuntu-26.04` - 22.04 is its last, which is
+why the matrix pins that image. The ubuntu-22.04 runner **begins deprecation on
+2026-09-17 and is fully unsupported on 2027-04-17**, with deliberate job
+failures during the wind-down. The 3.7 job therefore has an expiry date. 3.8
+and 3.9 both have 24.04 builds. Check it with:
+
+    curl -s https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json
+
+**What the tool gains: sugar, and not much of it.** Measured against this file
+rather than taken from a feature list:
+
+| Gain | Since | Sites here |
+|---|---|---|
+| walrus in `m = re.search(...)` / `if m:` | 3.8 | 14 |
+| `removeprefix` / `removesuffix` | 3.9 | 3 |
+| builtin generics, `typing` | 3.9 | **0** - there are no type hints in the file |
+| dict merge `\|` | 3.9 | **0** |
+| `functools.cache` | 3.9 | 1, and `lru_cache` already works on 3.7 |
+
+**Nothing is blocked by 3.7.** No stdlib is hand-rolled for it and no check is
+missing because of it, which is the honest headline: this is a maintenance and
+CI decision, not a capability one. The three `lstrip("AS")`-style calls are
+correct today and only by luck of the input - `removeprefix` is the operation
+actually meant, and `lstrip("SA123")` returns `123`.
+
+**The suite gains more than the tool does.** `ast.end_lineno` arrived in 3.8,
+and its absence is why `TestWhatCountsAsOneOfTheCables` carries a hand-written
+function-extent scan plus a test asserting that scan behaves the same under
+3.7's decorator `lineno` convention. Both exist only for the floor; both go.
+That is about forty lines, and it cost two red builds to write - see below.
+
+**The work, all mechanical:**
+
+- `MIN_PYTHON = (3, 9)` in `faultone.py`.
+- The CI matrix row `{os: ubuntu-22.04, python: "3.7"}` becomes
+  `{os: ubuntu-24.04, python: "3.9"}`, which also settles the September date.
+- `TestPythonCompatibility`: drop the walrus and builtin-generic entries, drop
+  the `.end_lineno`/`.end_col_offset` guard, and delete the `except TypeError`
+  fallback around `feature_version` - that exists only because the argument is
+  absent on 3.7 itself.
+- `TestWhatCountsAsOneOfTheCables`: `_body_of` becomes a slice on
+  `end_lineno`, and `test_the_extent_is_the_same_on_the_floor_interpreter`
+  goes with it.
+- Five prose places: README.md (three) and REFERENCE.md (two).
+- Re-run `dev/counts.py`, the suite, and `dev/equivalence.py` as usual.
+
+**Do not raise it further than 3.9 without re-reading the table above.** The
+next person to look at this will see three EOL versions and reach for 3.12; the
+whole point of writing it down is that the boxes, not python.org, decide.
 
 ## Settled: the clauses a report can say and no scenario produced
 

@@ -2369,8 +2369,10 @@ the stated floor (so newer syntax can't slip in and fail months later on an
 appliance instead of here), and one asserts every import is standard library.
 
 If the interpreter is older, the tool prints the version it needs and exits
-`2`, before running any command, so you get a sentence instead of a
-`TypeError` from the first ping.
+`3`, before running any command, so you get a sentence instead of a
+`TypeError` from the first ping. `3` rather than `2` because the check could
+not run, which is not the same as it finding something wrong - the same
+monitoring-plugin convention every other exit here follows.
 
 **After a Python upgrade on the box**, the check is the tool itself:
 

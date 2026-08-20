@@ -7,6 +7,42 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
+## Start here (as of v1.24.0, tree at 36cfa32)
+
+Everything is pushed, CI is green on all four jobs, and the release is cut. The
+work in flight is one long thread: **asking whether the suite's tests do
+anything**, and it has produced five patterns that make the rest of it fast.
+Read them before picking any of it up - every real gap so far has fitted one.
+
+1. **A guard whose test exercises a neighbouring path.** Never a missing test -
+   a test with an accurate name that never reaches the line.
+2. **An early guard subsumed by a later one.** Equivalent, and deleting it is
+   usually wrong: the subsumption rests on conventions rather than guarantees.
+3. **A test that asserts a phrase appears** checks neither the values in it nor
+   that it stays away when it should.
+4. **A multi-condition guard where the tests drive one condition.** The
+   coverage on the front of the expression makes the back of it look tested.
+5. **A fixture that short-circuits before the condition under test.** Its tell
+   is a guard whose *earlier* conditions are well covered.
+
+And one rule that has mattered more than any of them: **a survivor is not a
+defect.** Across this work, twelve were real, thirteen were equivalent mutants,
+one was dead code, and nine had a single benign cause. Sort before acting; the
+obvious response to a batch of survivors has been wrong three times.
+
+**Next, in the order I would take it:**
+
+- **43 empty-only behavioural tests** still unswept (`python3 dev/vacuous.py`
+  lists them). Roughly one real gap per nine mutations, which is the best rate
+  of anything open.
+- **19 message-value mutations** left, all of them helpers, renderers or second
+  sentences - deliberately stopped there, since none is a number a verdict
+  rests on.
+- **Phase A's last 14** conversions, each needing a judgement rather than a
+  rewrite. Hygiene, not a fix - do not let it look urgent.
+- **Phase C** (explicit ranking) then **B** (a contract for `raw`).
+- The résumé card, which the user has deprioritised repeatedly.
+
 ## Settled: the clauses a report can say and no scenario produced
 
 A finding whose message contains an `if` has more than one thing to say, and

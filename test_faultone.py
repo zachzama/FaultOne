@@ -3625,33 +3625,20 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
 
     @staticmethod
     def _body_of(lines, node):
-        """The source lines of one function, without `end_lineno`.
+        """The source lines of one function.
 
-        That attribute arrived in Python 3.8 and this tool's floor is 3.7, so
-        the first version of this ran everywhere except the interpreter the
-        README promises. The extent is taken by indentation instead: from the
-        node's own line to the next line no further in than it. Decorators are
-        handled by the same rule - before 3.8 a decorated function's `lineno`
-        is the decorator rather than the `def`, and both sit at the same
-        indentation as whatever follows the function.
+        This was a hand-written indentation scan until the floor moved to 3.9,
+        because `end_lineno` arrived in 3.8. It went red on 3.7 twice - once
+        for the attribute and once for the decorator `lineno` convention,
+        where a decorated function's line is its first decorator rather than
+        its `def`, so scanning from there stopped at the `def` and handed back
+        a one-line body. Every `@collector` in the file read as empty.
+
+        Forty lines and two red builds, replaced by a slice. The test that
+        asserted the scan agreed with itself under 3.7's convention went with
+        them - it existed only to defend the workaround.
         """
-        start = node.lineno - 1
-        # Past any decorators first. Before 3.8 a decorated function's lineno
-        # is the decorator, which sits at the same indentation as the `def`
-        # under it - so scanning from there stopped at the `def` itself and
-        # handed back a one-line body. Every @collector in the file read as
-        # containing nothing, which is how this went red on 3.7 twice.
-        while (start < len(lines) - 1
-               and not lines[start].lstrip().startswith(("def ", "async def "))):
-            start += 1
-        indent = len(lines[start]) - len(lines[start].lstrip())
-        end = len(lines)
-        for i in range(start + 1, len(lines)):
-            line = lines[i]
-            if line.strip() and (len(line) - len(line.lstrip())) <= indent:
-                end = i
-                break
-        return "\n".join(lines[start:end])
+        return "\n".join(lines[node.lineno - 1:node.end_lineno])
 
     def _reading_the_interface_list(self):
         """Every function that reads the interface list, and what it skips."""
@@ -3678,32 +3665,6 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
                 'startswith("lo")' in body or '!= "lo"' in body,
                 bool(skips_idle))
         return found
-
-    def test_the_extent_is_the_same_on_the_floor_interpreter(self):
-        """This class reads the file by hand, and twice now it has been right
-        here and wrong on 3.7 - the version CI runs to prove the tool works
-        there. Nothing on this machine could catch either one.
-
-        The difference is one line number: before 3.8 a decorated function's
-        `lineno` is its first decorator rather than its `def`. That is
-        reproducible without the interpreter, so it is asserted rather than
-        hoped for - every function must come out the same whichever line
-        number the parser would have handed over.
-        """
-        import ast
-        with open(nd.__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        lines = src.splitlines()
-        for node in ast.walk(ast.parse(src)):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not node.decorator_list:
-                continue
-            older = ast.parse("pass").body[0]
-            older.lineno = node.decorator_list[0].lineno
-            with self.subTest(function=node.name):
-                self.assertEqual(self._body_of(lines, node),
-                                 self._body_of(lines, older))
 
     def test_every_judgement_about_an_interface_skips_the_idle_ones(self):
         """The other half of the same expressions, and the same blind spot:
@@ -16921,7 +16882,7 @@ class TestDocsMatchReality(unittest.TestCase):
                       encoding="utf-8").read()
         claims = {
             "on disk": (len(raw), 1057),
-            "compressed": (len(gzip.compress(raw, 9)), 319),
+            "compressed": (len(gzip.compress(raw, 9)), 320),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
         }
         for label, (measured, quoted) in claims.items():
@@ -19397,9 +19358,17 @@ class TestPythonCompatibility(unittest.TestCase):
         # list[int] without complaint. All three of those are fatal on 3.7 and
         # all three would have shipped. The parse is the first pass; the walk
         # below is the part it does not do.
-        NEWER = {"NamedExpr": "the walrus operator (3.8+)"}
-        NEWER_ATTRS = {"end_lineno", "end_col_offset"}
-        GENERIC = {"list", "dict", "set", "frozenset", "tuple", "type"}
+        # What is still newer than the floor. The walrus, positional-only
+        # parameters and `.end_lineno` all arrived in 3.8 and builtin generics
+        # in 3.9, so at a 3.9 floor every one of them is allowed - the entries
+        # that guarded them are gone rather than commented out, because a guard
+        # against something legal is a line somebody has to reason about twice.
+        #
+        # What remains is 3.10 and newer, which is where the next floor
+        # argument will start: `match`, `except*`, and `X | Y` in an
+        # annotation. ast.parse's feature_version rejects the first two and is
+        # blind to the third, which is the split this test is built around.
+        GENERIC_ONLY_FROM_310 = ()          # nothing yet; kept as the seam
         for name in ("faultone.py", "test_faultone.py"):
             path = os.path.join(root, name)
             with open(path, encoding="utf-8") as fh:
@@ -19410,37 +19379,20 @@ class TestPythonCompatibility(unittest.TestCase):
                 self.fail(f"{name} uses syntax newer than Python "
                           f"{nd.MIN_PYTHON[0]}.{nd.MIN_PYTHON[1]}: "
                           f"{e.msg} (line {e.lineno})")
-            except TypeError:
-                # feature_version arrived in 3.8, so on the floor itself this
-                # argument does not exist - the guard defending 3.7 was the
-                # one thing that could not run on 3.7, and errored there the
-                # first time anything tried. It is also the one interpreter
-                # where the check is redundant: the file was imported to get
-                # here, so anything newer than 3.7 already failed to compile.
-                tree = ast.parse(src)
             for node in ast.walk(tree):
-                why = NEWER.get(type(node).__name__)
-                if why:
-                    self.fail(f"{name}:{node.lineno} uses {why}")
-                if isinstance(node, ast.arguments) and getattr(
-                        node, "posonlyargs", []):
-                    self.fail("%s:%d uses positional-only parameters (3.8+)"
-                              % (name, node.posonlyargs[0].lineno))
-                if (isinstance(node, ast.Subscript)
-                        and isinstance(node.value, ast.Name)
-                        and node.value.id in GENERIC):
-                    self.fail("%s:%d subscripts the builtin %s, which is a "
-                              "type only from 3.9" % (name, node.lineno,
-                                                      node.value.id))
-                # An attribute rather than syntax, so neither the parse above
-                # nor the walk would have seen it: a structural test here read
-                # `node.end_lineno` to take a function's extent, which every
-                # interpreter has except the one the README promises. It went
-                # green on this machine and red on the floor, which is the
-                # worst place to find out and the reason CI runs there.
-                if isinstance(node, ast.Attribute) and node.attr in NEWER_ATTRS:
-                    self.fail("%s:%d reads .%s, which AST nodes only carry "
-                              "from 3.8" % (name, node.lineno, node.attr))
+                # `int | None` in an annotation is 3.10 and feature_version
+                # does not catch it - it parses as a BinOp anywhere. The tool
+                # carries no annotations at all today, so this is the seam for
+                # whoever adds the first one rather than a live check.
+                if (isinstance(node, ast.AnnAssign)
+                        and isinstance(node.annotation, ast.BinOp)
+                        and isinstance(node.annotation.op, ast.BitOr)):
+                    self.fail("%s:%d uses `X | Y` in an annotation, which is "
+                              "3.10" % (name, node.lineno))
+                for kind in GENERIC_ONLY_FROM_310:
+                    if isinstance(node, kind):
+                        self.fail("%s:%d uses %s, which is 3.10"
+                                  % (name, node.lineno, kind.__name__))
 
     def test_every_text_file_it_opens_names_its_encoding(self):
         """Without one, Python uses the platform's locale encoding, which is
@@ -20952,6 +20904,17 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         for asn in ("AS15169", "AS2914", "AS1", "AS4199999999", "AS131072"):
             with self.subTest(asn=asn):
                 self.assertIsNone(nd.asn_kind(asn))
+
+    def test_the_prefix_is_dropped_and_not_stripped(self):
+        """`lstrip("AS")` removes every leading A and S, which is right for
+        "AS15169" by luck rather than by meaning. It was written that way
+        because `removeprefix` is 3.9 and the floor was 3.7; the floor moved.
+
+        "ASS4" is the difference: stripped it reads as AS4, and dropped it is
+        not an AS number at all."""
+        self.assertIsNone(nd.asn_kind("ASS4"))
+        self.assertIsNone(nd.asn_kind("SA65001"))
+        self.assertEqual(nd.asn_kind("AS65001"), "private, in no registry")
 
     def test_it_survives_whatever_the_trace_wrote(self):
         """mtr writes AS15169, some builds write a bare number, and a hop with

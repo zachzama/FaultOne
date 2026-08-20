@@ -9,7 +9,7 @@ python3 faultone.py --export report.html        # the same run, as one page
 python3 faultone.py --report --target 10.0.0.20 # aim at a real dependency
 ```
 
-Python 3.7 or newer, and nothing else. The full check is ~7s where the path
+Python 3.9 or newer, and nothing else. The full check is ~7s where the path
 answers a traceroute.
 
 `--target` matters more than it looks: everything measured off the box is
@@ -94,7 +94,7 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ```
 
 `-C` because OpenSSH doesn't compress by default, and the file is 1057 KB of
-repetitive text: it goes over the wire at 319 KB with compression on, for the
+repetitive text: it goes over the wire at 320 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -106,7 +106,7 @@ python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))
 ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 219 KB on the wire
 ```
 
-That needs Python 3.9 on **your** machine; the box still only needs 3.7.
+That needs Python 3.9 on **your** machine, and so does the box.
 Stripped and compressed together it's 219 KB instead of 1057. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
@@ -331,7 +331,7 @@ ordering hands you twice as much to read and no answer.
 
 ## What you need
 
-**Python 3.7 or newer, and nothing else.** No packages, no virtualenv, no
+**Python 3.9 or newer, and nothing else.** No packages, no virtualenv, no
 build. It works on Linux, macOS and Windows; Linux is the best-supported
 target.
 

@@ -95,87 +95,56 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
-## Decided, not yet done: the floor moves from Python 3.7 to 3.9
+## Done: the floor is Python 3.9
 
-Nobody ever chose 3.7. It is where `subprocess.run` gained `capture_output`
-and `text`, so it is the oldest version that runs this code - a lower bound
-that got written down as if it were a support commitment. Asked properly on
-2026-08-20, the answer is 3.9, and the reasoning matters more than the number
-because the obvious argument gets it wrong.
+Moved 2026-08-20. `MIN_PYTHON = (3, 9)`, the CI matrix row is
+`{os: ubuntu-24.04, python: "3.9"}` - which also settles the ubuntu-22.04
+deprecation that starts 2026-09-17 - and five prose places say 3.9.
 
-**Upstream end-of-life is the wrong lens.** 3.7, 3.8 and 3.9 are all EOL
-upstream (2023-06, 2024-10, 2025-10), which reads like an argument for 3.10 or
-newer. It is not, for two reasons. This tool is never installed - it is piped
-onto a box somebody else owns, during an outage, and a floor above what that
-box has means it prints a sentence and exits where it used to give an answer.
-And the distributions those boxes run keep patching their own interpreter long
-past upstream:
+The reasoning is in REFERENCE.md under "Python versions" and is the part worth
+keeping: **upstream end-of-life is the wrong lens.** This tool is never
+installed, it is piped onto a box somebody else owns during an outage, so a
+floor above what that box ships turns an answer into a sentence and an exit.
+RHEL 9 and Amazon Linux 2023 both ship 3.9 and are pinned there for their whole
+life cycle. **Do not raise it to 3.10 without re-reading that table** - the next
+person will see three EOL versions and reach for 3.12.
 
-| Platform | `/usr/bin/python3` | supported to |
-|---|---|---|
-| RHEL 9 | **3.9**, "for the whole life cycle of RHEL 9" | 2032-05 |
-| Amazon Linux 2023 | **3.9** "for the life of AL2023"; AWS says do not repoint the symlink | 2028+ |
-| RHEL 8 | 3.6 | 2029-05 |
-| Ubuntu 20.04 | 3.8 | 2030 (ESM) |
-| Ubuntu 22.04 / 24.04 | 3.10 / 3.12 | - |
+**Forty lines of workaround went with it.** `TestWhatCountsAsOneOfTheCables`
+had a hand-written indentation scan for a function's extent, because
+`end_lineno` is 3.8, plus a test asserting that scan agreed with itself under
+3.7's decorator `lineno` convention. Both existed only for the floor and both
+cost a red build to write. `_body_of` is a slice now.
 
-So **3.9 is a floor and 3.10 is a cliff**: the two platforms most likely to be
-under a vendor appliance both sit exactly on 3.9 and are pinned there for their
-whole lifecycle. 3.10 would exclude both, and is itself EOL in 2026-10, so it
-buys no currency either. Sources: python.org's version table, Red Hat's
-"Installing and using dynamic programming languages" for RHEL 9, and AWS's
-AL2023 Python page.
+`TestPythonCompatibility` no longer guards the walrus, positional-only
+parameters, `.end_lineno` or builtin generics - all legal at 3.9. What it
+guards now is 3.10: `match` and `except*` via `feature_version`, and `X | Y` in
+an annotation by walking, because `feature_version` is blind to that one. The
+tool carries no annotations, so that check is a seam for whoever adds the first.
 
-**What forces the move is CI, not taste.** `actions/python-versions` publishes
-no 3.7 build for `ubuntu-24.04` or `ubuntu-26.04` - 22.04 is its last, which is
-why the matrix pins that image. The ubuntu-22.04 runner **begins deprecation on
-2026-09-17 and is fully unsupported on 2027-04-17**, with deliberate job
-failures during the wind-down. The 3.7 job therefore has an expiry date. 3.8
-and 3.9 both have 24.04 builds. Check it with:
+### What the floor actually cost, which is not what the feature list says
 
-    curl -s https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json
+`removeprefix` was the only correctness item and it is fixed: `asn_kind` did
+`lstrip("AS")`, which strips every leading A and S and was right for "AS15169"
+by luck rather than by meaning. `ASS4` read as AS4.
 
-**What the tool gains: sugar, and not much of it.** Measured against this file
-rather than taken from a feature list:
+**The real one is `statistics.quantiles` (3.8), and it is not done.** Per-side
+round trip and jitter are computed as a **hand-indexed median** over sorted
+samples - `rtts[len(rtts) // 2]` - and the comment beside it says why: one
+stalled connection must not stand in for how a side is being served. That is
+right, and it is also the whole problem. **A median hides the tail, and the
+tail is what people complain about.** Ten percent of connections at two seconds
+is invisible behind a healthy median, on a box with hundreds of flows where the
+sample to compute it from is already in hand.
 
-| Gain | Since | Sites here |
-|---|---|---|
-| walrus in `m = re.search(...)` / `if m:` | 3.8 | 14 |
-| `removeprefix` / `removesuffix` | 3.9 | 3 |
-| builtin generics, `typing` | 3.9 | **0** - there are no type hints in the file |
-| dict merge `\|` | 3.9 | **0** |
-| `functools.cache` | 3.9 | 1, and `lru_cache` already works on 3.7 |
+`statistics.quantiles(rtts, n=20)[18]` is p95 and needs no new collection. The
+work is deciding what the tool *says* with it - a finding whose median is fine
+and whose p95 is not is a real diagnosis this tool cannot currently make, and
+it wants its own sentence rather than a second number bolted to an existing
+one. That is the next capability worth adding, and it is the only thing on this
+list the floor was actually costing.
 
-**Nothing is blocked by 3.7.** No stdlib is hand-rolled for it and no check is
-missing because of it, which is the honest headline: this is a maintenance and
-CI decision, not a capability one. The three `lstrip("AS")`-style calls are
-correct today and only by luck of the input - `removeprefix` is the operation
-actually meant, and `lstrip("SA123")` returns `123`.
-
-**The suite gains more than the tool does.** `ast.end_lineno` arrived in 3.8,
-and its absence is why `TestWhatCountsAsOneOfTheCables` carries a hand-written
-function-extent scan plus a test asserting that scan behaves the same under
-3.7's decorator `lineno` convention. Both exist only for the floor; both go.
-That is about forty lines, and it cost two red builds to write - see below.
-
-**The work, all mechanical:**
-
-- `MIN_PYTHON = (3, 9)` in `faultone.py`.
-- The CI matrix row `{os: ubuntu-22.04, python: "3.7"}` becomes
-  `{os: ubuntu-24.04, python: "3.9"}`, which also settles the September date.
-- `TestPythonCompatibility`: drop the walrus and builtin-generic entries, drop
-  the `.end_lineno`/`.end_col_offset` guard, and delete the `except TypeError`
-  fallback around `feature_version` - that exists only because the argument is
-  absent on 3.7 itself.
-- `TestWhatCountsAsOneOfTheCables`: `_body_of` becomes a slice on
-  `end_lineno`, and `test_the_extent_is_the_same_on_the_floor_interpreter`
-  goes with it.
-- Five prose places: README.md (three) and REFERENCE.md (two).
-- Re-run `dev/counts.py`, the suite, and `dev/equivalence.py` as usual.
-
-**Do not raise it further than 3.9 without re-reading the table above.** The
-next person to look at this will see three EOL versions and reach for 3.12; the
-whole point of writing it down is that the boxes, not python.org, decide.
+Nothing else was blocked. No stdlib is hand-rolled for 3.7 and no check was
+missing because of it.
 
 ## Settled: the clauses a report can say and no scenario produced
 

@@ -2360,9 +2360,17 @@ half-finished lines helps nobody, and `--quiet` disables it entirely.
 
 ## Python versions
 
-**Minimum: Python 3.7**, that's where `subprocess.run`'s `capture_output` and
-`text` arguments arrived. Nothing newer is used, and nothing outside the
-standard library, so there is no dependency to break when the box is patched.
+**Minimum: Python 3.9**, and it is a decision rather than an inheritance. 3.7
+was where `subprocess.run` gained `capture_output` and `text` - the oldest
+version that runs this code, written down as if it were a support commitment.
+
+Upstream end-of-life is the wrong lens for it. This tool is never installed: it
+is piped onto a box somebody else owns, during an outage, so a floor above what
+that box ships turns an answer into a sentence and an exit. What decides is the
+interpreter those distributions still patch, and RHEL 9 and Amazon Linux 2023
+both ship **3.9** and are pinned there for their whole life cycle - to 2032 and
+2028. 3.10 would exclude both. Nothing outside the standard library is used, so
+there is no dependency to break when the box is patched.
 
 Two tests keep that honest rather than aspirational: one parses the source at
 the stated floor (so newer syntax can't slip in and fail months later on an

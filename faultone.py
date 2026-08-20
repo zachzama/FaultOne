@@ -85,7 +85,7 @@ __version__ = "1.24.0"
 # Python 3.7 is the floor: subprocess.run's capture_output and text arguments
 # arrived there. The syntax parses on 3.6, so without this check that box gets
 # a confusing TypeError from the first command it runs instead of being told.
-MIN_PYTHON = (3, 7)
+MIN_PYTHON = (3, 9)
 if sys.version_info < MIN_PYTHON:
     sys.stderr.write(
         "FaultOne needs Python {}.{} or newer; this is {}.{}.\n"
@@ -7247,7 +7247,13 @@ def asn_kind(asn):
     """
     if not asn:
         return None
-    digits = str(asn).upper().lstrip("AS")
+    # removeprefix, not lstrip. `lstrip("AS")` strips every leading A and S,
+    # so it happens to be right for "AS15169" and is right by luck rather than
+    # by meaning - the operation intended is "drop the prefix if it is there".
+    # It was written that way because removeprefix is 3.9 and the floor was
+    # 3.7; the floor moved, so the line says what it means now.
+    digits = str(asn).upper()
+    digits = digits.removeprefix("AS") if digits.startswith("AS") else digits
     if not digits.isdigit():
         return None
     number = int(digits)

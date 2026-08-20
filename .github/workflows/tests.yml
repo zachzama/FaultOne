@@ -28,7 +28,7 @@ jobs:
           # The floor the README promises. 3.7 is not on ubuntu-latest, which
           # is 24.04 now and dropped it - so this entry names its own runner
           # rather than failing with a version-not-found nobody can read.
-          - {os: ubuntu-22.04, python: "3.7"}
+          - {os: ubuntu-24.04, python: "3.9"}
           # The ceiling: nothing here is version-pinned, so new is as
           # interesting as old.
           - {os: ubuntu-latest, python: "3.13"}

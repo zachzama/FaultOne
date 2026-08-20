@@ -7,7 +7,11 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Start here (as of v1.24.0, tree at 36cfa32)
+## Start here (as of v1.24.0 plus the laptop's 2026-08-19 batches)
+
+Suite green at **1,814**, tree clean, `dev/counts.py --check` says nothing is
+stale, everything pushed. No release cut on top of v1.24.0 - the work below is
+tests and two behaviour fixes, so tag it whenever you like.
 
 Everything is pushed, CI is green on all four jobs, and the release is cut. The
 work in flight is one long thread: **asking whether the suite's tests do
@@ -32,9 +36,25 @@ obvious response to a batch of survivors has been wrong three times.
 
 **Next, in the order I would take it:**
 
-- **43 empty-only behavioural tests** still unswept (`python3 dev/vacuous.py`
-  lists them). Roughly one real gap per nine mutations, which is the best rate
-  of anything open.
+- **The empty-only sweep, continued.** Batches ten to sixteen ran on the
+  laptop on 2026-08-19: **39 mutations, 3 holes, 4 equivalent mutants**, in
+  `negatives-batch-ten` through `-sixteen.json`. Thirty-two tests moved from
+  unexamined to known-real. Still the best rate of anything open, and
+  `python3 dev/vacuous.py` still lists what is left.
+
+  **The sharpest predictor found so far, and where to aim next.** All three
+  holes were a filter the corpus never exercised *because no scenario produces
+  the input combination* - a one-row source matrix, a `/128` beside only a
+  link-local, two findings from one family. That beats "empty-only" as a
+  selector: look for a guard whose input shape no fixture builds, rather than
+  for a test that asserts on nothing.
+
+  **And a third ending for a survivor**, which batch fourteen added to the two
+  already here. A guard subsumed *inside its own function* is untestable and
+  gets a comment. A guard subsumed by a *convention elsewhere* gets a comment
+  too. A guard subsumed by its **caller** is only untested through the path
+  everything else uses - a direct call closes it, and that is strictly better
+  than excusing the line. Reach for it before writing one off.
 - **19 message-value mutations** left, all of them helpers, renderers or second
   sentences - deliberately stopped there, since none is a number a verdict
   rests on.

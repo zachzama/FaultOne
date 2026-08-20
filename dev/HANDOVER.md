@@ -9,7 +9,7 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,831**, tree clean, `dev/counts.py --check` says nothing is
+Suite green at **1,838**, tree clean, `dev/counts.py --check` says nothing is
 stale, nothing pushed since v1.24.0. No release cut on top of it - the work
 since is tests and four behaviour fixes, one of which changes what a report
 says on a live box, so tag it whenever you like.
@@ -37,9 +37,9 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to twenty-one: **72
-  mutations, 26 holes, 5 equivalent mutants**, in `negatives-batch-ten`
-  through `-twentyone.json`. Sixty-eight tests moved from unexamined to
+- **The empty-only sweep, continued.** Batches ten to twenty-two: **81
+  mutations, 31 holes, 5 equivalent mutants**, in `negatives-batch-ten`
+  through `-twentytwo.json`. Seventy-seven tests moved from unexamined to
   known-real. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
@@ -528,6 +528,45 @@ test written that hour to catch it. **A structural test that matches on
 vocabulary rather than on the construct is the weak kind** - the same family as
 a test asserting a phrase appears. It matches the shape of the guard now
 (`not x["packets"]`, or `x["packets"] and`), and the mutation is caught.
+
+**Batch twenty-two: IPv6, nine mutations, five survivors, five holes.** In
+`negatives-batch-twentytwo.json`.
+
+The lead from batch nineteen said to look for the shape every real box has that
+no fixture builds, and IPv6 was the obvious next one. It is **not** a missing
+subject here - peers, sockets, neighbours, service addresses and the dual-stack
+connect are all well covered, and probing them one by one found nothing, which
+wasted an hour. What was uncovered is narrower and only the harness found it:
+**four collectors whose own fixtures happen to hold no v6.**
+
+- A resolver reached over IPv6, asked over an `AF_INET` socket. It fails at
+  `sendto`, and the report then says that resolver did not answer - a fault
+  invented on a resolver that is working. Every public resolver publishes a v6
+  address. The zone on a link-local resolver (`fe80::1%eth0`) is stripped
+  before the reply is matched, and that was untested too.
+- A BSD route's v6 next hop, dropped, so the route reads as having no next hop
+  at all - which is how this tool says "the destination is on your own
+  segment".
+- `source_address_is_held` binding on the wrong family, which fails for every
+  v6 address there is. The finding behind it says this box is not holding its
+  own service address, and on a redundant pair that reads as a failover that
+  did not complete.
+- Windows filing a v6 address as `inet`, which counts towards this box having
+  an IPv4 address and so silences `no_ipv4` on a Windows box that has none.
+- And `_is_ipv6_literal`, which decides whether an IPv4-only *target* is
+  unmeasurable on a v6-only box. There is an `ipv6_only` fixture and three
+  tests on it, and every one of them aims at `8.8.8.8`. Aim it at an IPv6
+  address and the report calls a v6 address an IPv4 destination and returns
+  before every check underneath - on the only kind of target that box can
+  reach. **A fixture existing is not the same as it being pointed at the
+  interesting input.**
+
+**Five separate tests rather than a contract**, which is the opposite call from
+batch twenty and worth understanding. Loopback was one rule at ten sites, so
+ten fixtures would have been ten ways of saying one thing. These are five
+different questions that happen to share a subject, so each needs its own
+answer. The sockets are faked rather than opened, so nothing leaves the machine
+and the tests do not need IPv6 on the runner - which CI may not have.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

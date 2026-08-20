@@ -3132,6 +3132,16 @@ class TestInternationalDeployment(unittest.TestCase):
         self.assertIn("ipv6_only", codes)
         self.assertEqual(nd.exit_status(rep), 0)
 
+    def test_an_ipv6_target_on_such_a_box_is_measurable(self):
+        """The other half of the sentence below, and the half nobody ran. On a
+        box with no IPv4 an IPv4 target is unreachable by design, so the report
+        says so and stops. Aim the same box at an IPv6 address and that
+        sentence is wrong twice: it calls a v6 address an IPv4 destination, and
+        it returns before every check underneath it - on the only kind of
+        target the box can actually reach."""
+        codes = [f["code"] for f in self.diag("2001:4860:4860::8888")["findings"]]
+        self.assertNotIn("inet_unmeasurable_v4", codes)
+
     def test_the_ipv4_chain_is_unmeasurable_rather_than_broken(self):
         """Every IPv4 check on such a box is measuring something it cannot do,
         not something that is failing."""
@@ -11036,6 +11046,125 @@ class TestTheBranchThatMakesAFindingCritical(unittest.TestCase):
         and a clause that says "collisions recorded" without one is worse than
         no clause."""
         self.assertIn("4,200", self._run(4200)["message"])
+
+
+class TestTellingTheTwoFamiliesApart(unittest.TestCase):
+    """Guards that ask which family an address belongs to, on a corpus that is
+    IPv4 wherever they are.
+
+    IPv6 is well covered in this suite - peers, sockets, neighbours, service
+    addresses, the dual-stack connect - which is exactly why these went
+    unnoticed. It is not a missing subject, it is four collectors whose own
+    fixtures happen to hold no v6: the resolver list, a BSD route's next hop,
+    the address a bind is tested against, and what Windows prints. Each one
+    answers a question about a family and each was only ever asked about one.
+    """
+
+    def sockets_that_go_nowhere(self):
+        """Every socket opened is a fake that records its family and answers
+        nothing, so this sends no packet and needs no IPv6 on the machine
+        running it - which a CI runner may well not have."""
+        import socket as _socket
+        opened, sent = [], []
+
+        class Fake:
+            def __init__(self, family=_socket.AF_INET, type=None, *a, **kw):
+                opened.append(family)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def settimeout(self, _t):
+                pass
+
+            def bind(self, _addr):
+                pass
+
+            def sendto(self, data, addr):
+                sent.append(addr)
+                return len(data)
+
+            def recvfrom(self, _n):
+                raise _socket.timeout()
+
+            def close(self):
+                pass
+
+        real = nd.socket.socket
+        nd.socket.socket = Fake
+        self.addCleanup(setattr, nd.socket, "socket", real)
+        return opened, sent
+
+    def test_a_resolver_reached_over_ipv6_is_asked_over_ipv6(self):
+        """A v6 nameserver is ordinary - every public resolver publishes one -
+        and asked over an AF_INET socket it fails at sendto. The report then
+        says that resolver did not answer, which is a fault on the resolver
+        rather than on the tool, and the reader goes and looks at a resolver
+        that is working."""
+        opened, _sent = self.sockets_that_go_nowhere()
+        nd.dns_query("2606:4700:4700::1111", "example.com", timeout=0.01)
+        self.assertEqual(opened, [nd.socket.AF_INET6])
+
+    def test_a_link_local_resolver_is_asked_without_its_zone(self):
+        """`fe80::1%eth0` is what a router-advertised resolver looks like on
+        the box, and the zone is for the kernel rather than for the wire - the
+        reply is matched against the address that was asked, so the two have
+        to be the same string."""
+        _opened, sent = self.sockets_that_go_nowhere()
+        nd.dns_query("fe80::1%eth0", "example.com", timeout=0.01)
+        self.assertEqual([a[0] for a in sent], ["fe80::1"])
+
+    def test_the_address_a_bind_tests_decides_the_family_of_the_socket(self):
+        """`source_address_is_held` proves the box holds an address by binding
+        to it. Bound on the wrong family it fails for every v6 address there
+        is, and the finding that follows says this box is not holding its own
+        service address - which on a redundant pair is read as a failover that
+        did not complete."""
+        opened, _sent = self.sockets_that_go_nowhere()
+        nd.source_address_is_held("2001:db8::a")
+        self.assertEqual(opened, [nd.socket.AF_INET6])
+        opened.clear()
+        nd.source_address_is_held("10.0.0.5")
+        self.assertEqual(opened, [nd.socket.AF_INET])
+
+    def test_an_ipv6_next_hop_is_a_next_hop(self):
+        """BSD names a link-layer route's gateway after the interface, and
+        that is the case the filter is for. A v6 gateway is not that: dropped,
+        the route reads as having no next hop at all, which is the tool's way
+        of saying the destination is on this box's own segment."""
+        bsd = ("   route to: 2001:4860:4860::8888\n"
+               "destination: default\n"
+               "    gateway: fe80::1%en0\n"
+               "  interface: en0\n")
+        got = nd.parse_route_to(bsd)
+        self.assertEqual(got["via"], "fe80::1%en0")
+        self.assertFalse(got["onlink"])
+
+    def test_an_interface_name_is_still_not_a_next_hop(self):
+        """The positive case for the line above, so it cannot pass by the
+        filter having been removed altogether."""
+        bsd = ("   route to: 10.0.0.9\n"
+               "    gateway: en0\n"
+               "  interface: en0\n")
+        got = nd.parse_route_to(bsd)
+        self.assertIsNone(got["via"])
+        self.assertTrue(got["onlink"])
+
+    def test_windows_files_an_ipv6_address_as_ipv6(self):
+        """Filed as IPv4 it counts towards this box having an IPv4 address, so
+        `no_ipv4` stays quiet on a Windows box that has none - the finding that
+        exists to say the box never got onto the network."""
+        text = ("Ethernet adapter Ethernet:\n"
+                "   IPv6 Address. . . . . . . . . . . : 2001:db8::a\n"
+                "   IPv4 Address. . . . . . . . . . . : 10.0.0.5\n"
+                "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n")
+        got = nd.parse_own_addresses({"ok": True, "stdout": text})
+        by_addr = {a["address"]: a["family"] for a in got}
+        self.assertEqual(by_addr.get("2001:db8::a"), "inet6")
+        self.assertEqual(by_addr.get("10.0.0.5"), "inet")
 
 
 class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):

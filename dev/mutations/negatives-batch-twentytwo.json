@@ -1,0 +1,47 @@
+[
+  {
+    "label": "a resolver reached over IPv6 is asked over an IPv4 socket",
+    "old": "    family = socket.AF_INET6 if \":\" in server else socket.AF_INET",
+    "new": "    family = socket.AF_INET"
+  },
+  {
+    "label": "an IPv6 peer is not grouped by its network",
+    "old": "    if \":\" in peer:\n        head = peer.split(\"::\")[0] if \"::\" in peer else peer",
+    "new": "    if False:\n        head = peer.split(\"::\")[0] if \"::\" in peer else peer"
+  },
+  {
+    "label": "an IPv6 next hop is the same as having no next hop",
+    "old": "    if via and not _looks_like_ipv4(via) and \":\" not in via:",
+    "new": "    if via and not _looks_like_ipv4(via):"
+  },
+  {
+    "label": "a Windows IPv6 address is filed as an IPv4 one",
+    "old": "                       \"family\": \"inet6\" if \":\" in win.group(1) else \"inet\",",
+    "new": "                       \"family\": \"inet\","
+  },
+  {
+    "label": "an IPv6 service address is probed on an IPv4 socket",
+    "old": "    family = socket.AF_INET6 if \":\" in (address or \"\") else socket.AF_INET",
+    "new": "    family = socket.AF_INET"
+  },
+  {
+    "label": "no host is ever an IPv6 literal",
+    "old": "    return \":\" in (host or \"\")",
+    "new": "    return False"
+  },
+  {
+    "label": "an IPv6 target is a name that failed to resolve",
+    "old": "    if target and not _looks_like_ipv4(target) and \":\" not in str(target):",
+    "new": "    if target and not _looks_like_ipv4(target):"
+  },
+  {
+    "label": "an IPv6 address is not an address",
+    "old": "        if \".\" not in addr and \":\" not in addr:",
+    "new": "        if \".\" not in addr:"
+  },
+  {
+    "label": "a link-local resolver is asked with its zone still attached",
+    "old": "    addr = server.split(\"%\")[0]",
+    "new": "    addr = server"
+  }
+]

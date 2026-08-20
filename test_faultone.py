@@ -10928,6 +10928,78 @@ class TestVocabulariesSomebodyElseMaintains(unittest.TestCase):
         behaviour for anything this does not recognise."""
         self.assertEqual(nd.annotation_means("!zz"), "!zz")
 
+    def _trace_ending_in(self, flag):
+        """A path that stops at a hop which said why, in one spelling."""
+        m = fresh()
+        trace(m, "traceroute to 8.8.8.8 (8.8.8.8), 20 hops max\n"
+                 " 1  10.0.0.1 (10.0.0.1)  0.5 ms  0.4 ms  0.4 ms\n"
+                 " 2  198.51.100.7 (198.51.100.7)  12.0 ms %s\n" % flag)
+        r = m.diagnose(quick=False, target="8.8.8.8", check_ports=None,
+                       baseline=None)
+        return [f for f in r["findings"] if f["code"] == "path_admin_prohibited"]
+
+    def test_every_spelling_of_a_refusal_reaches_the_finding(self):
+        """Which spelling a box prints depends on its traceroute build rather
+        than on what the router said, which is the entire reason this set
+        holds six entries for three refusals. Two of the six were driven by a
+        scenario and four sat in the tuple with nothing reaching them - so a
+        set that answered differently on two machines looking at one network
+        would have passed, which is the failure it was written to prevent.
+
+        The six are named here rather than read off the tuple, and the first
+        version of this test read them off it. Looping over the constant asks
+        whether each member works, never whether the members are right: delete
+        one and the loop shrinks with it, so the test went green against the
+        exact edit it exists to catch. It took a mutation to notice.
+        """
+        spellings = ("!X", "!A", "!Z", "!9", "!10", "!13")
+        self.assertEqual(tuple(nd.TRACE_PROHIBITED), spellings)
+        for flag in spellings:
+            with self.subTest(flag=flag):
+                said = self._trace_ending_in(flag)
+                self.assertEqual(len(said), 1)
+                # In words. The token is what the reader cannot look up.
+                self.assertNotIn(flag, said[0]["message"])
+                self.assertIn(nd.annotation_means(flag), said[0]["message"])
+
+    def test_a_refusal_says_which_of_the_three_it_was(self):
+        """The three differ by what the rule was written about - a network, a
+        host, or this traffic - and that is the half of the config somebody
+        goes and reads. Taken from traceroute(8) rather than from memory,
+        which had "!A" carrying the generic phrase."""
+        self.assertEqual(nd.annotation_means("!A"),
+                         "communication with destination network "
+                         "administratively prohibited")
+        self.assertEqual(nd.annotation_means("!Z"),
+                         "communication with destination host "
+                         "administratively prohibited")
+        self.assertEqual(nd.annotation_means("!X"), "administratively prohibited")
+        self.assertEqual(nd.annotation_means("!9"), "an ICMP unreachable, code 9")
+        self.assertEqual(nd.annotation_means("!10"), "an ICMP unreachable, code 10")
+
+    def test_a_path_that_does_not_work_is_not_somebody_refusing(self):
+        """"!T" was in the refusal set, and it is not one: it is "for this type
+        of service the destination host is unreachable" - a path that does not
+        carry this traffic, with no policy behind it and nobody to ask. It
+        fired a critical finding saying somebody configured this and there is
+        a person to go and talk to, which sends a reader hunting for a rule
+        that was never written."""
+        self.assertNotIn("!T", nd.TRACE_PROHIBITED)
+        self.assertEqual(nd.annotation_means("!T"),
+                         "for this type of service the destination host is "
+                         "unreachable")
+        self.assertEqual(self._trace_ending_in("!T"), [])
+
+    def test_an_annotation_this_tool_does_not_know_is_still_a_word(self):
+        """Every letter traceroute(8) defines has a meaning here, so a hop that
+        explained itself is never reported as the raw token. "!U", "!W", "!I"
+        and "!Q" were absent and printed as themselves."""
+        for flag, word in (("!U", "unknown"), ("!W", "unknown"),
+                           ("!I", "isolated"), ("!Q", "unreachable")):
+            with self.subTest(flag=flag):
+                self.assertIn(word, nd.annotation_means(flag))
+                self.assertNotIn("!", nd.annotation_means(flag))
+
     def test_the_words_reach_the_message_and_not_the_flag(self):
         """A vocabulary existing is not the same as it reaching the reader.
 
@@ -16496,7 +16568,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1055),
+            "on disk": (len(raw), 1056),
             "compressed": (len(gzip.compress(raw, 9)), 319),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
         }

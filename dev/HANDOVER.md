@@ -9,9 +9,10 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,820**, tree clean, `dev/counts.py --check` says nothing is
+Suite green at **1,824**, tree clean, `dev/counts.py --check` says nothing is
 stale, nothing pushed since v1.24.0. No release cut on top of it - the work
-since is tests and three behaviour fixes, so tag it whenever you like.
+since is tests and four behaviour fixes, one of which changes what a report
+says on a live box, so tag it whenever you like.
 
 The work in flight is one long thread: **asking whether the suite's tests do
 anything**, and it has produced five patterns that make the rest of it fast.
@@ -36,9 +37,9 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to seventeen ran on
-  2026-08-19: **45 mutations, 7 holes, 4 equivalent mutants**, in
-  `negatives-batch-ten` through `-seventeen.json`. Thirty-eight tests moved
+- **The empty-only sweep, continued.** Batches ten to eighteen ran on
+  2026-08-19: **52 mutations, 10 holes, 4 equivalent mutants**, in
+  `negatives-batch-ten` through `-eighteen.json`. Forty-eight tests moved
   from unexamined to known-real. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
@@ -49,7 +50,10 @@ times.
   side than the other. That beats "empty-only" as a selector. But batch
   seventeen found three of its four by reading **a comment that claims the code
   handles N shapes where the fixtures build one**, which is greppable in a way
-  that "imagine an input nobody built" is not. Start there.
+  that "imagine an input nobody built" is not, and batch eighteen found a
+  live defect the same way within one grep. Start there. What has been swept
+  already: "both spellings", "both forms", "three notations", the ping counter
+  pair. What has not: everything at `grep -n "either\|each of\|all three" `.
 
   **And a third ending for a survivor**, which batch fourteen added to the two
   already here. A guard subsumed *inside its own function* is untestable and
@@ -374,6 +378,48 @@ over the separator into the flag after the port, so `--dport 443 -j DROP`
 captures `443 -` and the last piece of nearly every rule is empty. The
 `isdigit` filter is what drops it, and it looks like defensive noise until you
 know that.
+
+**Batch eighteen: seven mutations, and the new selector paid for itself
+twice.** In `negatives-batch-eighteen.json`. `TRACE_PROHIBITED` holds six
+spellings of three refusals - the comment says so - and the suite built two of
+the six. Reading the table against traceroute(8) rather than against memory
+found two faults in one character.
+
+**"!T" was in the set and is not a refusal.** It is "for this type of service
+the destination host is unreachable": a path that does not carry this traffic,
+no policy behind it, nobody to ask. It was firing `path_admin_prohibited`,
+which is critical and says in as many words that somebody configured this and
+there is a person to go and talk to - so the report sent a reader hunting for a
+rule that was never written. **And "!Z" was in neither table**, which is the
+spelling a BSD traceroute prints for code 10. The refusal this set exists to
+catch was read as an unexplained silent path on exactly the boxes the letters
+were added for. `!A` also carried the generic phrase where it is specifically
+the *network* refusal, and four more letters traceroute defines - `!U`, `!W`,
+`!I`, `!Q` - were absent and printed as their own tokens.
+
+**The first version of the test that covers this was vacuous, and the shape is
+worth carrying.** It looped over `nd.TRACE_PROHIBITED` asking whether each
+member reaches the finding. Delete a member and the loop shrinks with it, so
+it went green against the exact edit it was written to catch - two mutations
+survived that should not have. **A test that iterates the constant it is
+checking cannot check the constant.** The six are named in the test now and
+the tuple is compared against them.
+
+**A false catch, and where it came from.** The first run of this batch reported
+a mutation caught by `TestOwnTlsListener.test_reading_the_fields_leaves_no_file
+_behind` - a TLS test with no connection to a traceroute constant. It was
+globbing the shared temp directory, so a second mutant suite's certificate
+landed in its window: six failures in ten under a competing writer. Fixed in
+its own commit. **Read which test caught a mutation, every time.** A mutation
+run cannot tell a real catch from a test failing for its own reasons, and the
+false one says "covered" about something nothing covers.
+
+**A gotcha that cost twenty minutes here.** `dev/counts.py` rewriting 1055 to
+1056 leaves the file the same length, and macOS caches bytecode by size and
+mtime under `~/Library/Caches/com.apple.python/` rather than in `__pycache__`.
+The suite then runs the old code against the new documents and fails on a
+number that is plainly correct in both files. Delete the cached `.pyc` there,
+not just `__pycache__`.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

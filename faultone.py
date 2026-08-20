@@ -6861,16 +6861,27 @@ IP_ANY_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 # these next to the time, and they were being dropped along with everything
 # else that was not a number - which is how a hop that told us exactly why it
 # would not forward was reported as an unexplained silent path.
+#
+# Checked against traceroute(8), which is where these are defined rather than
+# in RFC 1812 directly - the RFC names the ICMP codes and traceroute chooses
+# the letters. Two were wrong from memory and both mattered: "!A" is the
+# *network* refusal and had the generic phrase, and "!T" is not a refusal at
+# all. See TRACE_PROHIBITED below.
 TRACE_ANNOTATIONS = {
     "!X": "administratively prohibited",
-    "!A": "administratively prohibited",
+    "!A": "communication with destination network administratively prohibited",
+    "!Z": "communication with destination host administratively prohibited",
     "!H": "host unreachable",
     "!N": "network unreachable",
     "!P": "protocol unreachable",
     "!F": "fragmentation needed",
     "!S": "source route failed",
     "!C": "precedence cutoff",
-    "!T": "communication with destination network administratively prohibited",
+    "!T": "for this type of service the destination host is unreachable",
+    "!Q": "for this type of service the destination network is unreachable",
+    "!U": "destination network unknown",
+    "!W": "destination host unknown",
+    "!I": "the source host is isolated",
     "!V": "host precedence violation",
 }
 
@@ -6899,12 +6910,23 @@ TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]|!\d{1,3})(?=\s|$)")
 # what the router said - so a set holding only the letters answers differently
 # on two machines looking at one network. ICMP destination-unreachable codes 9,
 # 10 and 13 are network, host and communication administratively prohibited,
-# which is this finding in the numbering RFC 792 gave it.
+# which is this finding in the numbering RFC 792 gave it, and traceroute writes
+# those three as "!A", "!Z" and "!X".
+#
+# "!Z" was missing and "!T" was here in its place, which is two faults in one
+# character. "!T" is "for this type of service the destination host is
+# unreachable" - a path that does not work, with no policy behind it and
+# nobody to ask - and it was firing a critical finding that says somebody
+# configured this and there is a person to go and talk to. Meanwhile the
+# spelling a BSD traceroute actually prints for code 10 was in neither table,
+# so the refusal this set exists to catch was read as an unexplained silent
+# path on exactly the boxes the letters were added for. Both found by checking
+# the table against traceroute(8) rather than against memory.
 #
 # The test for the numeric half was written when the parser learned to read it,
 # and asserted only `if said:` - so it passed for a year against a rule that
 # never fired. Found by dev/vacuous.py, which is what that file is for.
-TRACE_PROHIBITED = ("!X", "!A", "!T", "!9", "!10", "!13")
+TRACE_PROHIBITED = ("!X", "!A", "!Z", "!9", "!10", "!13")
 
 
 def parse_traceroute_hops(output):

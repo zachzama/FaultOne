@@ -1,0 +1,37 @@
+[
+  {
+    "label": "the refusal set holds only the letter this box's traceroute prints",
+    "old": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!9\", \"!10\", \"!13\")",
+    "new": "TRACE_PROHIBITED = (\"!X\", \"!9\", \"!10\", \"!13\")"
+  },
+  {
+    "label": "the refusal set holds only the code this box's traceroute prints",
+    "old": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!9\", \"!10\", \"!13\")",
+    "new": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!13\")"
+  },
+  {
+    "label": "a named refusal is dropped from the set entirely",
+    "old": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!9\", \"!10\", \"!13\")",
+    "new": "TRACE_PROHIBITED = (\"!A\", \"!Z\", \"!9\", \"!10\", \"!13\")"
+  },
+  {
+    "label": "a path that does not carry this traffic is a refusal again",
+    "old": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!9\", \"!10\", \"!13\")",
+    "new": "TRACE_PROHIBITED = (\"!X\", \"!A\", \"!Z\", \"!T\", \"!9\", \"!10\", \"!13\")"
+  },
+  {
+    "label": "the network refusal gets the generic phrase back",
+    "old": "    \"!A\": \"communication with destination network administratively prohibited\",",
+    "new": "    \"!A\": \"administratively prohibited\","
+  },
+  {
+    "label": "an annotation this tool does not name falls through as its token",
+    "old": "    \"!U\": \"destination network unknown\",",
+    "new": "    \"!UU\": \"destination network unknown\","
+  },
+  {
+    "label": "a refusal nobody can name loses its number",
+    "old": "        return \"an ICMP unreachable, code %s\" % flag[1:]",
+    "new": "        return \"an ICMP unreachable\""
+  }
+]

@@ -308,40 +308,44 @@ this; the gateway side did not** - the two share a shape, which is how a
 boundary ends up covered on one side only, and is worth checking for wherever a
 rule exists in both directions.
 
-**Triaged. Two were real, four are equivalent, one is still open.**
+**Triaged and closed. Three were real, six were equivalent, one was dead
+code.**
 
-*Real, and both were the same shape - a fixture that short-circuits before
+*Real, and all three the same shape - a fixture that short-circuits before
 reaching the condition:*
 
 - `_check_link_modes` guards `100 < speed < capacity` with `speed is not None`.
-  The test named for unknown speed has **no capacity**, so it short-circuits one
-  condition earlier and never drives this one. `ethtool` prints the supported
-  modes and `Speed: Unknown!` on a port that is down or unplugged, so capacity
-  known and speed unknown is ordinary - and without the guard it is `100 <
-  None`, a TypeError, on an unplugged port.
-- The tunnel MTU guard and the `not quick` half of `_check_path_mtu` closed with
-  it.
+  The test named for unknown speed has **no capacity**, so it stops one
+  condition earlier. `ethtool` prints `Speed: Unknown!` with the supported modes
+  on a port that is down, so capacity-known-and-speed-unknown is ordinary - and
+  without the guard that is `100 < None` on an unplugged port.
+- The same function notes a tunnel's MTU only when it differs from the
+  standard. Every fixture used a smaller tunnel, so nothing drove
+  `mtu != STANDARD_MTU`, and without it every tunnel on every box gets a note.
+- The `not quick` half of `_check_path_mtu`.
 
-*Equivalent, and all four for one reason:* **the gate is a count and the
-condition beside it is a rate derived from that same count.** `live_drops` with
-`live_ppm`, `collisions` with `coll_ppm`, `errors` with `err_ppm` - a zero
-count makes the rate zero, so the rate test already refuses. Two `_check_path`
-gates on `lossy` are the same idea: `final_loss >= 5` cannot be true unless the
-final hop is in the lossy list. `_check_call_quality` guards `avg` and `floor`
-separately when `parse_ping_stats` sets both or neither.
+*Equivalent, six of them, and five for one reason:* **the gate is a count and
+the condition beside it is a rate derived from that same count.** `live_drops`
+with `live_ppm`, `collisions` with `coll_ppm`, `errors` with `err_ppm`, and two
+`_check_path` gates on `lossy` - `final_loss >= 5` cannot be true unless the
+final hop is lossy. `_check_call_quality` guards `avg` and `floor` separately
+when `parse_ping_stats` sets both or neither. All six are out of the set: a
+mutation that can never be caught makes it permanently red.
 
-*Still open:* `_check_path` condition 3 -
-`not stalled[-1]["hop"] == hops[-1]["hop"]`. A trace that stalls **at the
-destination** is a destination that did not answer, not a path that stopped
-part way, and the two have different owners. That reads as a real gap and is
-the next one to write.
+*Dead code, one.* `_check_path` had a second `if` computing whether the stall
+reached the last hop, whose body was `pass`. It read as the guard making that
+decision while the decision was made by the next `if`, and its comment was the
+only part doing any work. Removed, comment kept where the work happens. **My
+triage called this one a likely real gap and it was not** - a mutation on dead
+code survives exactly like a mutation on an untested one, and only reading the
+body tells them apart.
 
 The set is `dev/mutations/multi-condition.json`; regenerate after edits, because
 the anchors are whole guard expressions and move easily.
 
-**Seventy-eight of the 121 examined. Eleven real gaps, eleven equivalent
-mutants, nine explained by one contract.** Forty-three left, plus one survivor
-above still to write.
+**Seventy-eight of the 121 examined. Twelve real gaps, thirteen equivalent
+mutants, one piece of dead code, nine explained by one contract.** Forty-three
+left.
 
 *A fifth pattern, from this triage:* **a fixture that short-circuits before the
 condition under test.** Both real gaps here had a test named for exactly the

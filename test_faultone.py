@@ -3674,6 +3674,17 @@ class TestATunnelIsNotAMisconfiguredWire(unittest.TestCase):
         self.assertIn("1420", note["message"])
         self.assertEqual(note["severity"], "ok")
 
+    def test_a_tunnel_at_the_standard_size_says_nothing_at_all(self):
+        """A tunnel is only worth a note when its MTU differs from the standard
+        - that is the number deciding whether the traffic inside it fits. One
+        sitting at 1500 has nothing to say, and every fixture here uses a
+        smaller tunnel, so a mutation deleting `mtu != STANDARD_MTU` survived:
+        it would put a note on every tunnel on every box."""
+        rep = self.box("tun0", nd.STANDARD_MTU)
+        codes = [f["code"] for f in rep["findings"]]
+        self.assertNotIn("tunnel_mtu", codes)
+        self.assertNotIn("mtu_nonstandard", codes)
+
     def test_a_real_interface_is_still_reported(self):
         rep = self.box("eth1", 1400)
         self.assertIn("mtu_nonstandard", [f["code"] for f in rep["findings"]])

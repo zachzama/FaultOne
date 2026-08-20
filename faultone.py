@@ -15937,12 +15937,16 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                        f"decision. Somebody configured that, so there is a policy to read "
                        f"and a person to ask rather than a carrier to open a ticket with.",
         })
-    stalled = [h for h in hops if h["timed_out"]] if not quick else []
-    if stalled and hops and not stalled[-1]["hop"] == hops[-1]["hop"]:
-        # a timeout in the middle of the path, with hops succeeding after it, usually just
-        # means that hop doesn't reply to traceroute probes (common/benign) - only flag a
-        # run of timeouts that goes all the way to the last hop we saw.
-        pass
+    # A timeout in the middle of the path, with hops answering after it, usually
+    # means that one hop declines traceroute probes - common and benign. Only a
+    # run of timeouts reaching the last hop seen is worth reporting, which is
+    # what the condition below measures.
+    #
+    # There was a second `if` here that computed the same idea and did nothing
+    # with it: its body was `pass`. It read as the guard making this decision
+    # while the decision was made below, and the comment above it - now this one
+    # - was the only part doing any work. Found by a mutation deleting one of
+    # its conditions and surviving, which is what a mutation on dead code does.
     if hops and all(h["timed_out"] for h in hops[-3:]) and len(hops) >= 3:
         findings.append({
             "severity": "warning",

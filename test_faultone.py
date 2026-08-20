@@ -3636,6 +3636,14 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
         indentation as whatever follows the function.
         """
         start = node.lineno - 1
+        # Past any decorators first. Before 3.8 a decorated function's lineno
+        # is the decorator, which sits at the same indentation as the `def`
+        # under it - so scanning from there stopped at the `def` itself and
+        # handed back a one-line body. Every @collector in the file read as
+        # containing nothing, which is how this went red on 3.7 twice.
+        while (start < len(lines) - 1
+               and not lines[start].lstrip().startswith(("def ", "async def "))):
+            start += 1
         indent = len(lines[start]) - len(lines[start].lstrip())
         end = len(lines)
         for i in range(start + 1, len(lines)):
@@ -3670,6 +3678,32 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
                 'startswith("lo")' in body or '!= "lo"' in body,
                 bool(skips_idle))
         return found
+
+    def test_the_extent_is_the_same_on_the_floor_interpreter(self):
+        """This class reads the file by hand, and twice now it has been right
+        here and wrong on 3.7 - the version CI runs to prove the tool works
+        there. Nothing on this machine could catch either one.
+
+        The difference is one line number: before 3.8 a decorated function's
+        `lineno` is its first decorator rather than its `def`. That is
+        reproducible without the interpreter, so it is asserted rather than
+        hoped for - every function must come out the same whichever line
+        number the parser would have handed over.
+        """
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        lines = src.splitlines()
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.decorator_list:
+                continue
+            older = ast.parse("pass").body[0]
+            older.lineno = node.decorator_list[0].lineno
+            with self.subTest(function=node.name):
+                self.assertEqual(self._body_of(lines, node),
+                                 self._body_of(lines, older))
 
     def test_every_judgement_about_an_interface_skips_the_idle_ones(self):
         """The other half of the same expressions, and the same blind spot:

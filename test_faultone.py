@@ -3383,6 +3383,27 @@ class TestWhatTheCauseAccountsFor(unittest.TestCase):
         self.assertIn("inet_partial_loss", v["explains"])
         self.assertEqual([u["code"] for u in v["unrelated"]], [])
 
+    def test_a_second_reading_from_the_same_check_is_not_a_second_problem(self):
+        """Four port results are four instances of one check, and two optical
+        readings are two views of one module. Counting a sibling as a separate
+        fault is the report telling somebody to go and look at a second thing
+        that is the first thing.
+
+        Nothing was driving this filter: deleting it makes `optics_warning`
+        arrive as unrelated underneath `optics_rx_low`, and no test in 1,812
+        noticed."""
+        v = self.verdict(self.f("optics_rx_low", "critical", 1),
+                         self.f("optics_warning", "warning", 4))
+        self.assertEqual([u["code"] for u in v["unrelated"]], [])
+        self.assertEqual(v["unrelated_total"], 0)
+
+    def test_a_finding_from_a_different_check_still_counts_as_separate(self):
+        """The other half, so the test above cannot pass by nothing ever being
+        called unrelated."""
+        v = self.verdict(self.f("optics_rx_low", "critical", 1),
+                         self.f("tls_expired", "critical", 7))
+        self.assertEqual([u["code"] for u in v["unrelated"]], ["tls_expired"])
+
     def test_a_cable_does_not_account_for_an_expired_certificate(self):
         """Layer distance cannot express this on its own: the certificate is
         further up the stack and no amount of fixing the cable renews it."""
@@ -16383,7 +16404,7 @@ class TestDocsMatchReality(unittest.TestCase):
                       encoding="utf-8").read()
         claims = {
             "on disk": (len(raw), 1054),
-            "compressed": (len(gzip.compress(raw, 9)), 318),
+            "compressed": (len(gzip.compress(raw, 9)), 319),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 218),
         }
         for label, (measured, quoted) in claims.items():

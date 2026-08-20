@@ -291,6 +291,31 @@ Worth catching, too: a hostname with three dots in it splits into four parts, so
 `dns_ptr`'s own length guard lets it through and the box sends a reverse query
 for something that was never an address.
 
+**Batch fifteen: five mutations on the baseline comparison, all caught.** In
+`negatives-batch-fifteen.json`. Context findings excluded from the diff, the
+comparison not diffing its own summary, an unchanged severity not reported as a
+change, the direction on a fault that cleared, and the local-only filter when
+the target moved. That feature is well covered; nothing to do there.
+
+**Batch sixteen: six on the cause-and-consequence rules, one hole and one
+equivalent.** In `negatives-batch-sixteen.json`, now five.
+
+The hole is the family filter in `build_verdict`. Four port results are four
+instances of one check and two optical readings are two views of one module, and
+that filter is the only thing stopping a sibling being reported as a *separate
+problem*. Delete it and `optics_warning` arrives as unrelated underneath
+`optics_rx_low` - the report sending somebody to look at a second thing that is
+the first thing. `test_a_symptom_of_the_cause_is_not_called_unrelated` is named
+for exactly this and does not reach it; no scenario in the corpus produces two
+findings from one family. Two tests now, the second being a genuinely separate
+check so the first cannot pass by nothing ever being called unrelated.
+
+The equivalent one is `f.get("code") != code` in the same expression: a finding
+is always in its own family, so the family test already excludes the cause. The
+line stays - it says the obvious thing directly, and the family test is a
+judgement that could be narrowed later - with a comment, and the mutation is out
+of the set.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
 mutation means the test is real. Two things learned from eleven so far:

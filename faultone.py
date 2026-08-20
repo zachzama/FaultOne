@@ -10961,6 +10961,13 @@ def build_verdict(findings, quick=False, raw=None):
                     and _sides_can_agree(side, finding_side(f.get("code"))))
 
         candidates = [f for f in findings
+                      # `!= code` cannot change an answer on its own - the
+                      # family test below already excludes the cause, because a
+                      # finding is always in its own family. Kept because it
+                      # states the obvious thing directly, and because the
+                      # family test is a judgement that could be narrowed.
+                      # Untestable by mutation for that reason, and out of the
+                      # set rather than sitting permanently red.
                       if f.get("code") != code
                       and f["severity"] in ("warning", "critical")
                       and f.get("code") not in VERDICT_EXEMPT

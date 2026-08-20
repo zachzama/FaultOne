@@ -1,0 +1,27 @@
+[
+  {
+    "label": "context findings are diffed between visits",
+    "old": "                if f.get(\"severity\") in _COMPARED_SEVERITIES",
+    "new": "                if f.get(\"severity\") in (\"warning\", \"critical\", \"ok\")"
+  },
+  {
+    "label": "the comparison diffs its own summary of the last comparison",
+    "old": "                and f.get(\"code\") and f[\"code\"] not in _ABOUT_THE_COMPARISON}",
+    "new": "                and f.get(\"code\")}"
+  },
+  {
+    "label": "a finding present at the same severity is reported as a change",
+    "old": "        if before == after:\n            continue",
+    "new": "        if False:\n            continue"
+  },
+  {
+    "label": "a fault that cleared is reported as a regression",
+    "old": "        out.append({\"what\": HEADLINE.get(code) or code, \"before\": was[code][\"severity\"],\n                    \"after\": \"gone\", \"direction\": \"better\"})",
+    "new": "        out.append({\"what\": HEADLINE.get(code) or code, \"before\": was[code][\"severity\"],\n                    \"after\": \"gone\", \"direction\": \"worse\"})"
+  },
+  {
+    "label": "two visits that measured different targets are diffed in full",
+    "old": "        was = {c: f for c, f in was.items() if finding_side(c) == \"local\"}\n        now = {c: f for c, f in now.items() if finding_side(c) == \"local\"}",
+    "new": "        pass"
+  }
+]

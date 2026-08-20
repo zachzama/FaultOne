@@ -1,0 +1,27 @@
+[
+  {
+    "label": "a cause accounts for a finding beneath it as well as above",
+    "old": "            return ((f.get(\"layer\") or 0) > layer\n                    and _sides_can_agree(side, finding_side(f.get(\"code\"))))",
+    "new": "            return _sides_can_agree(side, finding_side(f.get(\"code\")))"
+  },
+  {
+    "label": "a fault facing the other way is accounted for anyway",
+    "old": "            return ((f.get(\"layer\") or 0) > layer\n                    and _sides_can_agree(side, finding_side(f.get(\"code\"))))",
+    "new": "            return (f.get(\"layer\") or 0) > layer"
+  },
+  {
+    "label": "anything above the cause is explained, not only a transport symptom",
+    "old": "        explains = [f for f in candidates\n                    if f.get(\"code\") in TRANSPORT_SYMPTOMS\n                    and _above_and_facing_the_same_way(f)]",
+    "new": "        explains = [f for f in candidates\n                    if _above_and_facing_the_same_way(f)]"
+  },
+  {
+    "label": "a finding is both explained by the cause and listed as unrelated",
+    "old": "        unrelated = [f for f in candidates\n                     if id(f) not in explained",
+    "new": "        unrelated = [f for f in candidates\n                     if True"
+  },
+  {
+    "label": "a finding in the cause's own family is treated as a separate problem",
+    "old": "                      and _finding_family(f.get(\"code\")) != family]",
+    "new": "                      and True]"
+  }
+]

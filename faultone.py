@@ -17409,7 +17409,11 @@ def _check_gateway(raw, gw, probes, arp_entries=None):
                     "message": f"Intermittent packet loss ({loss:.0f}%"
                                + (f", {lost} of {sent} probes" if sent else "")
                                + f") to the gateway ({gw}). Possible unstable cabling, "
-                                 f"Wi-Fi interference, or an overloaded switch/AP.",
+                                 f"Wi-Fi interference, or an overloaded switch/AP. "
+                                 f"Measured with ICMP echo, so it is this probe's rate "
+                                 f"rather than your traffic's - a gateway busy enough to "
+                                 f"deprioritise its own control plane answers slowly while "
+                                 f"forwarding perfectly.",
                 })
     return found
 
@@ -17654,7 +17658,7 @@ def _check_proxy(raw, target):
     return found
 
 
-def _check_internet(raw, findings, target, probes):
+def _check_internet(raw, findings, target, probes, ping_wait=2):
     """Does traffic get off the site, and is the gateway ruled out first?
 
     "The internet is unreachable" is only worth saying when the gateway itself
@@ -17805,10 +17809,24 @@ def _check_internet(raw, findings, target, probes):
                 "severity": "warning",
                 "code": "inet_partial_loss",
                 "layer": 3,
+                # Type-P, per RFC 2680: "the value could change if the
+                # protocol, port number, size, or arrangement for special
+                # treatment changes", so a loss figure only applies to the
+                # packet type that measured it. This is ICMP echo, and routers
+                # deprioritise it by policy - a reader who takes 25% here as
+                # 25% of their traffic is making exactly the inference the RFC
+                # exists to warn against. The same RFC requires the threshold
+                # that separates a very late packet from a lost one to be
+                # reported, which is the ping timeout.
                 "message": f"Packet loss ({inet_loss:.0f}%"
                            + (f", {lost} of {sent} probes" if sent else "")
                            + f") reaching {target} even though some replies get through. "
-                             f"Suggests upstream congestion or an unstable WAN link.",
+                             f"Suggests upstream congestion or an unstable WAN link. "
+                             f"Measured with ICMP echo, counting a reply later than "
+                             f"{ping_wait}s as lost: that rate is this probe's, not your "
+                             f"traffic's, and many routers deprioritise ICMP by policy. "
+                             f"The per-connection figures below are TCP and are the "
+                             f"better answer where they exist.",
             })
     return inet_loss
 
@@ -18273,7 +18291,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     findings += _check_gateway(raw, gw, probes, arp_entries)
 
     findings += _check_proxy(raw, target)
-    inet_loss = _check_internet(raw, findings, target, probes)
+    inet_loss = _check_internet(raw, findings, target, probes, ping_wait)
 
     say("reading the path and measuring MTU")
     hops, path_insight, path_source = _check_path(

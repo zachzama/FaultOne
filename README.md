@@ -93,7 +93,7 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 1074 KB of
+`-C` because OpenSSH doesn't compress by default, and the file is 1075 KB of
 repetitive text: it goes over the wire at 325 KB with compression on, for the
 cost of one flag.
 
@@ -107,7 +107,7 @@ ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 222 KB on t
 ```
 
 That needs Python 3.9 on **your** machine, and so does the box.
-Stripped and compressed together it's 222 KB instead of 1074. That is 79%
+Stripped and compressed together it's 222 KB instead of 1075. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.

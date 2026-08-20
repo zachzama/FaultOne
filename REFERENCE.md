@@ -1149,6 +1149,51 @@ trip, so counting it as an independent second opinion put a slow path at high
 confidence on a single measurement, the same inflation two cables produced,
 in a different guise. Both, and the wall, are now one family.
 
+## What the standards say about these numbers
+
+Audited 2026-08-20 against RFC 2680 (loss), RFC 3393 (delay variation) and RFC
+5481 (which of the two delay-variation forms to use). Three results, and the
+first is the most useful.
+
+**The floor-and-queue split is PDV, and the RFC says so in as many words.**
+This tool takes the minimum round trip as the floor and calls everything above
+it time spent waiting. RFC 5481 defines exactly that as PDV - delay against the
+sample minimum - and states: *"When the sample minimum coincides with the true
+minimum delay of the path, then the PDV distribution is equivalent to the
+queuing time distribution experienced by the test stream."* That is the claim
+`latency_high` and `latency_is_queuing` make, arrived at independently and
+standardised. It also endorses the shape: *"The one-sided PDV distribution can
+be constrained with a single statistic, such as an upper percentile, so it is
+preferred"* - which is what `tail_of_*_slow` does.
+
+**Where we diverge, on purpose.** `path_jitter_*` uses TCP's `rtt_var`, a
+smoothed mean deviation, which is neither IPDV nor PDV. RFC 5481 is blunt about
+that family: the IPDV distribution *"is two-sided, usually has zero mean, and no
+universal summary statistic that relates to a physical quantity has emerged."*
+We use it anyway because it is a measurement of **the traffic** rather than of a
+probe, which is worth more here than conformity - but the threshold behind it is
+a judgement and not a derivation, and that is now written down rather than
+implied. The RFC's own recommended quantile is the 99.9th, for de-jitter buffer
+sizing; `TAIL_RATIO` uses a p95 against the median because it is answering a
+different question - which connections are unlike the others - not sizing a
+buffer.
+
+**Loss carries its type and its threshold now, because RFC 2680 requires both.**
+*"The threshold (or methodology to distinguish) between a large finite delay and
+loss MUST be reported"*, and the metric is Type-P: *"the value could change if
+the protocol, port number, size, or arrangement for special treatment
+changes."* So a loss rate belongs to the packet type that measured it. Every
+ICMP loss finding says so and names the timeout, because a reader taking "25%"
+as 25% of their traffic is making precisely the inference that RFC exists to
+warn against - and on these boxes, where ICMP is deprioritised or filtered more
+often than not, it is the likeliest misreading in the whole report.
+
+**One thing it confirmed rather than changed.** RFC 2680 notes that healthy
+paths run below 1% loss, so *"the sample sizes needed might be larger than one
+would like"* - which is why `MIN_PROBES_FOR_LOSS` exists and why
+`inet_loss_unmeasured` refuses to call a percentage a rate. That was already
+right.
+
 ## Why it is slow, not only that it is
 
 A round trip is two things added together, and the tool measured only their

@@ -16887,7 +16887,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1074),
+            "on disk": (len(raw), 1075),
             "compressed": (len(gzip.compress(raw, 9)), 325),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
         }
@@ -24382,10 +24382,13 @@ class TestEveryFindingFires(unittest.TestCase):
         report = mod.diagnose("8.8.8.8", None, quick=False, baseline=None)
         self.assertEqual(report["verdict"]["based_on"][0], "gw_partial_loss")
         # As above, for the gateway: the rate and the sample behind it.
+        gw_said = next(f["message"] for f in report["findings"]
+                       if f["code"] == "gw_partial_loss")
         self.assertIn("Intermittent packet loss (25%, 5 of 20 probes) to the "
-                      "gateway (10.0.0.1)",
-                      next(f["message"] for f in report["findings"]
-                           if f["code"] == "gw_partial_loss"))
+                      "gateway (10.0.0.1)", gw_said)
+        # Type-P again, and it matters more here: a gateway deprioritising its
+        # own control plane answers ICMP slowly while forwarding perfectly.
+        self.assertIn("Measured with ICMP echo", gw_said)
 
     def test_every_latent_code_exists_and_is_never_critical(self):
         """A latent finding describes a risk. If one is emitted as critical the
@@ -25163,9 +25166,19 @@ class TestEveryFindingFires(unittest.TestCase):
         # The rate and the sample it came from. Both survived a mutation
         # replacing them with zero: this finding fires on almost every degraded
         # run, so a wrong figure here is wrong on most reports the tool makes.
-        self.assertIn("Packet loss (25%, 5 of 20 probes) reaching 8.8.8.8",
-                      next(f["message"] for f in report["findings"]
-                           if f["code"] == "inet_partial_loss"))
+        said = next(f["message"] for f in report["findings"]
+                    if f["code"] == "inet_partial_loss")
+        self.assertIn("Packet loss (25%, 5 of 20 probes) reaching 8.8.8.8", said)
+        # Type-P and the loss threshold, both required by RFC 2680. "The value
+        # could change if the protocol, port number, size, or arrangement for
+        # special treatment changes" - so a rate belongs to the packet type
+        # that measured it, and a reader taking 25% here as 25% of their
+        # traffic is making the exact inference the RFC warns against. The
+        # threshold separating a very late packet from a lost one MUST be
+        # reported, and here it is the ping timeout.
+        self.assertIn("Measured with ICMP echo", said)
+        self.assertIn("counting a reply later than 2s as lost", said)
+        self.assertIn("not your traffic's", said)
 
     def test_more_than_one_lost_probe_counts_even_in_a_small_sample(self):
         """Two of four is not a rate-limited reply; it is half the traffic."""

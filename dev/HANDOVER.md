@@ -95,6 +95,38 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### Audited against two outside vocabularies (2026-08-20)
+
+The method that has paid every time: **take somebody else's closed enum of
+outcomes and account for every entry.** Not their feature list - that produces a
+wish-list of inputs, and a tool with twice the checks and no ordering hands you
+twice as much to read.
+
+**The kernel's `SKB_DROP_REASON_*`** - 131 entries, the authoritative list of
+why it discards a packet. Most map to findings that already exist
+(`TCP_LISTEN_OVERFLOW`, `CPU_BACKLOG`, `NETFILTER_DROP`, `IP_OUTNOROUTES`,
+`FRAG_*`, `PROTO_MEM`, `FULL_RING`, the checksum family). Many are unreachable
+without tracepoints or are out of scope (CAN, VXLAN, PSP, bridge STP) and are
+declined on purpose. **One was a real gap: `IP_RPFILTER`** - now
+`return_path_filtered`.
+
+**RFC 4898 tcpEStats.** The headline is that `throughput_limited_by` had
+already converged on `SndLimTime{Cwnd,Rwin,Snd}` - path, far end, this box -
+without knowing it. That is worth as much as a gap: it says the model is the
+one the standard reached. **The gap both vocabularies named** was the zero
+window: RFC 4898's `ZeroRwinSent` and the kernel's `TCP_ZEROWINDOW` are the
+same event, and neither counter was being kept. Now `zero_window_here`.
+
+Two independent lists pointing at the same hole is the strongest signal this
+exercise produces. Where they agree, believe them.
+
+**Still unmined, in the order I would take them:** `ca_state` (the five states
+the stack itself reports, already in `ss` output and unread), RFC 4898's
+`Timeouts` and dup-ack/reordering objects, and RFC 2680/3393 - which would not
+add findings but would test the *thresholds*, the one thing no self-check can
+reach.
+
+
 ## Done: the floor is Python 3.9
 
 Moved 2026-08-20. `MIN_PYTHON = (3, 9)`, the CI matrix row is

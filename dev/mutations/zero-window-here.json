@@ -1,0 +1,17 @@
+[
+ {"label": "the zero-window counter goes unread again",
+  "old": "    shut = delta.get(\"TCPZeroWindowDrop\", 0) + delta.get(\"TCPRcvQDrop\", 0)",
+  "new": "    shut = 0"},
+ {"label": "only one of the two counters is read",
+  "old": "    shut = delta.get(\"TCPZeroWindowDrop\", 0) + delta.get(\"TCPRcvQDrop\", 0)",
+  "new": "    shut = delta.get(\"TCPZeroWindowDrop\", 0)"},
+ {"label": "a box that is reading is reported anyway",
+  "old": "    if shut:\n        found.append({\n            \"severity\": \"warning\",\n            \"layer\": 4,\n            \"code\": \"zero_window_here\",",
+  "new": "    if True:\n        found.append({\n            \"severity\": \"warning\",\n            \"layer\": 4,\n            \"code\": \"zero_window_here\","},
+ {"label": "the counters are dropped from what the reader keeps",
+  "old": "                           \"TCPZeroWindowDrop\", \"TCPRcvQDrop\",",
+  "new": ""},
+ {"label": "the owner becomes the network again",
+  "old": "    (\"zero_window_here\", \"the service on this box, not its network\",",
+  "new": "    (\"zero_window_here\", \"the path into this box\","}
+]

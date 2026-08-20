@@ -16887,8 +16887,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1071),
-            "compressed": (len(gzip.compress(raw, 9)), 324),
+            "on disk": (len(raw), 1074),
+            "compressed": (len(gzip.compress(raw, 9)), 325),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
         }
         for label, (measured, quoted) in claims.items():
@@ -20997,6 +20997,68 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         self.assertEqual(rep["worst_queue_jump"]["asn"], "AS15169")
 
 
+class TestTheApplicationThatStoppedReading(unittest.TestCase):
+    """A zero window: the one drop on this box whose owner is a process.
+
+    Found by auditing against two closed vocabularies that turned out to agree.
+    RFC 4898 counts it as `ZeroRwinSent`; the kernel drops it as
+    `SKB_DROP_REASON_TCP_ZEROWINDOW`. Neither counter was kept here, and the
+    same audit confirmed `throughput_limited_by` had already converged on RFC
+    4898's `SndLimTime{Cwnd,Rwin,Snd}` without knowing it - which is the
+    argument for reading somebody else's enum rather than their feature list.
+
+    The socket, the stack and the cable are all working. What is not happening
+    is a read, and no network change fixes that.
+    """
+
+    def fired(self, zero=0, rcvq=0):
+        mod = fresh()
+        kernel_drops(mod, {"TCPZeroWindowDrop": 0, "TCPRcvQDrop": 0},
+                          {"TCPZeroWindowDrop": zero, "TCPRcvQDrop": rcvq})
+        return [f for f in mod.diagnose("8.8.8.8", None, quick=False)["findings"]
+                if f["code"] == "zero_window_here"]
+
+    def test_a_shut_window_is_reported(self):
+        self.assertEqual(len(self.fired(zero=400)), 1)
+
+    def test_it_counts_both_counters_the_kernel_splits_it_across(self):
+        """TCPZeroWindowDrop is data refused at a closed window and TCPRcvQDrop
+        is data refused by a full queue behind it. Two names for one thing
+        going unread, and reporting either alone understates it."""
+        self.assertIn("460 incoming segment(s)",
+                      self.fired(zero=400, rcvq=60)[0]["message"])
+
+    def test_a_box_that_is_reading_says_nothing(self):
+        self.assertEqual(self.fired(), [])
+
+    def test_the_owner_is_the_process_and_not_the_network(self):
+        """The whole point of the finding. Every other drop on this box is a
+        queue, a cable or a table; this one is a program."""
+        said = self.fired(zero=400)[0]["message"]
+        self.assertIn("what did not happen is a process reading it", said)
+        owner = dict((c, o) for c, o, _h, _n in nd.VERDICT_RULES)["zero_window_here"]
+        self.assertIn("not its network", owner)
+
+    def test_it_says_which_vocabularies_name_it(self):
+        """So the next person auditing against either one finds it covered
+        rather than adding it twice."""
+        said = self.fired(zero=400)[0]["message"]
+        self.assertIn("RFC 4898", said)
+        self.assertIn("TCP_ZEROWINDOW", said)
+
+    def test_the_throughput_split_is_rfc4898_s_and_still_agrees_with_it(self):
+        """`throughput_limited_by` names path, far end and this box, which is
+        SndLimTimeCwnd, SndLimTimeRwin and SndLimTimeSnd. Converged on
+        independently - asserted so a later edit cannot quietly drift the three
+        apart from the standard they match."""
+        src = inspect.getsource(nd)
+        i = src.index('"code": "throughput_limited_by"')
+        block = src[i - 2000:i + 2000]
+        for phrase in ("the path", "the far end", "send buffer"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, block)
+
+
 class TestTheBoxThatDropsItsOwnReturnTraffic(unittest.TestCase):
     """Asymmetric routing on a box configured to discard it.
 
@@ -23886,6 +23948,17 @@ def _(nd): kernel_drops(nd, {"OutRsts": 0, "PassiveOpens": 1_000, "EstabResets":
 def _(nd): kernel_drops(nd, {"TCPSynRetrans": 0, "ActiveOpens": 1_000},
                             {"TCPSynRetrans": 9, "ActiveOpens": 1_100})   # 9 of 100
 
+@scenario("zero_window_here")
+def _(nd):
+    """This box accepting data and not reading it.
+
+    RFC 4898 counts this as ZeroRwinSent and the kernel drops it as
+    SKB_DROP_REASON_TCP_ZEROWINDOW - two closed vocabularies naming the same
+    event, and neither counter was kept here until they were audited against.
+    """
+    kernel_drops(nd, {"TCPZeroWindowDrop": 0, "TCPRcvQDrop": 0},
+                     {"TCPZeroWindowDrop": 400, "TCPRcvQDrop": 60})
+
 @scenario("rcv_buffer_pruned")
 def _(nd): kernel_drops(nd, {"RcvPruned": 0, "PruneCalled": 0},
                             {"RcvPruned": 40, "PruneCalled": 12})
@@ -25274,6 +25347,30 @@ class TestEveryFindingFires(unittest.TestCase):
         res = mod.cmd_kernel_drops()
         self.assertFalse(res["ok"])
         self.assertIn("Linux", res["error"])
+
+    def test_the_counters_a_finding_needs_survive_the_real_parse(self):
+        """The reader keeps an explicit allowlist of netstat counters, and a
+        scenario stubs `_read_kernel_drops` outright - so a counter can be
+        named by a finding, driven by every scenario, and still never make it
+        out of /proc/net/netstat.
+
+        A mutation deleting the two zero-window counters from that list
+        survived a whole run for exactly that reason: the fixture injects past
+        the code under test. This drives the parser itself."""
+        import io
+        head = ("TcpExt: TCPZeroWindowDrop TCPRcvQDrop TCPBacklogDrop RcvPruned\n"
+                "TcpExt: 400 60 7 3\n")
+        mod = fresh()
+        mod.OS_NAME = "Linux"
+        mod.open = lambda path, *a, **k: (io.StringIO(head) if "netstat" in path
+                                          else io.StringIO(""))
+        # The allowlist lives in _read_listen_drops, which _read_kernel_drops
+        # composes - so restoring only the outer one leaves this reading a
+        # stub, which is the same short-circuit the mutation exposed.
+        mod._read_listen_drops = mod.AS_WRITTEN["_read_listen_drops"]
+        got = mod._read_listen_drops()
+        self.assertEqual(got.get("TCPZeroWindowDrop"), 400)
+        self.assertEqual(got.get("TCPRcvQDrop"), 60)
 
     def test_softnet_columns_are_read_as_hex(self):
         """One row per CPU, and every column is hex. Reading them as decimal

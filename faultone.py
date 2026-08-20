@@ -4078,6 +4078,13 @@ def _read_listen_drops():
                            "TCPAbortOnTimeout", "TCPAbortOnClose",
                            "TCPAbortFailed", "TCPReqQFullDrop",
                            "PruneCalled", "RcvPruned", "TCPBacklogDrop",
+                           # Data this box threw away because its own receive
+                           # window was shut. RFC 4898 calls it ZeroRwinSent
+                           # and the kernel calls it TCP_ZEROWINDOW; both name
+                           # it and neither counter was being kept. It is the
+                           # one drop here whose owner is a process rather than
+                           # a queue - see zero_window_here.
+                           "TCPZeroWindowDrop", "TCPRcvQDrop",
                            # Evidence that a retransmission was unnecessary.
                            # Without these the tool reports every retransmit as
                            # loss, which is what a packet capture would argue
@@ -7978,6 +7985,12 @@ VERDICT_RULES = [
      "The physical link into this device is corrupting frames right now",
      "Reseat or replace the cable and try a different switch port; if the errors "
      "follow the device, it's the NIC or its transceiver."),
+    ("zero_window_here", "the service on this box, not its network",
+     "This box is dropping data because the application is not reading it",
+     "A zero window means the socket, the stack and the cable are all working "
+     "and the process on top of them is not keeping up. No network change "
+     "fixes it. Look at what is listening: a service blocked on something "
+     "slower than its clients, an exhausted thread pool, or a stalled disk."),
     ("rcv_buffer_pruned", "this device - it is out of socket memory",
      "This device is discarding received data for lack of buffer memory",
      "The kernel could not find memory for packets it had already accepted. It produces "
@@ -8998,6 +9011,7 @@ _LOCAL_FAULTS = (
     "source_address_not_held",
     # This box failing to keep up, in both directions at once.
     "nic_drops_live", "nic_drops_historical", "drops_live", "rcv_buffer_pruned",
+    "zero_window_here",
     "nic_ring_overruns", "frame_length_errors",
     "cpu_throttled_live", "cpu_throttled_historical", "fault_on_every_interface",
     "conntrack_drops_live", "conntrack_drops_historical", "conntrack_near_limit",
@@ -9197,7 +9211,7 @@ STAGE_RULES = [
      {"service_address_unserved", "service_address_idle", "service_endpoint_idle",
       "tcp_flow_loss_clients", "tcp_return_stalled_clients",
       "path_jitter_clients", "tail_of_clients_slow", "queuing_delay_clients",
-      "return_path_filtered",
+      "return_path_filtered", "zero_window_here",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure",
       # The rest of the accept path. Overflowing the accept queue is the
@@ -10330,6 +10344,7 @@ FINDING_CLASS = {
 "nic_drops_live": ("qualityOfServiceAlarm", "congestion"),
 "nic_drops_historical": ("qualityOfServiceAlarm", "congestion"),
 # --- processingErrorAlarm: this box ran out of something --------------------
+"zero_window_here": ("processingErrorAlarm", "queueSizeExceeded"),
 "rcv_buffer_pruned": ("processingErrorAlarm", "outOfMemory"),
 "aborts_on_memory": ("processingErrorAlarm", "outOfMemory"),
 "udp_recv_buffer_full": ("processingErrorAlarm", "queueSizeExceeded"),
@@ -11473,6 +11488,38 @@ def _check_connection_setup(stats, counter_window):
                            f"balancer recycling them, or a backend restarting all look "
                            f"like this from here.",
             })
+
+    # Data dropped because this box's own receive window was shut.
+    #
+    # From auditing against two closed vocabularies that turned out to agree:
+    # RFC 4898 counts it as ZeroRwinSent and the kernel drops it as
+    # SKB_DROP_REASON_TCP_ZEROWINDOW. Neither counter was kept here.
+    #
+    # It is the one drop on this box whose owner is not the network or the
+    # kernel. A zero window means the receive queue is full because the
+    # *application* has not read it - the socket, the stack and the cable are
+    # all working, and the process on top of them is not keeping up. Every
+    # other reading here would call that a healthy box, and the sender sees it
+    # as a stall it cannot explain.
+    shut = delta.get("TCPZeroWindowDrop", 0) + delta.get("TCPRcvQDrop", 0)
+    if shut:
+        found.append({
+            "severity": "warning",
+            "layer": 4,
+            "code": "zero_window_here",
+            "message": f"This box discarded {shut:,} incoming segment(s) in the last "
+                       f"{counter_window}s because its own receive queue was full and "
+                       f"it had advertised a zero window. The network delivered that "
+                       f"data and this box accepted it; what did not happen is a "
+                       f"process reading it. Nothing about the link, the path or the "
+                       f"kernel explains this and no change to any of them fixes it - "
+                       f"the sender sees a stall it cannot account for while every "
+                       f"other reading on this report stays clean. Look at what is "
+                       f"listening: a service blocked on something slower than its "
+                       f"clients, a thread pool exhausted, or a stalled disk behind "
+                       f"it. RFC 4898 counts this as ZeroRwinSent and the kernel as "
+                       f"TCP_ZEROWINDOW; it is the same event.",
+        })
 
     # How much of the retransmission was unnecessary. A DSACK is the far end
     # saying "I already had that" - direct evidence the data was not lost, only
@@ -17818,6 +17865,7 @@ FINDING_HINT = {
     "nic_ring_overruns": "this box",
     "nic_reset_logged": "this box",
     "rcv_buffer_pruned": "this box",
+    "zero_window_here": "this box",
     "tcp_orphans_high": "this box",
     "conntrack_drops_live": "this box",
     "conntrack_near_limit": "this box",

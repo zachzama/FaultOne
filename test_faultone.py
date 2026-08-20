@@ -3613,6 +3613,28 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
                                      "something",
     }
 
+    @staticmethod
+    def _body_of(lines, node):
+        """The source lines of one function, without `end_lineno`.
+
+        That attribute arrived in Python 3.8 and this tool's floor is 3.7, so
+        the first version of this ran everywhere except the interpreter the
+        README promises. The extent is taken by indentation instead: from the
+        node's own line to the next line no further in than it. Decorators are
+        handled by the same rule - before 3.8 a decorated function's `lineno`
+        is the decorator rather than the `def`, and both sit at the same
+        indentation as whatever follows the function.
+        """
+        start = node.lineno - 1
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            line = lines[i]
+            if line.strip() and (len(line) - len(line.lstrip())) <= indent:
+                end = i
+                break
+        return "\n".join(lines[start:end])
+
     def _reading_the_interface_list(self):
         """Every function that reads the interface list, and what it skips."""
         import ast
@@ -3623,7 +3645,7 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
         for node in ast.walk(ast.parse(src)):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            body = self._body_of(lines, node)
             if "link_stats" not in body or '"interfaces"' not in body:
                 continue
             # The *guard*, not the word. `_check_counters` says "packets"
@@ -19213,6 +19235,7 @@ class TestPythonCompatibility(unittest.TestCase):
         # all three would have shipped. The parse is the first pass; the walk
         # below is the part it does not do.
         NEWER = {"NamedExpr": "the walrus operator (3.8+)"}
+        NEWER_ATTRS = {"end_lineno", "end_col_offset"}
         GENERIC = {"list", "dict", "set", "frozenset", "tuple", "type"}
         for name in ("faultone.py", "test_faultone.py"):
             path = os.path.join(root, name)
@@ -19246,6 +19269,15 @@ class TestPythonCompatibility(unittest.TestCase):
                     self.fail("%s:%d subscripts the builtin %s, which is a "
                               "type only from 3.9" % (name, node.lineno,
                                                       node.value.id))
+                # An attribute rather than syntax, so neither the parse above
+                # nor the walk would have seen it: a structural test here read
+                # `node.end_lineno` to take a function's extent, which every
+                # interpreter has except the one the README promises. It went
+                # green on this machine and red on the floor, which is the
+                # worst place to find out and the reason CI runs there.
+                if isinstance(node, ast.Attribute) and node.attr in NEWER_ATTRS:
+                    self.fail("%s:%d reads .%s, which AST nodes only carry "
+                              "from 3.8" % (name, node.lineno, node.attr))
 
     def test_every_text_file_it_opens_names_its_encoding(self):
         """Without one, Python uses the platform's locale encoding, which is

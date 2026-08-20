@@ -288,8 +288,34 @@ simply unreachable.
 drive one of them.** The quick-mode half of that same line was well covered,
 which is what made it look tested.
 
-**Seventy-one of the 121 examined. Eight real gaps, seven equivalent mutants,
-nine explained by one contract.** Fifty left.
+## The multi-condition guards: swept, and awaiting triage
+
+The fourth pattern was hunted directly, the way the `ok` guards were. Every
+`if A and B and C:` inside a `_check_*` function, one mutation per condition
+with the rest of the guard intact: **42 conditions across 17 guards**, of which
+17 could be written as a unique anchor and run. **10 survived.**
+
+**Those ten are survivors, not gaps.** This session's record is three to one
+against: most survivors have been equivalent mutants or a shared contract.
+Triage each before writing anything, using the rule that has held throughout -
+does the mutation change an answer the tool can actually produce.
+
+One has been triaged and was real. `_check_gateway` decides whether one
+unanswered probe is a rate or an artefact of the sample with
+`sent < MIN_PROBES_FOR_LOSS`. Twenty probes and one lost is a rate, and without
+the condition it reads as unmeasurable. **The internet side asserts exactly
+this; the gateway side did not** - the two share a shape, which is how a
+boundary ends up covered on one side only, and is worth checking for wherever a
+rule exists in both directions.
+
+Still to triage: `_check_counters` (twice), `_check_link_modes` (two
+conditions), `_check_nic_backlog`, `_check_path` (three), `_check_call_quality`.
+The set is `dev/mutations/multi-condition.json`; regenerate it after edits
+because the anchors are whole guard expressions and move easily.
+
+**Seventy-eight of the 121 examined. Nine real gaps, seven equivalent mutants,
+nine explained by one contract.** Forty-three left, plus the nine survivors
+above.
 
 *A third pattern, from batch eight:* **a test that asserts a phrase appears
 tests almost nothing.** It does not check which values the phrase names, and it

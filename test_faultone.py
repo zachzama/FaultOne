@@ -24237,6 +24237,22 @@ class TestEveryFindingFires(unittest.TestCase):
                       next(f["message"] for f in report["findings"]
                            if f["code"] == "gw_loss_unmeasured"))
 
+    def test_one_lost_probe_in_a_large_sample_is_a_rate_on_the_gateway_too(self):
+        """The sample-size boundary, on the side that had no test for it. One
+        unanswered probe out of four is an artefact of the sample; one out of
+        twenty is a rate, and the guard that tells them apart is
+        `sent < MIN_PROBES_FOR_LOSS`.
+
+        The internet side asserts this. The gateway side did not, so a mutation
+        deleting that condition survived - and the two share a shape, which is
+        exactly how a boundary ends up covered on one side only."""
+        mod = fresh()
+        ping_map(mod, gw_loss=5, sent=20)
+        codes = [f.get("code") for f in
+                 mod.diagnose("8.8.8.8", None, quick=False, baseline=None)["findings"]]
+        self.assertIn("gw_partial_loss", codes)
+        self.assertNotIn("gw_loss_unmeasured", codes)
+
     def test_retransmission_that_was_not_needed_is_not_loss(self):
         """The hole a packet capture would find first: every retransmit-based
         finding here reads as loss. A DSACK is the far end saying "I already

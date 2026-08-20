@@ -1,6 +1,6 @@
 # FaultOne
 
-**199 findings it can reach. One line saying which one to fix first.**
+**200 findings it can reach. One line saying which one to fix first.**
 
 ```bash
 python3 faultone.py --report                    # what's wrong, in this terminal
@@ -93,8 +93,8 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 1077 KB of
-repetitive text: it goes over the wire at 326 KB with compression on, for the
+`-C` because OpenSSH doesn't compress by default, and the file is 1083 KB of
+repetitive text: it goes over the wire at 327 KB with compression on, for the
 cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
@@ -103,11 +103,11 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 222 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 224 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine, and so does the box.
-Stripped and compressed together it's 222 KB instead of 1077. That is 79%
+Stripped and compressed together it's 224 KB instead of 1083. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
@@ -300,8 +300,8 @@ directions.
 
 ### What it actually checks
 
-**41 things are inspected. 199 conclusions can come out of them: 34 of those
-are context and the other 165 are faults, ranked against each other. One comes
+**42 things are inspected. 199 conclusions can come out of them: 34 of those
+are context and the other 166 are faults, ranked against each other. One comes
 back as the answer, with a name against it.**
 
 That last step is the product. Collecting more is easy and every tool in this
@@ -401,11 +401,11 @@ separate programs, never linked or copied in.
 Anyone can write checks. The claim worth making is that the checks are
 themselves checked, and these are the numbers behind it:
 
-- **1869 tests**, and a test that fails if any of them asserts nothing at all.
-- **282 mutations**, each one breaking a rule on purpose. Every one has to make
+- **1877 tests**, and a test that fails if any of them asserts nothing at all.
+- **289 mutations**, each one breaking a rule on purpose. Every one has to make
   a test fail; a mutation that survives means the rule is not really covered,
   and it is treated as a defect in the suite rather than a curiosity.
-- **199 scenarios**, one per finding, driven through the whole pipeline - and
+- **200 scenarios**, one per finding, driven through the whole pipeline - and
   a test that fails if a finding has no scenario or can never be the answer.
 - **500 random combinations** of real findings per run, held to the rules that
   only exist *between* findings: a consequence never outranks its cause, a
@@ -423,7 +423,7 @@ vocabularies above are for.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1869 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1877 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

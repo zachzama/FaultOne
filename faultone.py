@@ -4552,6 +4552,71 @@ def parse_ntpq_peers(text):
     return None, False if "remote" in (text or "") else None
 
 
+def parse_failed_units(text):
+    """Unit names out of `systemctl list-units --state=failed`.
+
+    The columns are UNIT LOAD ACTIVE SUB DESCRIPTION, sometimes behind a bullet
+    that is not ASCII. Only the name is taken: the other columns say "failed"
+    three ways, and the description is the vendor's prose about a unit this
+    tool has no business summarising.
+    """
+    units = []
+    for line in (text or "").splitlines():
+        row = line.strip().lstrip("\u25cf\u2718\u2717*x ").strip()
+        # The header only appears from a systemctl that does not know
+        # --no-legend, and its first column is the bare word UNIT, so the
+        # dot rule below already rejects it. Kept for what it says: this is
+        # a table written for a person and its furniture is not data.
+        if not row or row.lower().startswith("unit "):
+            continue
+        name = row.split()[0]
+        # A unit name is word-ish and carries its type as a suffix. Anything
+        # else is a summary line, a legend, or a wrapped description.
+        if "." not in name or not re.match(r"^[\w@:.\\-]+$", name):
+            continue
+        units.append(name)
+    return units
+
+
+@collector
+def cmd_failed_units():
+    """What this box is configured to run and is not running.
+
+    Every other way this tool asks that question needs something to already be
+    there: an address to probe, a listener to connect to, or a previous visit
+    to compare against. An instance that failed to start has none of those, so
+    three healthy instances and three healthy plus one dead read identically
+    on a first visit.
+
+    systemd knows on the first visit, and this is the general form of the
+    question rather than any one appliance's answer to it. `journalctl` and
+    `timedatectl` are already used here, so its tooling is not a new
+    dependency - and a box without systemd reports that it cannot say rather
+    than that nothing has failed.
+
+    Names only, capped. A report is a map of the network it was taken on and a
+    full unit inventory is a map of what the box runs, which is more than
+    anybody needs to fix a fault.
+    """
+    if OS_NAME != "Linux" or not which("systemctl"):
+        return {"ok": False, "cmd": "systemctl list-units --state=failed",
+                "applicable": False,
+                "error": "systemd is not present on this system"}
+    res = run(["systemctl", "list-units", "--state=failed", "--no-legend",
+               "--no-pager", "--plain"], timeout=10)
+    # Present is not the same as usable. `--state` is not in every systemctl a
+    # box might carry, and a binary called systemctl on a machine that is not
+    # running systemd exits rather than answering - so the exit code decides,
+    # not which().
+    if not _answered(res):
+        return {"ok": False, "cmd": " ".join(res.get("cmd", "").split()) or
+                "systemctl list-units --state=failed",
+                "applicable": False,
+                "error": "systemctl is present and did not answer"}
+    res["failed_units"] = parse_failed_units(res.get("stdout") or "")
+    return res
+
+
 @collector
 def cmd_clock_sync():
     """Is this device's clock disciplined, and how far out is it?
@@ -7895,6 +7960,13 @@ VERDICT_RULES = [
      "Either the address moved to its partner and this is now the standby, or it "
      "was never configured here. Check the failover state before reading anything "
      "else in this report: none of it was measured from the address you asked for."),
+    ("units_failed", "whatever should have started, and did not",
+     "Something this box is configured to run is not running",
+     "systemd was asked directly, so this needs no previous visit and no "
+     "address to probe: a service that never came up holds nothing and leaves "
+     "nothing for any other check to find. Whether a given unit matters is "
+     "yours to say - a failed timer is housekeeping and a failed instance is "
+     "an outage - but read it before anything below blames the network."),
     ("service_address_unserved", "whatever should be accepting on this address",
      "A service address is configured here and nothing is accepting on it",
      "Check the service is running and bound as you think. If this box forwards in "
@@ -9032,6 +9104,7 @@ FINDING_SIDE.update({
     "tcp_flow_loss_clients": "downstream",
     "tcp_return_stalled_clients": "downstream",
     "service_address_unserved": "downstream",
+    "units_failed": "local",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
     "source_address_absent": "local",
@@ -9394,6 +9467,7 @@ RAW_STAGE = {
     "clock": None,
     # Provenance for everything else, and a few bytes each.
     "rp_filter": "internet",
+    "failed_units": "ports",
     "target": None, "target_kind": None, "target_chosen_by": None,
 }
 
@@ -9583,6 +9657,12 @@ ASYMMETRIC_HOP_GAP = 2
 #: the mode written for exactly the asymmetric case. Only 1 discards traffic
 #: this tool would otherwise call healthy.
 RP_FILTER_STRICT = 1
+
+#: How many failed units to name before summarising the rest. A report is a map
+#: of the network it was taken on, and a full unit inventory is a map of what
+#: the box runs - more than anybody needs to fix a fault, and more than belongs
+#: in a file that gets pasted into a ticket.
+UNITS_NAMED = 6
 
 
 def _check_return_path_filtered(raw, findings):
@@ -10370,6 +10450,7 @@ FINDING_CLASS = {
 "clock_unsynced": ("processingErrorAlarm", "lossOfSynchronisation"),
 # --- the service this box runs, and the one it depends on -------------------
 "service_address_unserved": ("processingErrorAlarm", "applicationSubsystemFailure"),
+"units_failed": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "service_endpoint_idle": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "own_service_not_accepting": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "own_service_silent": ("processingErrorAlarm", "applicationSubsystemFailure"),
@@ -12990,6 +13071,46 @@ def _check_thermal(stats, counter_window):
         })
     return found
 
+def _check_failed_units(raw):
+    """Things this box is configured to run and is not running.
+
+    The one question here that a first visit could not answer. `--source` needs
+    an address named, `service_address_unserved` needs the address to already
+    be there, and the baseline comparison needs a previous visit - so an
+    instance that never came up was invisible to all three.
+
+    It names what failed rather than leaving somebody to infer it from an
+    absence, which is the difference between "10.0.0.77 is gone" and
+    "the unit that holds 10.0.0.77 is dead".
+    """
+    found = []
+    res = (raw or {}).get("failed_units") or {}
+    units = res.get("failed_units") or []
+    if not units:
+        return found
+    shown = units[:UNITS_NAMED]
+    more = len(units) - len(shown)
+    found.append({
+        "severity": "warning",
+        "layer": 7,
+        "code": "units_failed",
+        "message": (
+            f"{len(units)} unit(s) on this box are configured to run and are not: "
+            f"{', '.join(shown)}"
+            + (f", and {more} more" if more else "")
+            + f". systemd was asked directly, so this is the one thing here that "
+              f"does not need a previous visit or an address to probe - a service "
+              f"that never came up holds no address, accepts no connection and "
+              f"leaves nothing for any other check to find. Whether these matter "
+              f"is yours to say: a failed timer is housekeeping and a failed "
+              f"instance is an outage, and this tool cannot tell them apart. What "
+              f"it can say is that something the box was told to run is not "
+              f"running, which is worth reading before anything below blames the "
+              f"network."),
+    })
+    return found
+
+
 def _check_clock(raw):
     """A clock that has drifted, which is a device fault reported as a service one.
 
@@ -15013,6 +15134,8 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     findings += _check_counters(raw, duplex_by_iface)
     late += _check_kernel_log(raw)
     findings += _check_link_flaps(raw)
+    raw["failed_units"] = cmd_failed_units()
+    late += _check_failed_units(raw)
     late += _check_clock(raw)
     _check_kernel_drops(raw, late, counter_window, drops_baseline)
     _check_utilization(raw, late, counter_window, uplink_mbps)

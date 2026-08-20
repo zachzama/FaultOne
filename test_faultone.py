@@ -12244,6 +12244,10 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         # the clients stage for one run, which is the inbound side, and they
         # face the other way.
         "log_egress_stalled", "log_egress_plaintext",
+        # A unit the box was told to run and is not. It has not failed a stage
+        # of that chain, it has not reached one, and which units matter is the
+        # reader's call - so there is no leg to colour.
+        "units_failed",
     }
 
     # A column can be lit with all four legs reading OK. Loss and jitter count
@@ -16887,9 +16891,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1077),
-            "compressed": (len(gzip.compress(raw, 9)), 326),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
+            "on disk": (len(raw), 1083),
+            "compressed": (len(gzip.compress(raw, 9)), 327),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 224),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -16947,8 +16951,9 @@ class TestDocsMatchReality(unittest.TestCase):
             # 33 when proxy configuration was added, 34 when the socket
             # table gained the process holding each socket, 35 with the
             # interface queues, 36 with the firewall rule counters, 37 with
-            # the datagram tunnel count, 39 with the route to the target.
-            "collections": (41, [r"\*\*(\d+)\s+things are inspected",
+            # the datagram tunnel count, 39 with the route to the target,
+            # 42 with the units the box was told to run and is not running.
+            "collections": (42, [r"\*\*(\d+)\s+things are inspected",
                                  r"Data collections\*\* \| \*\*(\d+)\*\*"]),
         }
         for name, text in self.docs():
@@ -17007,6 +17012,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_check_port": "TCP reachability of specific ports",
         "cmd_clock_sync": "Clock synchronisation",
         "cmd_dns": "DNS resolution",
+        "cmd_failed_units": "Units configured to run and not running",
         "cmd_dns_health": "Each configured DNS resolver",
         "cmd_ethtool": "Link speed, duplex and MTU",
         "cmd_interfaces": "Interfaces and addresses",
@@ -21125,6 +21131,86 @@ class TestTheApplicationThatStoppedReading(unittest.TestCase):
                 self.assertIn(phrase, block)
 
 
+class TestSomethingTheBoxWasToldToRunAndIsNot(unittest.TestCase):
+    """The one reading a first visit could not otherwise make.
+
+    Every other way this tool asks "is something missing" needs something to
+    already be there - an address to probe, a listener to connect to, or a
+    previous visit to compare against. An instance that never started has none
+    of the three, so a box running three of four services reads exactly like a
+    box running three of three.
+
+    The parser gets its own tests because `systemctl` writes a table for a
+    person: a bullet that is not ASCII, a header, and a description column of
+    the vendor's prose that wraps. Every one of those is a line that must not
+    become a unit name.
+    """
+
+    def units(self, text):
+        return nd.parse_failed_units(text)
+
+    def test_the_header_row_is_not_a_failed_unit(self):
+        """`--no-legend` suppresses it, and a systemctl that does not know the
+        flag prints it anyway - which is the case worth surviving."""
+        self.assertEqual(
+            self.units("UNIT LOAD ACTIVE SUB DESCRIPTION\n"
+                       "edge@1.service loaded failed failed Edge instance 1\n"),
+            ["edge@1.service"])
+
+    def test_the_bullet_is_not_part_of_the_name(self):
+        """systemctl marks a failed row with a filled circle. Left on, the name
+        does not match anything the reader can paste into a command."""
+        self.assertEqual(
+            self.units("● edge@1.service loaded failed failed Edge 1\n"),
+            ["edge@1.service"])
+
+    def test_the_name_is_the_first_column_and_not_the_last(self):
+        """The last column is the description, which is the vendor's prose
+        about a unit this tool has no business summarising."""
+        self.assertEqual(
+            self.units("edge@1.service loaded failed failed Edge instance 1\n"),
+            ["edge@1.service"])
+
+    def test_a_wrapped_description_line_is_not_a_unit(self):
+        """A description long enough to wrap puts a second line under the row,
+        indented, with no unit on it. It has no type suffix, which is what
+        tells it apart from a name."""
+        self.assertEqual(
+            self.units("edge@1.service loaded failed failed Edge instance 1\n"
+                       "    holding the outbound address\n"),
+            ["edge@1.service"])
+
+    def fired(self, units):
+        return nd._check_failed_units({"failed_units": {
+            "ok": True, "failed_units": list(units)}})
+
+    def test_a_box_with_nothing_failed_says_nothing(self):
+        self.assertEqual(self.fired([]), [])
+
+    def test_it_names_them_up_to_the_cap_and_counts_the_rest(self):
+        """A box mid-cascade can have dozens failed, and a finding that pastes
+        all of them stops being a sentence. The count still has to be true, so
+        the total leads and the remainder is stated rather than dropped."""
+        said = self.fired(["u%d.service" % i for i in range(9)])[0]["message"]
+        self.assertIn("9 unit(s)", said)
+        self.assertIn("u0.service", said)
+        self.assertIn("u%d.service" % (nd.UNITS_NAMED - 1), said)
+        self.assertNotIn("u%d.service" % nd.UNITS_NAMED, said)
+        self.assertIn("and %d more" % (9 - nd.UNITS_NAMED), said)
+
+    def test_a_short_list_is_named_whole_with_no_tail(self):
+        said = self.fired(["a.service", "b.timer"])[0]["message"]
+        self.assertIn("a.service, b.timer", said)
+        self.assertNotIn("more", said.split(". systemd")[0])
+
+    def test_it_does_not_decide_which_units_matter(self):
+        """A failed timer is housekeeping and a failed instance is an outage,
+        and nothing available here tells them apart. Saying so is the finding;
+        guessing would make it wrong on half the boxes it runs on."""
+        said = self.fired(["a.service"])[0]["message"]
+        self.assertIn("yours to say", said)
+
+
 class TestTheBoxThatDropsItsOwnReturnTraffic(unittest.TestCase):
     """Asymmetric routing on a box configured to discard it.
 
@@ -22695,6 +22781,18 @@ def _(nd):
                 "ESTAB 0 0 10.0.0.5:443 198.51.100.9:51002\n"
                 "ESTAB 0 0 10.0.0.5:443 198.51.100.10:51003\n")
 
+
+@scenario("units_failed")
+def _(nd):
+    """Two instances the box was told to run and is not running.
+
+    The one reading here that a first visit can make: an instance that never
+    came up holds no address, accepts no connection, and leaves nothing for any
+    other check to find.
+    """
+    nd.cmd_failed_units = lambda: {
+        "ok": True, "cmd": "systemctl list-units --state=failed", "stdout": "",
+        "failed_units": ["edge-instance@2.service", "edge-instance@3.service"]}
 
 @scenario("service_address_unserved")
 def _(nd):
@@ -25652,6 +25750,13 @@ class TestEveryFindingFires(unittest.TestCase):
         # lighting a stage of that chain would have the picture say something
         # the finding spends its message denying.
         "log_egress_stalled", "log_egress_plaintext",
+        # Something the box was told to run and is not. It is not on the chain
+        # either: the eight stages describe traffic getting out and back, and a
+        # unit that never started has not failed any of them - it has not
+        # reached them. Lighting one would put a colour on a leg this finding
+        # has no reading for, and its own sentence leaves it to the reader to
+        # decide whether a given unit matters at all.
+        "units_failed",
     }
 
     def test_findings_that_move_no_stage_are_a_decision_not_an_oversight(self):

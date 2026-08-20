@@ -1,0 +1,37 @@
+[
+ {
+  "label": "a wrapped description line is read as a failed unit",
+  "old": "        if \".\" not in name or not re.match(r\"^[\\w@:.\\\\-]+$\", name):",
+  "new": "        if not re.match(r\"^[\\w@:.\\\\-]+$\", name):"
+ },
+ {
+  "label": "the bullet systemctl prints stays glued to the unit name",
+  "old": "        row = line.strip().lstrip(\"\\u25cf\\u2718\\u2717*x \").strip()",
+  "new": "        row = line.strip()"
+ },
+ {
+  "label": "the second column is taken as the unit name",
+  "old": "        name = row.split()[0]",
+  "new": "        name = row.split()[-1]"
+ },
+ {
+  "label": "a box with nothing failed reports a finding anyway",
+  "old": "    if not units:\n        return found",
+  "new": "    if False:\n        return found"
+ },
+ {
+  "label": "every failed unit is named however long the list is",
+  "old": "    shown = units[:UNITS_NAMED]",
+  "new": "    shown = units"
+ },
+ {
+  "label": "the count of units held back is not reported",
+  "old": "            + (f\", and {more} more\" if more else \"\")",
+  "new": "            + \"\""
+ },
+ {
+  "label": "systemctl refusing the flags is read as a box with nothing failed",
+  "old": "    if not _answered(res):",
+  "new": "    if False:"
+ }
+]

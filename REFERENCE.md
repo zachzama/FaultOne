@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 199
+difference is which one it puts at the top, and that is the whole product: 200
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1615,12 +1615,12 @@ they're spelled out:
 
 | | Count | What it is |
 |---|---|---|
-| **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **199** | Distinct conclusions it can reach and state in plain language. 165 are faults; 34 are context, like which switch port you're on. |
-| **Ranked causes** | **165** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1869 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Data collections** | **42** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
+| **Findings** | **200** | Distinct conclusions it can reach and state in plain language. 166 are faults; 34 are context, like which switch port you're on. |
+| **Ranked causes** | **166** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1877 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 199 findings are the useful figure** if you want to know what the tool can
+**The 200 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -1784,7 +1784,7 @@ It needs the walk, because only the walk keeps the quote. A text traceroute
 prints the router's address and throws the quote away, and on those traces
 this is silent and the inference carries on alone.
 
-### The 41 things it inspects
+### The 42 things it inspects
 
 **On the device**
 1. Interfaces and addresses
@@ -1810,8 +1810,9 @@ this is silent and the inference carries on alone.
 21. The proxy's own view of its backends, where a stats socket exists: which it has taken out of rotation, which check failed, and for how long
 22. Whether the proxy this box is told to use answers at all: one TCP connect to each configured endpoint, nothing sent
 23. Clock synchronisation and offset, where a time daemon can be asked
-24. Listening ports
-25. Neighbour inventory (with `--inventory`)
+24. Units configured to run and not running, from `systemctl list-units --state=failed` - the one reading here that needs no previous visit and no address to probe, because a service that never came up holds nothing for any other check to find
+25. Listening ports
+26. Neighbour inventory (with `--inventory`)
 
 **Off the device**
 25. Gateway reachability and loss
@@ -2431,7 +2432,7 @@ monitoring-plugin convention every other exit here follows.
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1869 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1877 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -3782,6 +3783,15 @@ becomes a fault.
 
 **Better data than the fallback gives**
 
+- **`systemctl`**: what the box is configured to run and is not running. It is
+  the only reading here that needs no previous visit and no address to probe -
+  a service that never came up holds no address, accepts no connection and
+  leaves nothing for any other check to find, so on a first visit three healthy
+  instances and three healthy plus one dead are indistinguishable without it.
+  Names only, capped: a full unit inventory is a map of what the box runs and
+  more than anybody needs to fix a fault. Absent, or on a box without systemd,
+  the check reports that it could not run rather than that nothing has failed.
+
 - **`scutil`**: macOS only, and part of the system rather than something
   to install. It is how the system-wide proxy settings are read: an explicit
   HTTP or HTTPS proxy, a PAC file and its URL, or WPAD auto-discovery. On
@@ -3967,7 +3977,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1869 tests, no dependencies, no network, a few seconds, so they run
+1877 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -4046,7 +4056,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 199 findings with readable rules instead of
+> way out - and who owns it. Ranks 200 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

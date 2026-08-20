@@ -119,8 +119,28 @@ carrying no address list produces nothing, so an older or compacted export
 cannot read as every address vanishing at once.
 
 That is the vendor tool's answer taken from the box's own history instead, and
-it needs `--baseline` - which is the honest limit of it. A first visit to a box
-still cannot see an instance that never came up.
+it needs `--baseline` - which was the honest limit of it.
+
+**The first-visit half is closed too, and without going near the vendor.**
+`systemctl list-units --state=failed` names every unit the box was told to run
+and is not running, on a first visit, with no baseline and nothing to probe: it
+is the vendor-neutral form of exactly the reading `sitrep` was wanted for.
+`units_failed` names them up to `UNITS_NAMED` and counts the rest, and it
+refuses to grade them - a failed timer is housekeeping and a failed instance is
+an outage, and nothing available here tells those apart. Saying which is the
+reader's job is the finding; guessing would be wrong on half the boxes.
+
+It lights **no stage**, declared in both allowlists. The eight stages are the
+path traffic takes out and back, and a unit that never started has not failed
+one of them, it has not reached one. Lighting a leg would put a colour on
+something the finding has no reading for.
+
+The parser gets four tests of its own because `systemctl` writes a table for a
+person - a non-ASCII bullet, a header from any systemctl that does not know
+`--no-legend`, and a description column that wraps. Each is a line that must
+not become a unit name. The collector checks that the command **answered**
+rather than that the binary exists: `--state` is not in every systemctl, and a
+`systemctl` on a box not running systemd exits rather than replying.
 
 ### Phase C is done: the orderings that carry a reason are declared
 

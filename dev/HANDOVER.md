@@ -270,6 +270,27 @@ Both lines carry a comment saying they are untestable and why, and both
 mutations are out of the set - one that can never be caught makes the set
 permanently red and teaches nothing.
 
+**Batch fourteen: six mutations, one survivor, and a third way to close one.**
+In `negatives-batch-fourteen.json`. Four guards in `name_the_addresses` and two
+scoping conditions in `mark_fanout`.
+
+The survivor was the IPv4 filter on what gets a reverse lookup, and it survives
+through the report *by construction*: `addresses_on_the_page` already filters to
+IPv4 before handing the set over, so nothing arriving that way can reach it.
+That reads like the `_serves_traffic` case - keep the line, comment it as
+untestable, drop the mutation - but there was a better move here, because the
+function is directly callable. **A test that calls it directly catches the
+mutation**, so the line is covered rather than excused.
+
+That is worth having as a third option beside the other two. A guard subsumed
+by its *caller* is not untestable, only untested through the path everything
+else uses. Reach for a direct call before writing it off, and only fall back to
+a comment when the subsumption is inside the same function.
+
+Worth catching, too: a hostname with three dots in it splits into four parts, so
+`dns_ptr`'s own length guard lets it through and the box sends a reverse query
+for something that was never an address.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
 mutation means the test is real. Two things learned from eleven so far:

@@ -6866,6 +6866,21 @@ class TestTheAddressesTheReportShows(unittest.TestCase):
         rep = mod.diagnose(quick=kw.get("quick", False), **scenario_kwargs(kwargs))
         return mod, rep
 
+    def test_only_something_shaped_like_an_address_is_looked_up(self):
+        """`addresses_on_the_page` already filters to IPv4, so through the
+        report this line can never be reached with anything else and no
+        mutation on it can be caught. Called directly it can, and it is worth
+        catching: a hostname with three dots in it splits into four parts, so
+        `dns_ptr`'s own guard lets it through and the box sends a reverse query
+        for a name that was never an address."""
+        mod = fresh()
+        asked = []
+        mod.dns_ptr = lambda server, ip, timeout=1.0: asked.append(ip)
+        raw = {"dns_health": {"resolvers": [{"server": "10.0.0.53"}]}}
+        mod.name_the_addresses(
+            ["10.0.0.90", "edge.example.net.uk", "2001:db8::5", "*", None], raw)
+        self.assertEqual(asked, ["10.0.0.90"])
+
     def test_only_the_addresses_the_page_shows_are_looked_up(self):
         """A forward proxy holds connections to hundreds of destinations.
         Resolving all of them would be hundreds of lookups for names nobody

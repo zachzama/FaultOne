@@ -1,0 +1,32 @@
+[
+  {
+    "label": "a resolver echoing the address back is recorded as a name",
+    "old": "            if name and name.rstrip(\".\") != ip:",
+    "new": "            if name:"
+  },
+  {
+    "label": "quick mode goes out and resolves anyway",
+    "old": "    if quick:\n        return {}\n    resolvers = [r.get(\"server\") for r in",
+    "new": "    if False:\n        return {}\n    resolvers = [r.get(\"server\") for r in"
+  },
+  {
+    "label": "a box with no resolver configured is asked anyway",
+    "old": "    if not resolvers or not wanted:\n        return {}",
+    "new": "    if not wanted:\n        return {}"
+  },
+  {
+    "label": "something that is not an address is sent for a reverse lookup",
+    "old": "    wanted = sorted({a for a in shown if a and _looks_like_ipv4(a)})",
+    "new": "    wanted = sorted({a for a in shown if a})"
+  },
+  {
+    "label": "a fan-out outside the span a hedge was made on is marked anyway",
+    "old": "        if hop.get(\"hop\") in wanted and hop.get(\"also\"):",
+    "new": "        if hop.get(\"also\"):"
+  },
+  {
+    "label": "a hop inside the span is marked whether or not it fanned out",
+    "old": "        if hop.get(\"hop\") in wanted and hop.get(\"also\"):",
+    "new": "        if hop.get(\"hop\") in wanted:"
+  }
+]

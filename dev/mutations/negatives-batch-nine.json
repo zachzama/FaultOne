@@ -1,0 +1,32 @@
+[
+ {
+  "label": "the path MTU is judged on a run that measured nothing",
+  "old": "    if not quick and inet_loss is not None and inet_loss < 100:",
+  "new": "    if True:"
+ },
+ {
+  "label": "a quick run measures the path MTU it was told to skip",
+  "old": "    if not quick and inet_loss is not None and inet_loss < 100:",
+  "new": "    if inet_loss is not None and inet_loss < 100:"
+ },
+ {
+  "label": "a target that answered nothing still has its path MTU judged",
+  "old": "    if not quick and inet_loss is not None and inet_loss < 100:",
+  "new": "    if not quick and inet_loss is not None:"
+ },
+ {
+  "label": "a certificate well inside its life is called expiring",
+  "old": "    if days is not None and days <= CERT_EXPIRY_WARN_DAYS:",
+  "new": "    if days is not None:"
+ },
+ {
+  "label": "a box with no LLDP neighbours reports one anyway",
+  "old": "    if lldp:\n        raw[\"lldp\"] = lldp",
+  "new": "    if True:\n        raw[\"lldp\"] = lldp"
+ },
+ {
+  "label": "the ipv4 flag stops being written both ways",
+  "old": "    raw[\"ipv4\"] = bool(has_ipv4(raw[\"interfaces\"]))",
+  "new": "    raw[\"ipv4\"] = True"
+ }
+]

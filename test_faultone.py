@@ -21063,6 +21063,24 @@ class DiagnoseHarness(unittest.TestCase):
         self.assertNotIn("path_mtu", r["raw"])
         self.assertEqual(self.stages(r)["mtu"], "skip")
 
+    def test_a_target_that_answered_nothing_has_no_path_mtu_judged(self):
+        """The third condition on that guard, and the only one nothing drove.
+        A path MTU measured toward a destination that answered no probe at all
+        is a measurement of nothing - and without the guard it produces
+        `pmtu_unmeasurable`, which reads as a gap in coverage on a run whose
+        target was simply unreachable.
+
+        The quick-mode half of the same line is covered above; this is the
+        other half, and a mutation deleting it survived."""
+        mod = fresh()
+        setup, kwargs = S["inet_unreachable"]
+        setup(mod)
+        report = mod.diagnose(quick=False, **scenario_kwargs(kwargs))
+        codes = [f["code"] for f in report["findings"]]
+        self.assertIn("inet_unreachable", codes)
+        self.assertEqual([c for c in codes if c.startswith("pmtu")], [])
+        self.assertNotIn("path_mtu", report["raw"])
+
     def test_every_finding_carries_a_code(self):
         """A finding without a code is invisible to the verdict, the stage strip
         and the coverage tests - it silently stops participating in all three."""

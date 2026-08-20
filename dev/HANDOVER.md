@@ -276,8 +276,20 @@ in the `reached` list if it pinged **or** answered TCP, so "did not ping"
 already means "answered TCP" inside that function. The invariant comes from the
 caller's split, not from the line.
 
-**Sixty-five of the 121 examined. Seven real gaps, seven equivalent mutants,
-nine explained by one contract.**
+**Batch nine: six on the path MTU, certificate expiry, LLDP and the ipv4 flag.
+One real.** `_check_path_mtu` opens on three conditions and only two were
+driven - not quick, and loss below 100%. The third is the one its own comment
+names: a path MTU measured toward a destination that answered no probe at all
+is a measurement of nothing, and without the guard it produces
+`pmtu_unmeasurable`, which reads as a gap in coverage on a run whose target was
+simply unreachable.
+
+*A shape worth looking for:* **a guard with several conditions where the tests
+drive one of them.** The quick-mode half of that same line was well covered,
+which is what made it look tested.
+
+**Seventy-one of the 121 examined. Eight real gaps, seven equivalent mutants,
+nine explained by one contract.** Fifty left.
 
 *A third pattern, from batch eight:* **a test that asserts a phrase appears
 tests almost nothing.** It does not check which values the phrase names, and it

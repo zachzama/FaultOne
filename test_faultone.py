@@ -3568,6 +3568,113 @@ class TestTheSameFaultOnEveryCable(unittest.TestCase):
         self.assertNotEqual(self.box(1, 1)["based_on"][0], "fault_on_every_interface")
 
 
+class TestLoopbackIsNotOneOfTheCables(unittest.TestCase):
+    """Every box has a loopback and no fixture had one.
+
+    Ten places skip it before judging an interface, and a mutation deleting
+    any of the ten survived the whole suite - because the corpus builds
+    interface lists that are all named eth-something and all busy, which is a
+    machine that does not exist. Loopback is not a cable: it has no link, no
+    duplex, no optics, no carrier to flap, and on a proxy it is routinely the
+    busiest thing in the list. Counted as one it either invents a fault or,
+    more often, silently stops a real one being reported, because "the same
+    fault on all of them" can never be true once an interface is in the list
+    that cannot have the fault.
+
+    Ten fixtures would be ten ways of saying one thing. This says it once, as
+    a contract over the file, so a rule added later that forgets is caught at
+    the point it is written rather than in the field.
+    """
+
+    #: Places that read the interface list without skipping loopback, and are
+    #: right to. Each one is a decision rather than an omission, which is the
+    #: reason this is a named list and not a count.
+    KEEPS_LOOPBACK = {
+        "cmd_link_stats": "the collector: it reports what the box has, and the "
+                          "box has a loopback",
+        "_finish_link_sample": "arithmetic over every counter it was handed, "
+                               "which is not a judgement about any of them",
+        "_default_route_iface": "a lookup by name - a route out of lo is still "
+                                "the route the table names",
+        "build_stages": "asks only whether the list is empty, which is about "
+                        "the collector rather than about an interface",
+        "_check_device_and_link": "builds the set of names that exist, so that "
+                                  "findings elsewhere can be checked against "
+                                  "it; excluding lo would make it wrong",
+    }
+
+    def test_every_judgement_about_an_interface_skips_loopback(self):
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        lines = src.splitlines()
+        missing = []
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if "link_stats" not in body or '"interfaces"' not in body:
+                continue
+            if 'startswith("lo")' in body or '!= "lo"' in body:
+                continue
+            if node.name in self.KEEPS_LOOPBACK:
+                continue
+            missing.append(node.name)
+        self.assertEqual(missing, [], "these read the interface list and judge "
+                                      "loopback with the rest of them")
+
+    def test_the_printed_table_does_not_offer_loopback_as_a_link(self):
+        """One behavioural anchor under the contract above, because a contract
+        test proves a filter is written and not that it works - `lo` renamed
+        to `lop` would satisfy it. This is the reader-visible end: the link
+        table is where somebody looks for the interface that is in trouble,
+        and a loopback row moving 40 Gbps sits at the top of it."""
+        def iface(name, packets):
+            fast = name == "lo"
+            return dict(name=name, packets=packets, errors=0, drops=0, crc=0,
+                        frame=0, overruns=0, collisions=0, err_ppm=0, coll_ppm=0,
+                        unknown_counters=[], delta_errors=0, delta_drops=0,
+                        delta_packets=2_000, delta_host_errors=0,
+                        delta_length_errors=0, sample_seconds=2,
+                        rx_mbps=40_000 if fast else 3,
+                        tx_mbps=40_000 if fast else 3, operstate="up",
+                        carrier_changes=0, delta_carrier_changes=0,
+                        rate_series=None, peak_mbps=None, series_seconds=None)
+        report = {"raw": {"link_stats": {"interfaces": [
+            iface("lo", 9_000_000), iface("eth0", 5_000_000)]}},
+            "findings": []}
+        out = []
+        nd._render_link_tables(report, out, lambda s, _sev=None: s, 100)
+        printed = "\n".join(out)
+        self.assertIn("eth0", printed, "the table stopped being drawn at all")
+        self.assertNotIn("lo ", printed)
+        self.assertNotIn("40,000", printed)
+
+    def test_the_list_of_exceptions_is_still_a_list_of_exceptions(self):
+        """A name left here after the function stops reading interfaces - or
+        after it starts filtering - turns the guard above into a hole nobody
+        can see. The same reasoning as the finding-side table: the fallback
+        stays a decision somebody made rather than one nobody noticed."""
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        lines = src.splitlines()
+        reading = {}
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+            if "link_stats" in body and '"interfaces"' in body:
+                reading[node.name] = ('startswith("lo")' in body
+                                      or '!= "lo"' in body)
+        for name, reason in sorted(self.KEEPS_LOOPBACK.items()):
+            with self.subTest(name=name):
+                self.assertIn(name, reading, "no longer reads the interface list")
+                self.assertFalse(reading[name],
+                                 "filters loopback now, so it is not an exception")
+                self.assertTrue(reason.strip(), "an exception with no reason")
+
+
 class TestConnectionsKilledByTheOtherEnd(unittest.TestCase):
     """A well-behaved connection ends with a FIN. A reset on an established one
     means somebody gave up mid-flight - and the counter records the teardown
@@ -21797,7 +21904,17 @@ def counters(nd, **over):
         if k.startswith("d_"):
             key = k[2:]
             second[key] = first.get(key, 0) + v
-    seq = [({"eth0": first}, "t"), ({"eth0": second}, "t")]
+    # Every box this runs on has a loopback, and on a proxy it is usually the
+    # busiest thing in the list - the corpus had none at all, so ten guards
+    # that skip it were carried by an interface list no machine ever produces.
+    # It is given traffic rather than left idle on purpose: skipped because it
+    # is loopback has to be tested apart from skipped because it is quiet.
+    lo_first = dict(base, rx_packets=9_000_000, tx_packets=9_000_000,
+                    rx_bytes=40_000_000_000, tx_bytes=40_000_000_000)
+    lo_second = dict(lo_first, rx_packets=9_002_000, tx_packets=9_002_000,
+                     rx_bytes=40_002_000_000, tx_bytes=40_002_000_000)
+    seq = [({"eth0": first, "lo": lo_first}, "t"),
+           ({"eth0": second, "lo": lo_second}, "t")]
     state = {"i": 0}
     def read():
         r = seq[min(state["i"], 1)]; state["i"] += 1; return r

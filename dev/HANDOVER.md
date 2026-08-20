@@ -9,7 +9,7 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,827**, tree clean, `dev/counts.py --check` says nothing is
+Suite green at **1,830**, tree clean, `dev/counts.py --check` says nothing is
 stale, nothing pushed since v1.24.0. No release cut on top of it - the work
 since is tests and four behaviour fixes, one of which changes what a report
 says on a live box, so tag it whenever you like.
@@ -37,9 +37,9 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to nineteen: **58
-  mutations, 12 holes, 5 equivalent mutants**, in `negatives-batch-ten`
-  through `-nineteen.json`. Fifty-four tests moved from unexamined to
+- **The empty-only sweep, continued.** Batches ten to twenty: **66
+  mutations, 20 holes, 5 equivalent mutants**, in `negatives-batch-ten`
+  through `-twenty.json`. Sixty-two tests moved from unexamined to
   known-real. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
@@ -470,6 +470,44 @@ thousand lines away that traces `core-rtr-07.corp.internal` inside
 `corp.internal` and asserts the estate is not printed twice. Checking which
 test caught a mutation is not only for spotting false catches; it is also how
 you find that a guard is covered from somewhere you would never have looked.
+
+**Batch twenty: eight mutations, eight survivors, one cause - and the answer
+was one test rather than eight.** In `negatives-batch-twenty.json`.
+
+Batch nineteen ended on "look for the input every real box has that no fixture
+builds", and the obvious next question was how far the loopback gap went. Ten
+places skip loopback before judging an interface. A mutation deleting the skip
+survived at **every one of them**, because the corpus builds interface lists
+that are all named `eth`-something and all busy - a machine that does not
+exist. The busiest interface on a proxy is routinely `lo`.
+
+**Adding a loopback to the shared fixture was not the fix, and that is worth
+knowing before someone tries it.** `counters()` now builds one, because a
+corpus that omits what every box has is wrong on its own terms - but the suite
+went green unchanged and **all eight mutations still survived**. A real
+loopback is clean: no errors, no carrier flaps, no optics, no negotiated speed.
+The guards are not protecting against a *faulty* loopback, they are protecting
+against loopback being *counted*, and no assertion in the corpus looked at the
+count. A realistic fixture is not the same thing as a test.
+
+**So it is a contract test**, the same shape as the nine `ok` guards: eight
+fixtures would have been eight ways of saying one thing, several of them
+describing a loopback that reports CRC errors and optical power, which is not a
+machine either. `TestLoopbackIsNotOneOfTheCables` walks the file and requires
+every function that reads `link_stats` interfaces to skip loopback, with five
+named exceptions that are right not to - the collector that builds the list,
+the delta arithmetic, the route lookup, the emptiness check, and the set of
+names that exist. A second test holds that list to being exceptions, so a name
+left there after a function changes cannot quietly become a hole. Same
+reasoning as the finding-side fallback: a decision somebody made rather than
+one nobody noticed.
+
+**With one behavioural anchor underneath it, on purpose.** A contract test
+proves a filter is written, not that it works - renaming `lo` to `lop` would
+satisfy it. So the printed link table is asserted directly against a report
+carrying a loopback moving 40 Gbps, which is the reader-visible end and the
+row that would sit at the top of the table. Every structural test in here
+wants one of those beside it.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

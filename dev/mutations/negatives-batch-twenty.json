@@ -1,0 +1,42 @@
+[
+  {
+    "label": "the busiest link on the box can be loopback",
+    "old": "                   if not i[\"name\"].startswith(\"lo\")), default=0)",
+    "new": "                   ), default=0)"
+  },
+  {
+    "label": "the report lists loopback among this box's interfaces",
+    "old": "              if i.get(\"packets\") and not i[\"name\"].startswith(\"lo\")]",
+    "new": "              if i.get(\"packets\")]"
+  },
+  {
+    "label": "a clean link is judged with loopback among the evidence",
+    "old": "                  if i[\"packets\"] and not i[\"name\"].startswith(\"lo\")]",
+    "new": "                  if i[\"packets\"]]"
+  },
+  {
+    "label": "loopback is one of the interfaces a duplex answer is drawn from",
+    "old": "                    if i[\"packets\"] and not i[\"name\"].startswith(\"lo\")}",
+    "new": "                    if i[\"packets\"]}"
+  },
+  {
+    "label": "a carrier flap is reported against loopback",
+    "old": "        if name.startswith(\"lo\") or name in logged:",
+    "new": "        if name in logged:"
+  },
+  {
+    "label": "error counters on loopback are this box's error counters",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        bits = [",
+    "new": "        if not iface[\"packets\"]:\n            continue\n        bits = ["
+  },
+  {
+    "label": "loopback is asked for its optical power",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        o = cmd_optics(name)",
+    "new": "        if not iface[\"packets\"]:\n            continue\n        o = cmd_optics(name)"
+  },
+  {
+    "label": "loopback is held to a negotiated link speed",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        speed = speed_by_iface.get(name)",
+    "new": "        if not iface[\"packets\"]:\n            continue\n        speed = speed_by_iface.get(name)"
+  }
+]

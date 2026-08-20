@@ -1,0 +1,27 @@
+[
+  {
+    "label": "a firewall counter that reset is read as a rule that stopped traffic",
+    "old": "        gained = rule[\"packets\"] - was[key]\n        if gained > 0:",
+    "new": "        gained = abs(rule[\"packets\"] - was[key])\n        if gained > 0:"
+  },
+  {
+    "label": "a rule that stood still is reported as one that fired",
+    "old": "        if gained > 0:\n            moved.append(dict(rule, gained=gained))",
+    "new": "        if gained >= 0:\n            moved.append(dict(rule, gained=gained))"
+  },
+  {
+    "label": "a mixture of internal and internet destinations is called internal",
+    "old": "    if all(is_private_ip(h) for h in hosts):",
+    "new": "    if any(is_private_ip(h) for h in hosts):"
+  },
+  {
+    "label": "a mixture of internal and internet destinations is called the internet",
+    "old": "    if not any(is_private_ip(h) for h in hosts):",
+    "new": "    if not all(is_private_ip(h) for h in hosts):"
+  },
+  {
+    "label": "a side with no inbound count to compare is read as zero hops",
+    "old": "        differs = out and back and abs(out - back) >= ASYMMETRIC_HOP_GAP",
+    "new": "        differs = out is not None and abs(out - (back or 0)) >= ASYMMETRIC_HOP_GAP"
+  }
+]

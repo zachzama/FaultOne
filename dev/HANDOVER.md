@@ -223,6 +223,25 @@ refused to start because three new tests had made the pinned count stale, which
 would otherwise have read as five rules being well covered when nothing had
 been proved.
 
+**Batches eleven and twelve: eleven mutations across five rules, all caught,
+no holes.** In `negatives-batch-eleven.json` and `negatives-batch-twelve.json`.
+The relay-volume pair and its unreadable-kernel case, four guards in
+`udp_window` (drained, bound mid-window, no buffer, and the share floor), the
+firewall counter reset, both halves of `_where_that_is`, and the missing
+inbound count in `_check_asymmetric_path`.
+
+Written down because a batch that finds nothing is still a result: those eleven
+tests are known real rather than unexamined, and re-running them is a second
+each. Sixteen mutations across the three batches, one hole - which is the rate
+this list was estimated at, so the estimate is holding.
+
+One thing to watch in the reading. Two of the eleven were caught partly by
+`nothing_is_defined_and_never_used`, because the mutation left a threshold
+constant unreferenced. That is the dead-name guard firing, not a behavioural
+test, and on its own it would prove nothing about the rule - both had a real
+test beside it in the caught list. Check *which* tests caught a mutation before
+counting it as covered.
+
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught
 mutation means the test is real. Two things learned from eleven so far:

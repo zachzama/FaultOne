@@ -1,0 +1,32 @@
+[
+  {
+    "label": "a box relaying most of what arrives is reported as lopsided",
+    "old": "    broadly_relaying = forwarded * RELAY_RATIO >= arrived",
+    "new": "    broadly_relaying = forwarded >= arrived"
+  },
+  {
+    "label": "a trickle is judged as though it were a relay",
+    "old": "    enough_to_judge = arrived >= RELAY_MIN_BYTES",
+    "new": "    enough_to_judge = arrived >= 0"
+  },
+  {
+    "label": "a kernel that cannot report the return side reads as one that carried nothing",
+    "old": "        return found\n    arrived = client.get(\"bytes_in\") or 0",
+    "new": "        pass\n    arrived = client.get(\"bytes_in\") or 0"
+  },
+  {
+    "label": "a queue that drained across the window is still called standing",
+    "old": "                and listener[\"recv_q\"] >= first):",
+    "new": "                and listener[\"recv_q\"] >= 0):"
+  },
+  {
+    "label": "a listener bound after the window opened is compared against nothing",
+    "old": "        if first is None:\n            continue                # bound after the window opened; nothing to compare",
+    "new": "        if False:\n            continue                # bound after the window opened; nothing to compare"
+  },
+  {
+    "label": "a queue is called a share of a buffer nobody could read",
+    "old": "        buffer = listener.get(\"recv_buffer\")\n        if not buffer:",
+    "new": "        buffer = listener.get(\"recv_buffer\") or 65536\n        if not buffer:"
+  }
+]

@@ -1,0 +1,32 @@
+[
+ {
+  "label": "the tail is not measured at all",
+  "old": "                \"rtt_p95_ms\": (rtts[min(len(rtts) - 1, int(len(rtts) * 0.95))]\n                               if rtts else None),",
+  "new": "                \"rtt_p95_ms\": None,"
+ },
+ {
+  "label": "the p95 is the median again",
+  "old": "\"rtt_p95_ms\": (rtts[min(len(rtts) - 1, int(len(rtts) * 0.95))]",
+  "new": "\"rtt_p95_ms\": (rtts[len(rtts) // 2]"
+ },
+ {
+  "label": "a side with a handful of connections is judged on its worst",
+  "old": "        enough = (side.get(\"connections\") or 0) >= TAIL_MIN_CONNECTIONS",
+  "new": "        enough = True"
+ },
+ {
+  "label": "any spread at all is a fault",
+  "old": "        return bool(enough and mid and tail and tail >= mid * TAIL_RATIO)",
+  "new": "        return bool(enough and mid and tail and tail > mid)"
+ },
+ {
+  "label": "the multiple in the sentence is not the one it fired on",
+  "old": "                f\"longer, across {side['connections']} connection(s). The middle of \"",
+  "new": "                f\"longer, across {0} connection(s). The middle of \""
+ },
+ {
+  "label": "the tail and the middle are reported the same way round",
+  "old": "        mid, tail = side[\"rtt_ms\"], side[\"rtt_p95_ms\"]",
+  "new": "        tail, mid = side[\"rtt_ms\"], side[\"rtt_p95_ms\"]"
+ }
+]

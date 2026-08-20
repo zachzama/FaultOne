@@ -4781,6 +4781,21 @@ QUEUE_DELAY_MS = 30.0
 # nothing is wrong. Variance at half the round trip means the delay is moving
 # about as much as it lasts - which is what makes TCP's retransmit timer back
 # off and hold recovery, so it is felt long before any packet is lost.
+#: How far the slowest connections on a side have to sit above the middle one
+#: before some of them are a fault rather than the spread every side has.
+#:
+#: A ratio and not a millisecond figure, for the reason `QUEUE_BURSTY_TAIL` is
+#: one: a p95 of 200ms is ordinary behind a 180ms median and alarming behind a
+#: 20ms one. Four times is wide - a healthy side clusters, and doubling happens
+#: on any box with a slow peer in the set.
+TAIL_RATIO = 4.0
+
+#: Connections a side needs before its p95 means anything. The 95th percentile
+#: of four samples is the worst of four, which is the same artefact
+#: MIN_PROBES_FOR_LOSS exists for on the loss side - and a side with a handful
+#: of connections has no tail, it has a worst one.
+TAIL_MIN_CONNECTIONS = 20
+
 JITTER_MS = 30.0
 JITTER_SHARE = 0.5
 
@@ -5215,6 +5230,19 @@ def _split_flows_by_side(out, measurable, listen_ports, lossy, worst):
                 # Median, not worst: one stalled connection should not stand in
                 # for how the other side is being served.
                 "rtt_ms": rtts[len(rtts) // 2] if rtts else None,
+                # And the tail the median is there to keep out of that number.
+                # Both are wanted: the median says how the side is being served
+                # and the p95 says whether that is true of all of it. Ten
+                # percent of connections at two seconds is invisible behind a
+                # healthy median, on a box holding hundreds of them.
+                #
+                # statistics.quantiles needs two samples and is exclusive by
+                # default, which puts p95 above every observation on small
+                # sets; the guard on TAIL_MIN_CONNECTIONS keeps this away from
+                # those, and the index is taken directly so the number is one
+                # of the connections rather than an interpolation between two.
+                "rtt_p95_ms": (rtts[min(len(rtts) - 1, int(len(rtts) * 0.95))]
+                               if rtts else None),
                 # Median for the same reason as the round trip beside it.
                 "jitter_ms": jitter[len(jitter) // 2] if jitter else None,
                 "worst_loss_pct": worst_flow.get("retrans_pct"),
@@ -8027,6 +8055,17 @@ VERDICT_RULES = [
      "The same connections have been far faster, so this is not the internet "
      "being far away - traffic is waiting somewhere on the way in. A full uplink "
      "and an over-buffered edge device both look like this."),
+    ("tail_of_backends_slow", "whatever the slow connections share, not the path",
+     "Most connections out are fine and the slowest twentieth are not",
+     "The middle of this side is healthy, so anything reading it as one number "
+     "will call it well. Find what the slow connections have in common - one "
+     "peer, one instance behind a load balancer, one address family - rather "
+     "than looking at the path, which the fast ones are crossing too."),
+    ("tail_of_clients_slow", "whatever the slow connections share, not the path",
+     "Most clients are being served fine and the slowest twentieth are not",
+     "As above, facing the other way: this is some of the people using this box "
+     "and not the way in as a whole. The fast connections rule out the path "
+     "they share."),
     ("path_jitter_backends", "the path between this box and what it connects out to",
      "The delay to the backends will not sit still",
      "Measured on the real connections rather than probes. Nothing needs to be "
@@ -8765,6 +8804,7 @@ TRANSPORT_SYMPTOMS = {
     "latency_wall", "latency_high", "call_quality_bad", "call_quality_degraded",
     "queuing_delay", "queuing_delay_backends", "queuing_delay_clients",
     "path_jitter_backends", "path_jitter_clients",
+    "tail_of_backends_slow", "tail_of_clients_slow",
     # TCP reacting to a path that is losing or delaying traffic.
     "tcp_retransmits", "syn_retrans_high", "connect_failures_high",
     "retrans_spurious", "tcp_flow_loss_all_peers", "tcp_flow_loss_some_peers",
@@ -8960,6 +9000,8 @@ FINDING_SIDE.update({
     "tcp_flow_loss_backends": "upstream",
     "tcp_return_stalled_backends": "upstream",
     "path_jitter_backends": "upstream",
+    "tail_of_backends_slow": "upstream",
+    "tail_of_clients_slow": "downstream",
     "queuing_delay_backends": "upstream",
     "queuing_delay": "upstream",
     "tcp_flow_loss_some_peers": "upstream",
@@ -9068,7 +9110,7 @@ STAGE_RULES = [
     ("clients", set(),
      {"service_address_unserved", "service_address_idle", "service_endpoint_idle",
       "tcp_flow_loss_clients", "tcp_return_stalled_clients",
-      "path_jitter_clients", "queuing_delay_clients",
+      "path_jitter_clients", "tail_of_clients_slow", "queuing_delay_clients",
       "syncookies_live", "syncookies_historical", "syn_recv_backlog",
       "reqq_full_drops", "fd_pressure",
       # The rest of the accept path. Overflowing the accept queue is the
@@ -9126,7 +9168,7 @@ STAGE_RULES = [
       "tcp_flow_loss_some_peers", "tcp_flow_loss_one_peer", "tcp_flow_loss_unclear",
       "tcp_flow_loss_backends", "tcp_return_stalled_backends",
       "queuing_delay", "queuing_delay_backends",
-      "path_jitter_backends",
+      "path_jitter_backends", "tail_of_backends_slow",
       "syn_retrans_high", "tcp_checksum_errors", "connect_failures_high",
       "resets_sent_high", "connections_reset_by_peer",
       "udp_recv_buffer_full", "udp_datagrams_corrupt", "fragments_lost",
@@ -10116,6 +10158,8 @@ FINDING_CLASS = {
 "tls_handshake_slow": ("qualityOfServiceAlarm", "excessiveResponseTime"),
 "path_jitter_backends": ("qualityOfServiceAlarm", "performanceDegraded"),
 "path_jitter_clients": ("qualityOfServiceAlarm", "performanceDegraded"),
+"tail_of_backends_slow": ("qualityOfServiceAlarm", "performanceDegraded"),
+"tail_of_clients_slow": ("qualityOfServiceAlarm", "performanceDegraded"),
 "call_quality_bad": ("qualityOfServiceAlarm", "performanceDegraded"),
 "call_quality_degraded": ("qualityOfServiceAlarm", "performanceDegraded"),
 "queuing_delay": ("qualityOfServiceAlarm", "congestion"),
@@ -14471,6 +14515,47 @@ def _check_flow_delay(raw, findings, stats):
                 f"to hurt - a retransmit timer sized for the worst case is a timer that "
                 f"waits, so recovery stalls and throughput falls while every loss "
                 f"figure here stays clean.")
+
+    # Some of a side's connections much slower than the rest of it, which is a
+    # different fault from the one above and has a different owner. Jitter is
+    # variance *within* a connection - the path moving under it. This is the
+    # spread *between* connections on one side: most are fine and a tail is
+    # not, which points at whatever those share rather than at the path they
+    # all cross.
+    #
+    # The median exists to keep one stalled connection out of the headline
+    # figure, and it does that by hiding the tail completely. This is the
+    # sentence that number cannot say.
+    def _tail_bad(side):
+        mid, tail = side.get("rtt_ms"), side.get("rtt_p95_ms")
+        enough = (side.get("connections") or 0) >= TAIL_MIN_CONNECTIONS
+        # Written as the condition for firing, so the bar reads the way the
+        # reference states it.
+        return bool(enough and mid and tail and tail >= mid * TAIL_RATIO)
+
+    def _tail_message(side, where):
+        mid, tail = side["rtt_ms"], side["rtt_p95_ms"]
+        return (f"Most connections {where} are being served in {mid:.0f}ms and the "
+                f"slowest twentieth are taking {tail:.0f}ms - {tail / mid:.0f} times "
+                f"longer, across {side['connections']} connection(s). The middle of "
+                f"this side is healthy, so nothing that measures it as one number "
+                f"will show this: what is wrong is true of some of these "
+                f"connections and not of the side they are on. Look for what the "
+                f"slow ones share - one peer, one instance behind a load balancer, "
+                f"one address family - rather than at the path they all cross, "
+                f"which the fast ones are crossing too.")
+
+    if _tail_bad(sides.get("backend") or {}):
+        findings.append({
+            "severity": "warning", "layer": 4, "code": "tail_of_backends_slow",
+            "message": _tail_message(sides["backend"],
+                                     "to what this box connects out to"),
+        })
+    elif _tail_bad(sides.get("client") or {}):
+        findings.append({
+            "severity": "warning", "layer": 4, "code": "tail_of_clients_slow",
+            "message": _tail_message(sides["client"], "from the people using it"),
+        })
 
     if _jitter_bad(sides.get("backend") or {}):
         findings.append({

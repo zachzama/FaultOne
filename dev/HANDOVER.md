@@ -127,21 +127,36 @@ tool carries no annotations, so that check is a seam for whoever adds the first.
 `lstrip("AS")`, which strips every leading A and S and was right for "AS15169"
 by luck rather than by meaning. `ASS4` read as AS4.
 
-**The real one is `statistics.quantiles` (3.8), and it is not done.** Per-side
-round trip and jitter are computed as a **hand-indexed median** over sorted
-samples - `rtts[len(rtts) // 2]` - and the comment beside it says why: one
-stalled connection must not stand in for how a side is being served. That is
-right, and it is also the whole problem. **A median hides the tail, and the
-tail is what people complain about.** Ten percent of connections at two seconds
-is invisible behind a healthy median, on a box with hundreds of flows where the
-sample to compute it from is already in hand.
+**The real one was the tail behind the median, and it is done.** Per-side round
+trip is a median - deliberately, so one stalled connection cannot stand in for
+how a side is being served - and that hides the tail completely. Ten percent of
+connections at two seconds is invisible behind a healthy median on a box
+holding hundreds of them.
 
-`statistics.quantiles(rtts, n=20)[18]` is p95 and needs no new collection. The
-work is deciding what the tool *says* with it - a finding whose median is fine
-and whose p95 is not is a real diagnosis this tool cannot currently make, and
-it wants its own sentence rather than a second number bolted to an existing
-one. That is the next capability worth adding, and it is the only thing on this
-list the floor was actually costing.
+`tail_of_backends_slow` and `tail_of_clients_slow` say it. A p95 taken from the
+samples already in hand, against the median, with `TAIL_RATIO` at four times
+and `TAIL_MIN_CONNECTIONS` at twenty - the p95 of a handful is the worst of a
+handful, which is the artefact `MIN_PROBES_FOR_LOSS` exists for on the loss
+side.
+
+**It is a different fault from `path_jitter_*`, and that was the design
+question.** Jitter is variance *within* one connection - the path moving under
+it. This is the spread *between* connections on one side: most are fine and a
+tail is not, which points at whatever the slow ones share rather than at the
+path they all cross. Both can be true at once and they have different owners,
+so the finding says which. `NOT_ON_A_LEG` carries both codes for the same
+reason: the leg reads healthy because for most connections it is, and saying so
+is the whole finding.
+
+`statistics.quantiles` was not used in the end - it needs two samples, is
+exclusive by default and interpolates between observations, so on the sets this
+guards it would report a number no connection had. The index is taken directly
+instead.
+
+**Not done, and the next thing worth doing here:** naming *which* connections
+are in the tail. The side already tracks `peers`, so "the slow ones are all to
+10.0.0.90" is one grouping away - and it turns a finding with an owner into a
+finding with an address.
 
 Nothing else was blocked. No stdlib is hand-rolled for 3.7 and no check was
 missing because of it.

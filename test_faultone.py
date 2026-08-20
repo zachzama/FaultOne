@@ -12254,6 +12254,12 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         "tcp_flow_loss_clients", "tcp_flow_loss_backends",
         "path_jitter_clients", "path_jitter_backends",
         "queuing_delay_clients", "queuing_delay_backends",
+        # The spread *between* a side's connections, which is by definition not
+        # a property of the leg they share: most of them are fine, and the leg
+        # reads that way because for most of them it is. Saying so is the whole
+        # finding - what is wrong is true of some connections and not of the
+        # path under all of them.
+        "tail_of_clients_slow", "tail_of_backends_slow",
         # A route that leaves one way and returns another is a property of the
         # pair of paths, not of either leg. Both legs can read OK while it is
         # true, which is the whole reason it is worth reporting.
@@ -16881,8 +16887,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1057),
-            "compressed": (len(gzip.compress(raw, 9)), 320),
+            "on disk": (len(raw), 1062),
+            "compressed": (len(gzip.compress(raw, 9)), 321),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
         }
         for label, (measured, quoted) in claims.items():
@@ -20991,6 +20997,84 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
         self.assertEqual(rep["worst_queue_jump"]["asn"], "AS15169")
 
 
+class TestTheTailAMedianHides(unittest.TestCase):
+    """Some of a side's connections much slower than the rest of it.
+
+    The per-side round trip is a median, deliberately: one stalled connection
+    must not stand in for how a side is being served. It does that by hiding
+    the tail completely, and the tail is what people complain about - ten
+    percent of connections at two seconds is invisible behind a healthy median
+    on a box holding hundreds of them.
+
+    A different fault from `path_jitter_*`, which is variance *within* one
+    connection - the path moving under it. This is the spread *between*
+    connections on one side, which points at whatever the slow ones share
+    rather than at the path they all cross.
+    """
+
+    def side(self, base, slow, n=24, slow_n=2):
+        mod = fresh()
+        sided_flows(mod, *a_tail_of(
+            lambda i, rtt: steady_sock("10.0.0.90", "%d" % (44000 + i), rtt,
+                                       port="5432"),
+            base, slow, n=n, slow_n=slow_n))
+        return mod.diagnose("8.8.8.8", None, quick=False)
+
+    def codes(self, *a, **kw):
+        return [f["code"] for f in self.side(*a, **kw)["findings"]]
+
+    def test_a_side_whose_slowest_are_far_worse_is_named(self):
+        self.assertIn("tail_of_backends_slow", self.codes(20.0, 400.0))
+
+    def test_the_numbers_are_the_finding(self):
+        """Four of them, and the sentence turns on every one: the middle, the
+        tail, the multiple between them and how many connections it was taken
+        from. Asserted rather than the phrase, because a sweep of this file
+        found 53 of 62 numeric placeholders in messages unchecked."""
+        said = next(f["message"] for f in self.side(20.0, 400.0)["findings"]
+                    if f["code"] == "tail_of_backends_slow")
+        self.assertIn("being served in 20ms", said)
+        self.assertIn("slowest twentieth are taking 400ms", said)
+        self.assertIn("20 times longer", said)
+        self.assertIn("across 24 connection(s)", said)
+
+    def test_a_side_that_clusters_says_nothing(self):
+        """Every side has a spread. This is only a fault when the tail is far
+        enough out that the middle stops describing it."""
+        self.assertNotIn("tail_of_backends_slow", self.codes(20.0, 26.0))
+
+    def test_it_fires_at_the_documented_multiple(self):
+        for ratio, expect in ((nd.TAIL_RATIO - 1, False), (nd.TAIL_RATIO, True)):
+            with self.subTest(ratio=ratio):
+                fired = "tail_of_backends_slow" in self.codes(20.0, 20.0 * ratio)
+                self.assertEqual(fired, expect)
+
+    def test_a_handful_of_connections_has_no_tail_to_speak_of(self):
+        """The 95th percentile of four samples is the worst of four - the same
+        artefact MIN_PROBES_FOR_LOSS exists for on the loss side. A side with a
+        handful of connections has a worst one, not a tail."""
+        self.assertNotIn("tail_of_backends_slow",
+                         self.codes(20.0, 400.0, n=6, slow_n=1))
+        # And the bar is where the reference says.
+        self.assertIn("tail_of_backends_slow",
+                      self.codes(20.0, 400.0, n=nd.TAIL_MIN_CONNECTIONS, slow_n=1))
+
+    def test_the_median_it_is_measured_against_stays_healthy(self):
+        """The point of the finding. If the tail dragged the median with it,
+        anything reading one number would already have caught this."""
+        side = next(s for s in self.side(20.0, 400.0)["path_legs"]
+                    if s["side"] == "backend")
+        self.assertEqual(side["peer"], "10.0.0.90")
+        flows = self.side(20.0, 400.0)["raw"]["tcp_flows"]["by_side"]["backend"]
+        self.assertEqual(flows["rtt_ms"], 20.0)
+        self.assertEqual(flows["rtt_p95_ms"], 400.0)
+
+    def test_it_is_not_the_same_fault_as_jitter(self):
+        """Jitter is variance inside one connection and this is the spread
+        between them. A side of steady connections that happen to differ from
+        each other has no jitter to report at all."""
+        self.assertNotIn("path_jitter_backends", self.codes(20.0, 400.0))
+
 class TestOneDeadDestinationIsNotADeadUplink(unittest.TestCase):
     """The most confidently wrong report this tool could produce.
 
@@ -23269,6 +23353,47 @@ def jittery_sock(peer, local_port, rtt, var, **kw):
     return (sided_sock(peer, local_port, sent=40_000_000, **kw)
             .replace("rtt:12.4/3.1", f"rtt:{rtt}/{var}")
             .replace("minrtt:11.9", f"minrtt:{rtt - 1}"))
+
+def steady_sock(peer, local_port, rtt, **kw):
+    """One socket at a fixed round trip, with nothing else to say about it.
+
+    minrtt sits just under the smoothed rtt, so the queue check above stays
+    quiet - the point of these fixtures is the spread *between* connections,
+    and a queue inside one of them is a different finding that outranks it.
+    """
+    return (sided_sock(peer, local_port, sent=40_000_000, **kw)
+            .replace("rtt:12.4/3.1", f"rtt:{rtt}/1.0")
+            .replace("minrtt:11.9", f"minrtt:{rtt - 1}"))
+
+
+def a_tail_of(socks, base, slow, n=24, slow_n=2):
+    """`n` connections at `base` ms with `slow_n` of them at `slow`.
+
+    Enough of them to have a tail at all - the p95 of a handful is the worst of
+    a handful, which is the artefact TAIL_MIN_CONNECTIONS exists for. `socks`
+    is called with (index, rtt), because the two sides are told apart by which
+    port is local: a backend connection leaves from an ephemeral one, and a
+    client connection arrives at the listening one.
+    """
+    return [socks(i, slow if i < slow_n else base) for i in range(n)]
+
+@scenario("tail_of_backends_slow")
+def _(nd):
+    # Twenty-four connections to the database at 20ms and two at 400. The
+    # median says 20 and the side reads healthy; a twentieth of the traffic is
+    # twenty times slower and nothing that reduces this to one number can say
+    # so.
+    sided_flows(nd, *a_tail_of(
+        lambda i, rtt: steady_sock("10.0.0.90", "%d" % (44000 + i), rtt, port="5432"),
+        20.0, 400.0))
+
+@scenario("tail_of_clients_slow")
+def _(nd):
+    # The same shape facing the other way: one listening port, many clients,
+    # and two of them being served twenty times slower than the rest.
+    sided_flows(nd, *a_tail_of(
+        lambda i, rtt: steady_sock("203.0.113.%d" % (9 + i), "443", rtt),
+        20.0, 400.0))
 
 @scenario("path_jitter_backends")
 def _(nd):

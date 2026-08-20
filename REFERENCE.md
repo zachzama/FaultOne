@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 195
+difference is which one it puts at the top, and that is the whole product: 197
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1571,11 +1571,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **195** | Distinct conclusions it can reach and state in plain language. 161 are faults; 34 are context, like which switch port you're on. |
-| **Ranked causes** | **161** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1839 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **197** | Distinct conclusions it can reach and state in plain language. 163 are faults; 34 are context, like which switch port you're on. |
+| **Ranked causes** | **163** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1846 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 195 findings are the useful figure** if you want to know what the tool can
+**The 197 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2386,7 +2386,7 @@ monitoring-plugin convention every other exit here follows.
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1839 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1846 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2460,6 +2460,8 @@ can say what the bar was rather than "the tool said so".
 | `CONNTRACK_WARN_PCT` | **80** | how full the connection tracking table gets before it's mentioned |
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
+| `TAIL_RATIO` | **4.0** | how far the slowest connections on a side sit above the middle one before some of them are a fault rather than the spread every side has. A ratio and not a millisecond figure, for the reason `QUEUE_BURSTY_TAIL` is one: a p95 of 200ms is ordinary behind a 180ms median and alarming behind a 20ms one. Four times is wide, because a healthy side clusters and doubling happens on any box with one slow peer in the set |
+| `TAIL_MIN_CONNECTIONS` | **20** | connections a side needs before its p95 means anything. The 95th percentile of four samples is the worst of four - the same artefact `MIN_PROBES_FOR_LOSS` exists for on the loss side. A side with a handful of connections has no tail, it has a worst one |
 | `JITTER_MS` | **30.0** | milliseconds of round-trip variance, from TCP's own measurement on the connections this box carries, before the delay is called unstable |
 | `JITTER_SHARE` | **0.5** | and it must be at least this share of the round trip. Both are needed for the same reason as the queue pair below: the absolute figure alone fires on any long path where tens of milliseconds of variance is ordinary, and the share alone fires on a LAN where 0.2ms becomes 0.5ms |
 | `ESTAB_RESET_PCT` | **20** | share of connections that reached ESTABLISHED and were then torn down abruptly rather than closed. Some abandonment is normal, so the line sits where it stops looking like a client walking away |
@@ -3918,7 +3920,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1839 tests, no dependencies, no network, a few seconds, so they run
+1846 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -3997,7 +3999,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 195 findings with readable rules instead of
+> way out - and who owns it. Ranks 197 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

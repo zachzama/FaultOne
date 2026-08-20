@@ -25,6 +25,7 @@ broken numbers into the docs. Run the suite first.
 import ast
 import gzip
 import io
+import json
 import os
 import re
 import sys
@@ -63,6 +64,20 @@ def measured():
         "context": len(codes) - len(faults),
         "ranked": len(nd.VERDICT_RULES),
         "tests": tests,
+        # The README now sells the verification, so these drift the same way
+        # every other quoted number did before it was pinned. Mutations are
+        # counted from the gated corpus only - dev/mutations-open holds sets
+        # that are unfinished on purpose and would inflate the claim.
+        "mutations": sum(
+            len(json.load(io.open(os.path.join(REPO, "dev", "mutations", name),
+                                  encoding="utf-8")))
+            for name in sorted(os.listdir(os.path.join(REPO, "dev", "mutations")))
+            if name.endswith(".json")),
+        "scenarios": len(codes),
+        "thresholds": len(re.findall(
+            r"^\| `[A-Z_0-9]+` \|",
+            io.open(os.path.join(REPO, "REFERENCE.md"), encoding="utf-8").read(),
+            re.M)),
         "disk_kb": round(len(raw) / 1024),
         "gz_kb": round(len(gzip.compress(raw, 9)) / 1024),
         "stripped_kb": round(len(gzip.compress(stripped, 9)) / 1024),
@@ -82,6 +97,9 @@ PATTERNS = [
     (r"(?<=\| \*\*Findings\*\* \| \*\*)(\d+)", "findings"),
     (r"(?<=\| \*\*Ranked causes\*\* \| \*\*)(\d+)", "ranked"),
     (r"(\d+)(?=\s+tests\b)", "tests"),
+    (r"\*\*(\d+) mutations\*\*", "mutations"),
+    (r"\*\*(\d+) scenarios\*\*", "scenarios"),
+    (r"\*\*(\d+) thresholds\*\*", "thresholds"),
     (r"(?<=is )(\d+)(?= KB of\b)", "disk_kb"),
     (r"(?<=wire at )(\d+)(?= KB\b)", "gz_kb"),
     (r"(\d+)(?= KB on the wire\b)", "stripped_kb"),

@@ -264,6 +264,34 @@ No model is involved. `VERDICT_RULES` is an ordered list you can read, and
 every verdict cites the findings it came from. [The rules, and the numbers
 behind them.](REFERENCE.md#why-the-ranking-is-the-point)
 
+### Where the ordering comes from
+
+An ordered list one person wrote is worth exactly as much as that person's
+judgement, so it is checked against vocabularies other people maintain - not
+their feature lists, but their **closed sets of outcomes**, where every entry
+has to be accounted for:
+
+| | what it settles |
+|---|---|
+| **ITU-T X.733** | event types and probable causes - every finding carries both |
+| **Batfish** flow dispositions | every way a packet can end. Two had no finding here and now do |
+| **HAProxy** check statuses | what a health check can say before it has run |
+| **RFC 4898** tcpEStats | what limits a TCP connection, and what to call it |
+| **RFC 2680 / 3393 / 5481** | how loss and delay variation are defined, and how they must be reported |
+| **`SKB_DROP_REASON_*`** | the kernel's own account of why it dropped a packet - 131 entries |
+| **IANA / RFC 792 / 5398 / 6996** | DNS rcodes, ICMP codes, AS number ranges |
+
+Twice the ordering turned out to have arrived at the standard on its own. The
+three-way split behind "what is holding this connection back" is RFC 4898's
+`SndLimTime{Cwnd,Rwin,Snd}`. The way latency is separated into a floor and a
+queue is PDV, which RFC 5481 describes almost word for word. Neither was copied
+and both now have a test pinning them to the standard they match.
+
+Where they disagreed, the tool changed. A loss figure now says it was measured
+with ICMP echo and names the timeout, because RFC 2680 requires both and a
+reader taking "25%" as a quarter of their traffic is making the exact inference
+that RFC exists to warn against.
+
 ## The evidence it ranks
 
 Two axes, because they answer different questions. **Which layer** decides what
@@ -292,8 +320,14 @@ directions.
 
 ### What it actually checks
 
-**41 things are inspected**, and **199 distinct conclusions** can come out of
-them: 165 are faults, 34 are context.
+**41 things are inspected. 199 conclusions can come out of them: 34 of those
+are context and the other 165 are faults, ranked against each other. One comes
+back as the answer, with a name against it.**
+
+That last step is the product. Collecting more is easy and every tool in this
+category collects more than this one; deciding which of the things you found is
+the *cause* and which are its consequences is the part that takes experience,
+and it is the part that is missing everywhere else.
 
 *On the device:* interfaces and addresses · routing table and default gateway ·
 interface error, drop, CRC and collision counters · how often the link has
@@ -381,6 +415,28 @@ like; it comes with no warranty.
 Nothing is vendored, so no other licence travels with the file. The optional
 tools it can use (`mtr`, `ethtool`, `lldpd`, `tcptraceroute`) are run as
 separate programs, never linked or copied in.
+
+## How the ranking is kept honest
+
+Anyone can write checks. The claim worth making is that the checks are
+themselves checked, and these are the numbers behind it:
+
+- **1864 tests**, and a test that fails if any of them asserts nothing at all.
+- **277 mutations**, each one breaking a rule on purpose. Every one has to make
+  a test fail; a mutation that survives means the rule is not really covered,
+  and it is treated as a defect in the suite rather than a curiosity.
+- **199 scenarios**, one per finding, driven through the whole pipeline - and
+  a test that fails if a finding has no scenario or can never be the answer.
+- **500 random combinations** of real findings per run, held to the rules that
+  only exist *between* findings: a consequence never outranks its cause, a
+  fault facing one way never explains one facing the other, and one report
+  names one cause.
+- **117 thresholds**, each documented with the reasoning for its value, and a
+  test that fails if a number is compared against and never explained.
+
+None of that proves the tool is right - it proves it is consistent, and that a
+change cannot quietly alter what it concludes. Being *right* is what the
+vocabularies above are for.
 
 ## More
 

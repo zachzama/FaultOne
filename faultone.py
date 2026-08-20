@@ -4397,6 +4397,10 @@ def parse_server_limits(port_range, file_nr, somaxconn):
     # in use; reading the first column as usage overstates it on every kernel
     # that keeps a free list, which is all of them.
     fnr = (file_nr or "").split()
+    # Subsumed by the unpack below, which raises ValueError on any other width
+    # and is already caught - unlike the port range above, where the wrong
+    # width indexes out of range instead. Kept because the two read as one
+    # rule and only one of them is load-bearing.
     if len(fnr) == 3:
         try:
             allocated, free, maximum = (int(x) for x in fnr)
@@ -7836,6 +7840,10 @@ def parse_own_addresses(iface_result):
     address, that ordering is itself information: the first is the one the
     kernel will choose when nobody says otherwise.
     """
+    # Subsumed by the convention that a result marked not-ok carries no
+    # output, which TestDiagnoseHarness checks directly: an empty stdout walks
+    # this loop zero times and returns the same empty list. Kept because the
+    # convention is a convention rather than a guarantee.
     if not iface_result.get("ok"):
         return []
     out = iface_result.get("stdout") or ""

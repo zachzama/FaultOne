@@ -1,0 +1,32 @@
+[
+ {
+  "label": "an interface with no statistics directory is counted at zero",
+  "old": "        sdir = os.path.join(base, name, \"statistics\")\n        if not os.path.isdir(sdir):\n            continue",
+  "new": "        sdir = os.path.join(base, name, \"statistics\")\n        if False:\n            continue"
+ },
+ {
+  "label": "a name in sysfs that is not an interface directory is read anyway",
+  "old": "        idir = os.path.join(base, name)\n        if not os.path.isdir(idir):\n            continue",
+  "new": "        idir = os.path.join(base, name)\n        if False:\n            continue"
+ },
+ {
+  "label": "a box with no queue table is reported as having empty queues",
+  "old": "    if not queues:\n        return \"\"",
+  "new": "    if False:\n        return \"\""
+ },
+ {
+  "label": "an unparseable port range still yields a range",
+  "old": "    rng = (port_range or \"\").split()\n    if len(rng) == 2:",
+  "new": "    rng = (port_range or \"\").split()\n    if len(rng) >= 1:"
+ },
+ {
+  "label": "a backwards port range is turned into a negative total",
+  "old": "            if hi >= lo:",
+  "new": "            if True:"
+ },
+ {
+  "label": "an absent sockstat is read as no orphans rather than no reading",
+  "old": "    text = _read_text(os.path.join(base, \"net/sockstat\"))\n    for line in (text or \"\").splitlines():",
+  "new": "    text = _read_text(os.path.join(base, \"net/sockstat\")) or \"TCP: orphan 0 tw 0 alloc 0 mem 0\"\n    for line in (text or \"\").splitlines():"
+ }
+]

@@ -95,6 +95,39 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The empty-only tests, and how to tell which of them hold anything
+
+`dev/vacuous.py` lists tests whose every assertion compared empty things. It
+has always been a list to read rather than a list to fix, because asserting
+nothing fired **is** how this suite states a negative - and there was no way to
+tell a negative something has tried to break from one nothing has.
+
+`dev/mutate.py --catchers=FILE` answers it. It dumps every test that caught
+every mutation, in full, and crossed against `vacuous.py` the split is:
+
+- **83 of 158 are proven.** Some mutation has made each of them fire.
+- **75 are not**, and they sort into four groups: absence contracts
+  ("no sysfs tree yields nothing"), structural guards whose healthy state is an
+  empty violation set, parsers on empty or garbage input, and rule negatives.
+
+**Group one is closed.** "Absent is not zero" is the contract worth proving
+first, because reading absence as zero is how a diagnostic invents faults.
+`dev/mutations/absent-is-not-zero.json`. Two real gaps, both the same shape -
+*the input every real box has that no fixture builds*:
+
+- `/sys/class/net` is not only interfaces. **`bonding_masters` is a plain file**
+  that sits in it on any box with the bonding module loaded, and both sysfs
+  readers guard against it while every fixture built a tidy directory per name.
+- A virtual device can appear there **with no `statistics/` directory**. Zero
+  packets and zero errors is a claim about a working interface; nothing at all
+  is the truth.
+
+Two more were equivalent and are commented rather than excused: the not-ok
+guard in `parse_own_addresses` (an empty stdout walks the loop zero times) and
+the width check on `file-nr` (the three-way unpack raises `ValueError` on any
+other width and the `except` already catches it - unlike the port range beside
+it, where the wrong width indexes out of range and does not).
+
 ### The `sitrep` question, and what it actually exposed
 
 The vendor's own CLI names its instances by path whether or not they hold an

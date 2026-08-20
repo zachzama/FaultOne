@@ -2000,6 +2000,29 @@ class TestSysfsCounterReading(unittest.TestCase):
     def test_missing_sysfs_tree_yields_nothing(self):
         self.assertEqual(nd._link_stats_linux("/nonexistent/path"), {})
 
+    def test_a_name_in_sysfs_that_is_not_an_interface_is_skipped(self):
+        """`/sys/class/net` is not only interfaces. `bonding_masters` is a
+        plain file that sits in it on any box with the bonding module loaded,
+        and every fixture here built a tidy directory per name - so the guard
+        against it was the guard nothing tested. Reported as an interface it
+        would be one with no counters, which is not the same as an interface
+        with counters of zero."""
+        import os
+        base = self.build()
+        with open(os.path.join(base, "bonding_masters"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("bond0\n")
+        self.assertEqual(sorted(nd._link_stats_linux(base)), ["eth0"])
+
+    def test_an_interface_with_no_statistics_is_absent_not_zeroed(self):
+        """A virtual device can appear under `/sys/class/net` without the
+        statistics directory. Zero packets and zero errors is a claim about a
+        working interface; nothing at all is the truth."""
+        import os
+        base = self.build()
+        os.makedirs(os.path.join(base, "tunl0"))
+        self.assertEqual(sorted(nd._link_stats_linux(base)), ["eth0"])
+
     def build_modes(self, iface="eth0", fields=None):
         """A sysfs tree for the link-mode reader, the twin of build() above."""
         import os, tempfile
@@ -2053,6 +2076,17 @@ class TestSysfsCounterReading(unittest.TestCase):
 
     def test_no_sysfs_tree_yields_nothing(self):
         self.assertEqual(nd._link_modes_linux("/nonexistent/path"), {})
+
+    def test_a_name_in_sysfs_that_is_not_an_interface_is_skipped_here_too(self):
+        """The twin of the counter reader's guard, and it needed its own test
+        for the same reason: `bonding_masters` is a file in `/sys/class/net` on
+        any box with the bonding module loaded, and no fixture built one."""
+        import os
+        base = self.build_modes(fields={"speed": "1000", "duplex": "full"})
+        with open(os.path.join(base, "bonding_masters"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("bond0\n")
+        self.assertEqual(sorted(nd._link_modes_linux(base)), ["eth0"])
 
     # ---- the other platform's spelling of the same state ------------------
 
@@ -15497,6 +15531,23 @@ class TestServerLimits(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(nd.parse_server_limits(*args), {})
 
+    def test_a_file_nr_of_the_wrong_width_is_not_read_as_usage(self):
+        """file-nr is "allocated free max", three columns. Anything else is a
+        file this tool does not understand, and taking the first number off it
+        would report a descriptor count that came from somewhere else. The
+        cases above all fail on the *values*, so the width check was never what
+        stopped them."""
+        for fnr in ("900", "900 100", "900 100 8192 4"):
+            with self.subTest(file_nr=fnr):
+                self.assertEqual(nd.parse_server_limits(None, fnr, None), {})
+        good = nd.parse_server_limits(None, "900 100 8192", None)
+        self.assertEqual((good["fd_used"], good["fd_max"]), (800, 8192))
+
+    def test_a_port_range_of_the_wrong_width_is_not_read_as_a_range(self):
+        for rng in ("32768", "32768 60999 1"):
+            with self.subTest(port_range=rng):
+                self.assertEqual(nd.parse_server_limits(rng, None, None), {})
+
     def test_a_backwards_port_range_is_ignored(self):
         """hi < lo would give a negative total and a nonsense percentage."""
         self.assertEqual(nd.parse_server_limits("60999 32768", None, None), {})
@@ -16938,7 +16989,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1091),
+            "on disk": (len(raw), 1092),
             "compressed": (len(gzip.compress(raw, 9)), 330),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 226),
         }

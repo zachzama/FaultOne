@@ -173,6 +173,17 @@ def main(argv):
         return self_test()
     if "--anchors" in argv:
         return check_anchors(argv)
+    # Which tests caught each mutation, in full and untruncated. The printed
+    # line names two of them and cuts them short, which is right for reading
+    # and useless for the question this answers: given a test that only ever
+    # asserts nothing fired, has any mutation ever made it fire? Cross-
+    # referencing that against dev/vacuous.py is what separates a negative
+    # this suite genuinely holds from one nothing has tested.
+    catchers = None
+    for arg in argv:
+        if arg.startswith("--catchers="):
+            catchers = arg.split("=", 1)[1]
+    argv = [a for a in argv if not a.startswith("--catchers=")]
     if len(argv) < 2:
         print(__doc__.strip().splitlines()[2].strip(), flush=True)
         return 2
@@ -199,7 +210,7 @@ def main(argv):
             with open(os.path.join(REPO, name), encoding="utf-8") as fh:
                 sources[name] = fh.read()
 
-    survived, bad, jobs = [], [], []
+    survived, bad, jobs, caught_by = [], [], [], {}
     # Anchors first, and without a tree. A bad anchor is a string count, and
     # finding it after a suite run costs a minute to learn the file moved.
     for m in mutations:
@@ -247,6 +258,7 @@ def main(argv):
                 bad.append((label, detail))
                 print("  %-46s BAD MUTATION  %s" % (label[:46], detail), flush=True)
             elif kind == "caught":
+                caught_by[label] = sorted(detail)
                 print("  %-46s caught     %2d  %s"
                       % (label[:46], len(detail),
                          ", ".join(n[5:44] for n in detail[:2])), flush=True)
@@ -255,6 +267,10 @@ def main(argv):
                 print("  %-46s SURVIVED" % label[:46], flush=True)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+    if catchers:
+        with open(catchers, "w", encoding="utf-8") as fh:
+            json.dump(caught_by, fh, indent=1, sort_keys=True)
+        print("\n  catching tests written to %s" % catchers, flush=True)
     print("\n  %.0fs" % (time.monotonic() - started), flush=True)
 
     print("\n%d of %d mutation(s) survived%s"

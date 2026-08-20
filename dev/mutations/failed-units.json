@@ -15,9 +15,9 @@
   "new": "        name = row.split()[-1]"
  },
  {
-  "label": "a box with nothing failed reports a finding anyway",
-  "old": "    if not units:\n        return found",
-  "new": "    if False:\n        return found"
+  "label": "a box whose every failed unit was graded warns about none of them",
+  "old": "    units = [u for u in units if u not in graded]\n    if not units:\n        return found",
+  "new": "    units = [u for u in units if u not in graded]\n    if False:\n        return found"
  },
  {
   "label": "every failed unit is named however long the list is",

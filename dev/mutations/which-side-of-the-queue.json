@@ -1,0 +1,32 @@
+[
+ {
+  "label": "an unreadable egress queue reads as a box ruled out",
+  "old": "    if not ((raw or {}).get(\"qdisc\") or {}).get(\"ok\"):",
+  "new": "    if False:"
+ },
+ {
+  "label": "the egress queue is never consulted and always reported unread",
+  "old": "    if not ((raw or {}).get(\"qdisc\") or {}).get(\"ok\"):",
+  "new": "    if True:"
+ },
+ {
+  "label": "a queue doing its job with a burst is called a standing queue",
+  "old": "    if worst and worst[\"backlog_pkts\"] >= LOCAL_QUEUE_STANDING_PKTS:",
+  "new": "    if worst and worst[\"backlog_pkts\"] > 0:"
+ },
+ {
+  "label": "a standing local queue is not put on this box at all",
+  "old": "    if worst and worst[\"backlog_pkts\"] >= LOCAL_QUEUE_STANDING_PKTS:",
+  "new": "    if False:"
+ },
+ {
+  "label": "the interface and kind holding the queue go unnamed",
+  "old": "        return (f\"Part of it is this box's: {worst['backlog_pkts']} packet(s) \"\n                f\"are waiting in its own {worst['kind']} queue on \"\n                f\"{worst['iface']} right now, which is before the path rather \"",
+  "new": "        return (f\"Part of it is this box's: {worst['backlog_pkts']} packet(s) \"\n                f\"are waiting in its own queue \"\n                f\"right now, which is before the path rather \""
+ },
+ {
+  "label": "the latency finding stops saying which side of the queue it is on",
+  "old": "                    + _which_side_of_the_local_queue(raw)),",
+  "new": "                    + \"\"),"
+ }
+]

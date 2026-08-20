@@ -5927,6 +5927,53 @@ class TestLatencyHasItsOwnWords(unittest.TestCase):
         self.assertIn("averages 900ms against a floor of 1ms", said)
         self.assertIn("899ms of it - 100% - is", said)
 
+    def queuing_with(self, qdisc):
+        """A path spending almost all of its round trip waiting, over a box
+        whose own egress queue is whatever the caller says."""
+        m = fresh()
+        m.cmd_ping = lambda t, c=4, w=2: {
+            "ok": True, "cmd": "ping",
+            "stdout": "rtt min/avg/max/mdev = 1.0/900.0/1800.0/5.0 ms\n"}
+        m.cmd_qdisc = lambda: qdisc
+        found = m.diagnose("8.8.8.8", None, quick=False)["findings"]
+        return next(f["message"] for f in found
+                    if f["code"] == "latency_is_queuing")
+
+    def queue_of(self, pkts):
+        return {"ok": True, "cmd": "tc -s qdisc", "queues": [
+            {"iface": "eth0", "kind": "fq_codel", "dropped": 0, "requeues": 0,
+             "backlog_bytes": pkts * 1500, "backlog_pkts": pkts}]}
+
+    def test_a_standing_local_queue_puts_part_of_the_wait_on_this_box(self):
+        """The sentence this replaced said "look at this box's own egress queue
+        first", which sends the reader to check something the same run already
+        measured. `tc -s qdisc` is read on every run."""
+        said = self.queuing_with(self.queue_of(nd.LOCAL_QUEUE_STANDING_PKTS))
+        self.assertIn("Part of it is this box", said)
+        self.assertIn("in its own fq_codel queue on eth0", said)
+
+    def test_an_empty_local_queue_rules_this_box_out_in_so_many_words(self):
+        """The half that makes an upstream ticket stick. "It is not this box"
+        is a measurement here, not an absence of one."""
+        said = self.queuing_with(self.queue_of(0))
+        self.assertIn("It is not this box", said)
+        self.assertIn("further out", said)
+
+    def test_a_queue_below_the_bar_is_the_queue_working(self):
+        """A queue exists to hold a burst, so a handful waiting is it doing its
+        job. Same threshold as `queue_standing_here` so the two findings cannot
+        describe one queue differently."""
+        said = self.queuing_with(self.queue_of(nd.LOCAL_QUEUE_STANDING_PKTS - 1))
+        self.assertIn("It is not this box", said)
+
+    def test_an_unreadable_queue_says_so_rather_than_ruling_the_box_out(self):
+        """`tc` is not on every box. Silence about a reading that was not taken
+        is the one answer here that would be a lie."""
+        said = self.queuing_with({"ok": False, "cmd": "tc -s qdisc",
+                                  "applicable": False})
+        self.assertIn("could not be read on this run", said)
+        self.assertNotIn("It is not this box", said)
+
     def test_loss_still_outranks_delay(self):
         """Traffic that never arrives beats traffic that arrives late."""
         v = self.verdict(800.0, loss=25)["verdict"]
@@ -16891,9 +16938,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1089),
-            "compressed": (len(gzip.compress(raw, 9)), 329),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 225),
+            "on disk": (len(raw), 1091),
+            "compressed": (len(gzip.compress(raw, 9)), 330),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 226),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

@@ -13163,6 +13163,9 @@ def _check_failed_units(raw):
     found = []
     res = (raw or {}).get("failed_units") or {}
     units = res.get("failed_units") or []
+    # Subsumed by the same guard after the split below - an empty list grades
+    # nothing and survives the filter empty - so no mutation can reach it.
+    # Kept because it states the intent and costs a comparison.
     if not units:
         return found
     graded = _units_that_carry_traffic(units, socket_owners(raw))
@@ -16609,6 +16612,37 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
     return hops, path_insight, path_source
 
 
+def _which_side_of_the_local_queue(raw):
+    """Whether the wait starts before this box's own egress queue or after it.
+
+    This used to read "look at this box's own egress queue first if it is on
+    this side of it", which sends the reader to check something the same run
+    already measured. `tc -s qdisc` is read on every run and `worst_local_queue`
+    reduces it, and both answers are worth having: a standing queue here means
+    part of the wait is this box's before any of it is the path's, and an empty
+    one rules this box out, which is the half that makes an upstream ticket
+    stick.
+
+    The bar is `LOCAL_QUEUE_STANDING_PKTS`, the same one `queue_standing_here`
+    fires on, so the two cannot describe the same queue differently.
+    """
+    if not ((raw or {}).get("qdisc") or {}).get("ok"):
+        return ("This box's own egress queue could not be read on this run, so "
+                "whether the wait starts before the path or on it is open: `tc "
+                "-s qdisc` answers it and needs no privilege.")
+    worst = worst_local_queue(raw)
+    if worst and worst["backlog_pkts"] >= LOCAL_QUEUE_STANDING_PKTS:
+        return (f"Part of it is this box's: {worst['backlog_pkts']} packet(s) "
+                f"are waiting in its own {worst['kind']} queue on "
+                f"{worst['iface']} right now, which is before the path rather "
+                f"than on it. Empty that first and re-measure - what is left "
+                f"is the part somebody else owns.")
+    held = worst["backlog_pkts"] if worst else 0
+    return (f"It is not this box: its own egress queue is holding {held} "
+            f"packet(s), so the traffic is leaving here without waiting and "
+            f"every millisecond above the floor is being spent further out.")
+
+
 def _check_call_quality(raw, findings, target, inet_loss):
     """What the round trip costs: on its own, and reduced to a call score.
 
@@ -16643,9 +16677,9 @@ def _check_call_quality(raw, findings, target, inet_loss):
                     f"{floor:.0f}ms and that part is fixed; the rest is a queue somewhere "
                     f"on it, which means a link carrying more than it comfortably can at "
                     f"the moment the probes went through. That part is somebody's to fix, "
-                    f"and it is the part worth raising - the floor is not. Look at the "
-                    f"per-hop timings below for where the gap opens, and at this box's own "
-                    f"egress queue first if it is on this side of it."),
+                    f"and it is the part worth raising - the floor is not. Look at "
+                    f"the per-hop timings below for where the gap opens. "
+                    + _which_side_of_the_local_queue(raw)),
             })
         else:
             findings.append({

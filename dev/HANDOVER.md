@@ -161,6 +161,27 @@ not become a unit name. The collector checks that the command **answered**
 rather than that the binary exists: `--state` is not in every systemctl, and a
 `systemctl` on a box not running systemd exits rather than replying.
 
+### Latency: the finding that told the reader to go and measure something
+
+`latency_is_queuing` used to end with "look at this box's own egress queue
+first if it is on this side of it". `tc -s qdisc` is read on **every** run and
+`worst_local_queue` already reduces it, so the finding was sending somebody to
+check a reading it was holding. Same shape as the load average before
+`cpu_saturated` and the `own_addresses` list before the baseline diff: see
+[[inherited-limits]].
+
+It now says which side, and both answers earn their place. A standing queue
+here means part of the wait is this box's *before* any of it is the path's, and
+an empty one rules this box out - which is the half that makes an upstream
+ticket stick, and the half a reader cannot produce for themselves from a
+report that stayed silent. An unreadable `tc` says so rather than reading as
+either.
+
+The bar is `LOCAL_QUEUE_STANDING_PKTS`, the same one `queue_standing_here`
+fires on, so the two cannot describe one queue differently. `queue_standing_here`
+already outranks `latency_is_queuing` in `VERDICT_RULES`, so where both fire the
+verdict was already right - what was missing was the sentence.
+
 ### Phase C is done: the orderings that carry a reason are declared
 
 `VERDICT_RULES` is a list and its order **is** the priority, so a rule inserted

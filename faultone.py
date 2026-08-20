@@ -4796,6 +4796,15 @@ TAIL_RATIO = 4.0
 #: of connections has no tail, it has a worst one.
 TAIL_MIN_CONNECTIONS = 20
 
+#: How much of a side's slow tail has to sit on one peer before that peer is
+#: named as what the slow connections share.
+#:
+#: Below it the tail is spread, which is a different answer and not a weaker
+#: one: connections to many peers all slow together points at something they
+#: all cross, and naming the busiest of them would be picking a scapegoat out
+#: of a list. Four fifths leaves room for one straggler somewhere else.
+TAIL_ONE_PEER_SHARE = 0.8
+
 JITTER_MS = 30.0
 JITTER_SHARE = 0.5
 
@@ -5225,7 +5234,33 @@ def _split_flows_by_side(out, measurable, listen_ports, lossy, worst):
             peers = {}
             for f in group:
                 peers[f["peer"]] = peers.get(f["peer"], 0) + 1
+            # Who the slow ones are talking to. The tail says some connections
+            # on this side are far worse than the rest; this says whether they
+            # have anything in common, which is the difference between a
+            # finding with an owner and a finding with an address.
+            #
+            # Concentrated on one peer is an instance, a backend, one member of
+            # a pool. Spread across many is not - it is something all of them
+            # share, and naming any single one of them would be picking a
+            # scapegoat out of a list.
+            p95 = rtts[min(len(rtts) - 1, int(len(rtts) * 0.95))] if rtts else None
+            tail_peers = {}
+            if p95 is not None:
+                for f in group:
+                    if (f.get("rtt_ms") or 0) >= p95:
+                        tail_peers[f["peer"]] = tail_peers.get(f["peer"], 0) + 1
+            tail_total = sum(tail_peers.values())
+            tail_on, tail_count = (max(sorted(tail_peers.items()),
+                                       key=lambda kv: kv[1])
+                                   if tail_peers else (None, 0))
             out["by_side"][name] = {
+                "tail_peers": len(tail_peers),
+                "tail_on": tail_on,
+                # What share of the tail that one peer holds. A share rather
+                # than a count, because a tail of two on one peer and a tail of
+                # forty on one peer are the same statement.
+                "tail_share": (round(tail_count / tail_total, 2)
+                               if tail_total else None),
                 "connections": len(group),
                 # Median, not worst: one stalled connection should not stand in
                 # for how the other side is being served.
@@ -14543,7 +14578,28 @@ def _check_flow_delay(raw, findings, stats):
                 f"connections and not of the side they are on. Look for what the "
                 f"slow ones share - one peer, one instance behind a load balancer, "
                 f"one address family - rather than at the path they all cross, "
-                f"which the fast ones are crossing too.")
+                f"which the fast ones are crossing too."
+                + _tail_shared_by(side))
+
+    def _tail_shared_by(side):
+        """What the slow connections have in common, where they have anything.
+
+        Concentrated on one peer this is an address rather than an owner, which
+        is as far as this tool can take a fault without guessing. Spread across
+        peers it is not, and saying so is worth as much: it rules out the
+        answer a reader is about to reach for."""
+        on, share, spread = (side.get("tail_on"), side.get("tail_share"),
+                             side.get("tail_peers") or 0)
+        if not on or share is None:
+            return ""
+        if share >= TAIL_ONE_PEER_SHARE:
+            return (f" {round(share * 100)}% of the slow connections are to "
+                    f"{on}, so that is where to look first - one instance, one "
+                    f"member of a pool, or one path to it that the others do "
+                    f"not take.")
+        return (f" They are spread across {spread} peers rather than "
+                f"concentrated on one, so this is not a single bad backend: "
+                f"look for what all of them have in common on the way out.")
 
     if _tail_bad(sides.get("backend") or {}):
         findings.append({

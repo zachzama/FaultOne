@@ -153,10 +153,17 @@ exclusive by default and interpolates between observations, so on the sets this
 guards it would report a number no connection had. The index is taken directly
 instead.
 
-**Not done, and the next thing worth doing here:** naming *which* connections
-are in the tail. The side already tracks `peers`, so "the slow ones are all to
-10.0.0.90" is one grouping away - and it turns a finding with an owner into a
-finding with an address.
+**And it names the address.** The slow connections are grouped by peer, and
+where four fifths of them sit on one - `TAIL_ONE_PEER_SHARE` - the finding says
+so: *"100% of the slow connections are to 10.0.0.90, so that is where to look
+first."* An owner is somewhere to send it; an address is somewhere to look, and
+that is as far as this tool can take a fault without guessing.
+
+**The other branch is worth as much and is easy to skip.** A tail spread across
+peers is *not* one bad backend, and naming the busiest of them would be picking
+a scapegoat out of a list - so the sentence rules that answer out instead of
+offering it. Both branches have a fixture; the spread one exists because
+without it the finding would have named a peer on every path it fired on.
 
 Nothing else was blocked. No stdlib is hand-rolled for 3.7 and no check was
 missing because of it.

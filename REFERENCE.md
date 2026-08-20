@@ -1573,7 +1573,7 @@ they're spelled out:
 | **Data collections** | **41** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
 | **Findings** | **197** | Distinct conclusions it can reach and state in plain language. 163 are faults; 34 are context, like which switch port you're on. |
 | **Ranked causes** | **163** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1846 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Automated tests** | **531** | 1848 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
 **The 197 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
@@ -2386,7 +2386,7 @@ monitoring-plugin convention every other exit here follows.
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1846 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1848 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2462,6 +2462,7 @@ can say what the bar was rather than "the tool said so".
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
 | `TAIL_RATIO` | **4.0** | how far the slowest connections on a side sit above the middle one before some of them are a fault rather than the spread every side has. A ratio and not a millisecond figure, for the reason `QUEUE_BURSTY_TAIL` is one: a p95 of 200ms is ordinary behind a 180ms median and alarming behind a 20ms one. Four times is wide, because a healthy side clusters and doubling happens on any box with one slow peer in the set |
 | `TAIL_MIN_CONNECTIONS` | **20** | connections a side needs before its p95 means anything. The 95th percentile of four samples is the worst of four - the same artefact `MIN_PROBES_FOR_LOSS` exists for on the loss side. A side with a handful of connections has no tail, it has a worst one |
+| `TAIL_ONE_PEER_SHARE` | **0.8** | how much of a side's slow tail has to sit on one peer before that peer is named as what the slow connections share. Below it the tail is spread, which is a different answer and not a weaker one: connections to many peers all slow together points at something they all cross, and naming the busiest of them would be picking a scapegoat out of a list. Four fifths leaves room for one straggler somewhere else |
 | `JITTER_MS` | **30.0** | milliseconds of round-trip variance, from TCP's own measurement on the connections this box carries, before the delay is called unstable |
 | `JITTER_SHARE` | **0.5** | and it must be at least this share of the round trip. Both are needed for the same reason as the queue pair below: the absolute figure alone fires on any long path where tens of milliseconds of variance is ordinary, and the share alone fires on a LAN where 0.2ms becomes 0.5ms |
 | `ESTAB_RESET_PCT` | **20** | share of connections that reached ESTABLISHED and were then torn down abruptly rather than closed. Some abandonment is normal, so the line sits where it stops looking like a client walking away |
@@ -3920,7 +3921,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1846 tests, no dependencies, no network, a few seconds, so they run
+1848 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 

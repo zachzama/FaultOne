@@ -28,5 +28,25 @@
   "label": "the tail and the middle are reported the same way round",
   "old": "        mid, tail = side[\"rtt_ms\"], side[\"rtt_p95_ms\"]",
   "new": "        tail, mid = side[\"rtt_ms\"], side[\"rtt_p95_ms\"]"
+ },
+ {
+  "label": "the slow connections are not grouped by peer at all",
+  "old": "        on, share, spread = (side.get(\"tail_on\"), side.get(\"tail_share\"),\n                             side.get(\"tail_peers\") or 0)",
+  "new": "        on, share, spread = None, None, 0"
+ },
+ {
+  "label": "a tail spread across peers still names one of them",
+  "old": "        if share >= TAIL_ONE_PEER_SHARE:",
+  "new": "        if share >= 0.0:"
+ },
+ {
+  "label": "a tail on one peer is reported as spread",
+  "old": "        if share >= TAIL_ONE_PEER_SHARE:",
+  "new": "        if share >= 1.1:"
+ },
+ {
+  "label": "the tail is grouped from every connection, not the slow ones",
+  "old": "                    if (f.get(\"rtt_ms\") or 0) >= p95:",
+  "new": "                    if True:"
  }
 ]

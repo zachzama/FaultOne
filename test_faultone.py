@@ -16887,9 +16887,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1062),
-            "compressed": (len(gzip.compress(raw, 9)), 321),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 219),
+            "on disk": (len(raw), 1065),
+            "compressed": (len(gzip.compress(raw, 9)), 322),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 220),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -21037,6 +21037,38 @@ class TestTheTailAMedianHides(unittest.TestCase):
         self.assertIn("slowest twentieth are taking 400ms", said)
         self.assertIn("20 times longer", said)
         self.assertIn("across 24 connection(s)", said)
+
+    def spread(self, base, slow, n=24, slow_n=4):
+        """The same tail, one connection each to different peers."""
+        mod = fresh()
+        mod.PROBE_EVERY_SOURCE = False
+        socks = []
+        for i in range(n):
+            rtt = slow if i < slow_n else base
+            socks.append(steady_sock("10.0.0.%d" % (90 + i), "%d" % (44000 + i),
+                                     rtt, port="5432"))
+        sided_flows(mod, *socks)
+        return next(f["message"] for f in
+                    mod.diagnose("8.8.8.8", None, quick=False)["findings"]
+                    if f["code"] == "tail_of_backends_slow")
+
+    def test_a_tail_on_one_peer_names_the_address(self):
+        """The strongest form this finding takes: an owner is somewhere to
+        send it, an address is somewhere to look."""
+        said = next(f["message"] for f in self.side(20.0, 400.0)["findings"]
+                    if f["code"] == "tail_of_backends_slow")
+        self.assertIn("100% of the slow connections are to 10.0.0.90", said)
+        self.assertIn("one member of a pool", said)
+
+    def test_a_tail_spread_across_peers_says_that_instead(self):
+        """And it is worth as much. Connections to four different peers all
+        slow together is not one bad backend, and naming the busiest of them
+        would be picking a scapegoat out of a list - so the sentence rules that
+        answer out rather than offering it."""
+        said = self.spread(20.0, 400.0)
+        self.assertIn("spread across 4 peers rather than concentrated on one",
+                      said)
+        self.assertNotIn("where to look first", said)
 
     def test_a_side_that_clusters_says_nothing(self):
         """Every side has a spread. This is only a fault when the tail is far

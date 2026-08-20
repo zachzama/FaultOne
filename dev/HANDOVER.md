@@ -95,6 +95,36 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### Phase C is done: the orderings that carry a reason are declared
+
+`VERDICT_RULES` is a list and its order **is** the priority, so a rule inserted
+in the wrong place changes what every report concludes and nothing in the diff
+says so. `MUST_OUTRANK` in the suite states the pairs where the order is an
+argument rather than an accident, each with the reason, so a reorder fails on
+the reason it broke instead of three tests later on a symptom.
+
+**It found a live defect on its first run, in code written the same day.**
+`queue_builds_at_hop` was a warning ranked above the critical
+`latency_is_queuing` - the same fault named down to the hop, reading milder
+than the thing it refines. Third time that exact shape has bitten. It is
+critical now.
+
+**And the guard's first version was wrong in the way worth recording.** It
+compared the worst severity each code reaches anywhere in the corpus, and
+flagged `target_alone_unreachable` above `inet_unreachable` - which are the two
+branches of one `if/else` and can never both fire. The claim is about a run
+containing both, so the test now has to find such a run before it complains.
+An over-strict ordering guard is worse than none: it teaches people to reorder
+the list to silence it.
+
+**Declined, with a reason: `ca_state`.** It was ranked third on the list of
+outside vocabularies and it is not reachable. `struct tcp_info` carries
+`tcpi_ca_state`, but `ss` never prints it - confirmed in iproute2's source,
+there is no reference to it anywhere in `misc/ss.c`. Reading it would mean
+opening a netlink socket and speaking INET_DIAG directly, which is a much
+larger collector than any here. Recorded so the next person does not re-derive
+it: the five states are real, they are just not on the wire we read.
+
 ### Audited against two outside vocabularies (2026-08-20)
 
 The method that has paid every time: **take somebody else's closed enum of

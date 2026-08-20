@@ -31,7 +31,7 @@
  },
  {
   "label": "the named hop is not marked on the picture",
-  "old": "                hop[\"blame\"] = {\"code\": \"queue_builds_at_hop\", \"severity\": \"warning\"}",
+  "old": "                hop[\"blame\"] = {\"code\": \"queue_builds_at_hop\", \"severity\": \"critical\"}",
   "new": "                pass"
  },
  {

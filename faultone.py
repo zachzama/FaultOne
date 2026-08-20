@@ -16072,10 +16072,16 @@ def _findings_from_the_walk(hops, path_insight, target):
                      f"anything intermittent.")
         for hop in hops:
             if hop.get("hop") == qj["hop"]:
-                hop["blame"] = {"code": "queue_builds_at_hop", "severity": "warning"}
+                hop["blame"] = {"code": "queue_builds_at_hop", "severity": "critical"}
                 break
         found.append({
-            "severity": "warning",
+            # As critical as latency_is_queuing, which it refines. It is the
+            # same fault named down to the hop, and a rule ranked above another
+            # cannot be milder than it: the verdict takes its severity from
+            # whatever headlines it, so the finer answer would soften the run.
+            # Third time this shape has bitten - it is a declared ordering with
+            # a test behind it now rather than a comment on one constant.
+            "severity": "critical",
             "code": "queue_builds_at_hop",
             "layer": 3,
             "message": (

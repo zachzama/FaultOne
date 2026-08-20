@@ -16887,7 +16887,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1075),
+            "on disk": (len(raw), 1076),
             "compressed": (len(gzip.compress(raw, 9)), 325),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 222),
         }
@@ -24270,6 +24270,83 @@ class TestEveryFindingFires(unittest.TestCase):
         "call_quality_bad": "inet_partial_loss",
         "call_quality_degraded": "inet_partial_loss",
     }
+
+    #: Orderings that carry a reason, stated rather than implied by position.
+    #:
+    #: `VERDICT_RULES` is a list and its order *is* the priority, so a rule
+    #: inserted in the wrong place changes what every report concludes and
+    #: nothing about the diff says so. That has happened twice: two warnings
+    #: placed above a critical quietly downgraded every verdict built on them,
+    #: and putting two causes above `latency_high` made it unreachable.
+    #:
+    #: Both were caught, by guards that noticed the *consequence*. This states
+    #: the intent instead, for the pairs where the order is an argument rather
+    #: than an accident - so a reorder fails on the reason it broke, not three
+    #: tests later on a symptom.
+    MUST_OUTRANK = [
+        ("queue_builds_at_hop", "latency_wall",
+         "a queue has an owner; the longest link on a path is usually just the "
+         "longest link"),
+        ("queue_builds_at_hop", "latency_is_queuing",
+         "the hop is the same finding named down to the address"),
+        ("latency_is_queuing", "latency_high",
+         "waiting is actionable, distance is not"),
+        ("return_path_filtered", "path_asymmetric",
+         "the asymmetry is the symptom; this box dropping it is the cause"),
+        ("target_alone_unreachable", "inet_unreachable",
+         "one dead destination is not a dead uplink"),
+        ("uplink_saturated", "inet_partial_loss",
+         "a full line explains the loss it causes"),
+        ("cpu_saturated", "queuing_delay",
+         "a box too busy to send explains the queue it builds"),
+        ("zero_window_here", "rcv_buffer_pruned",
+         "an application not reading outranks the memory pressure it causes"),
+    ]
+
+    def test_the_orderings_that_carry_a_reason_still_hold(self):
+        """Position is the priority, so the reasons behind it are worth
+        asserting rather than leaving to be inferred from a list index."""
+        rank = {code: i for i, (code, *_rest) in enumerate(nd.VERDICT_RULES)}
+        for above, below, why in self.MUST_OUTRANK:
+            with self.subTest(above=above, below=below):
+                self.assertIn(above, rank, "%s is not a ranked rule" % above)
+                self.assertIn(below, rank, "%s is not a ranked rule" % below)
+                self.assertLess(rank[above], rank[below],
+                                "%s must outrank %s: %s" % (above, below, why))
+
+    def test_a_milder_rule_never_sits_above_a_critical_one_it_explains(self):
+        """The failure mode behind half of that list. The verdict takes its
+        severity from whatever headlines it, so a warning ranked above a
+        critical downgrades every run where both fire - which is how two
+        latency causes shipped as warnings and quietly softened the report."""
+        # Only where a run with both actually exists. The first version of
+        # this compared the worst severity each code ever reaches across the
+        # whole corpus, and flagged `target_alone_unreachable` above
+        # `inet_unreachable` - which are the two branches of one if/else and
+        # can never both fire. The claim is about a run containing both, so
+        # the test has to find one.
+        together = []
+        for code in sorted(S):
+            setup, kw = S[code]
+            mod = fresh(); setup(mod)
+            try:
+                rep = mod.diagnose(quick=False, **scenario_kwargs(kw))
+            except Exception:
+                continue
+            together.append({f["code"]: f.get("severity") for f in rep["findings"]})
+        checked = 0
+        for above, below, _why in self.MUST_OUTRANK:
+            for run in together:
+                if above not in run or below not in run:
+                    continue
+                checked += 1
+                with self.subTest(above=above, below=below):
+                    self.assertFalse(
+                        run[above] == "warning" and run[below] == "critical",
+                        "%s is a warning ranked above the critical %s and both "
+                        "fire on one run, so it reads milder than it is"
+                        % (above, below))
+        self.assertTrue(together, "no scenario produced a report")
 
     def test_every_ranked_finding_can_be_the_answer_somewhere(self):
         """Firing is not the same as being reachable, and only one of them can

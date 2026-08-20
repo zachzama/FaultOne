@@ -1,0 +1,14 @@
+[
+ {"label": "the queue at a hop drops below the wall it explains",
+  "old": "    (\"queue_builds_at_hop\", \"whoever owns the hop the queue is on\",",
+  "new": "    (\"queue_builds_at_hop_moved\", \"whoever owns the hop the queue is on\","},
+ {"label": "the finer latency answer goes back to being milder",
+  "old": "            \"severity\": \"critical\",\n            \"code\": \"queue_builds_at_hop\",",
+  "new": "            \"severity\": \"warning\",\n            \"code\": \"queue_builds_at_hop\","},
+ {"label": "the box that drops its own return traffic stops outranking the symptom",
+  "old": "    (\"return_path_filtered\", \"this box, and nobody else\",",
+  "new": "    (\"return_path_filtered_moved\", \"this box, and nobody else\","},
+ {"label": "an application not reading drops below the memory pressure it causes",
+  "old": "    (\"zero_window_here\", \"the service on this box, not its network\",",
+  "new": "    (\"zero_window_here_moved\", \"the service on this box, not its network\","}
+]

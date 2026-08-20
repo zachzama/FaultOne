@@ -308,14 +308,45 @@ this; the gateway side did not** - the two share a shape, which is how a
 boundary ends up covered on one side only, and is worth checking for wherever a
 rule exists in both directions.
 
-Still to triage: `_check_counters` (twice), `_check_link_modes` (two
-conditions), `_check_nic_backlog`, `_check_path` (three), `_check_call_quality`.
-The set is `dev/mutations/multi-condition.json`; regenerate it after edits
-because the anchors are whole guard expressions and move easily.
+**Triaged. Two were real, four are equivalent, one is still open.**
 
-**Seventy-eight of the 121 examined. Nine real gaps, seven equivalent mutants,
-nine explained by one contract.** Forty-three left, plus the nine survivors
-above.
+*Real, and both were the same shape - a fixture that short-circuits before
+reaching the condition:*
+
+- `_check_link_modes` guards `100 < speed < capacity` with `speed is not None`.
+  The test named for unknown speed has **no capacity**, so it short-circuits one
+  condition earlier and never drives this one. `ethtool` prints the supported
+  modes and `Speed: Unknown!` on a port that is down or unplugged, so capacity
+  known and speed unknown is ordinary - and without the guard it is `100 <
+  None`, a TypeError, on an unplugged port.
+- The tunnel MTU guard and the `not quick` half of `_check_path_mtu` closed with
+  it.
+
+*Equivalent, and all four for one reason:* **the gate is a count and the
+condition beside it is a rate derived from that same count.** `live_drops` with
+`live_ppm`, `collisions` with `coll_ppm`, `errors` with `err_ppm` - a zero
+count makes the rate zero, so the rate test already refuses. Two `_check_path`
+gates on `lossy` are the same idea: `final_loss >= 5` cannot be true unless the
+final hop is in the lossy list. `_check_call_quality` guards `avg` and `floor`
+separately when `parse_ping_stats` sets both or neither.
+
+*Still open:* `_check_path` condition 3 -
+`not stalled[-1]["hop"] == hops[-1]["hop"]`. A trace that stalls **at the
+destination** is a destination that did not answer, not a path that stopped
+part way, and the two have different owners. That reads as a real gap and is
+the next one to write.
+
+The set is `dev/mutations/multi-condition.json`; regenerate after edits, because
+the anchors are whole guard expressions and move easily.
+
+**Seventy-eight of the 121 examined. Eleven real gaps, eleven equivalent
+mutants, nine explained by one contract.** Forty-three left, plus one survivor
+above still to write.
+
+*A fifth pattern, from this triage:* **a fixture that short-circuits before the
+condition under test.** Both real gaps here had a test named for exactly the
+input in question, which stopped one condition short of driving it. The tell is
+a guard where the earlier conditions are well covered.
 
 *A third pattern, from batch eight:* **a test that asserts a phrase appears
 tests almost nothing.** It does not check which values the phrase names, and it

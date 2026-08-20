@@ -5069,6 +5069,21 @@ class TestWhatRealToolsActuallyPrint(unittest.TestCase):
         self.assertNotIn("link_saturated", codes)
         self.assertNotIn("negotiated_below_capacity", codes)
 
+    def test_a_port_that_knows_its_capacity_but_not_its_speed_says_nothing(self):
+        """`ethtool` prints the supported modes and `Speed: Unknown!` on a port
+        that is down or unplugged, so capacity is known and speed is not.
+
+        The fixture above has no capacity, so it short-circuits before the
+        comparison and never drives the `speed is not None` guard - which is
+        why a mutation deleting that guard survived. Without it this is
+        `100 < None`, a TypeError, on an ordinary unplugged port."""
+        m = fresh()
+        m.cmd_link_modes = lambda: {"ok": True, "cmd": "s", "stdout": "", "interfaces": [
+            {"name": "eth0", "speed_mbps": None, "max_mbps": 10_000,
+             "duplex": "full", "mtu": 1500, "carrier": True}]}
+        codes = [f["code"] for f in m.diagnose("8.8.8.8", None, quick=False)["findings"]]
+        self.assertNotIn("negotiated_below_capacity", codes)
+
     def test_a_share_of_an_aggregate_never_exceeds_it(self):
         """Many drivers wire rx_over_errors and rx_missed_errors to the same
         hardware counter, so adding them counts one overrun twice - enough to

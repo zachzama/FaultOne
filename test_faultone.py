@@ -3568,8 +3568,8 @@ class TestTheSameFaultOnEveryCable(unittest.TestCase):
         self.assertNotEqual(self.box(1, 1)["based_on"][0], "fault_on_every_interface")
 
 
-class TestLoopbackIsNotOneOfTheCables(unittest.TestCase):
-    """Every box has a loopback and no fixture had one.
+class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
+    """Every box has a loopback and idle ports, and no fixture had either.
 
     Ten places skip it before judging an interface, and a mutation deleting
     any of the ten survived the whole suite - because the corpus builds
@@ -3603,27 +3603,61 @@ class TestLoopbackIsNotOneOfTheCables(unittest.TestCase):
                                   "it; excluding lo would make it wrong",
     }
 
-    def test_every_judgement_about_an_interface_skips_loopback(self):
+    #: Places that judge an interface without skipping the ones carrying no
+    #: traffic. Same rule as the loopback list: each is a decision.
+    KEEPS_THE_IDLE = {
+        "_check_link_flaps": "a port with a loose cable flaps without ever "
+                             "passing a packet, and that is the finding",
+        "_qualify_upstream_verdict": "reads busiest_mbps, which is only ever "
+                                     "written for an interface that moved "
+                                     "something",
+    }
+
+    def _reading_the_interface_list(self):
+        """Every function that reads the interface list, and what it skips."""
         import ast
         with open(nd.__file__, encoding="utf-8") as fh:
             src = fh.read()
         lines = src.splitlines()
-        missing = []
+        found = {}
         for node in ast.walk(ast.parse(src)):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             body = "\n".join(lines[node.lineno - 1:node.end_lineno])
             if "link_stats" not in body or '"interfaces"' not in body:
                 continue
-            if 'startswith("lo")' in body or '!= "lo"' in body:
-                continue
-            if node.name in self.KEEPS_LOOPBACK:
-                continue
-            missing.append(node.name)
-        self.assertEqual(missing, [], "these read the interface list and judge "
-                                      "loopback with the rest of them")
+            # The *guard*, not the word. `_check_counters` says "packets"
+            # several times over for other reasons, so a test looking for the
+            # word passed with the filter deleted - a structural test that
+            # matches on vocabulary rather than on the construct is the weak
+            # kind this file keeps finding.
+            skips_idle = re.search(
+                r'not \w+(?:\["packets"\]|\.get\("packets"\))'
+                r'|\w+(?:\["packets"\]|\.get\("packets"\))\s+and', body)
+            found[node.name] = (
+                'startswith("lo")' in body or '!= "lo"' in body,
+                bool(skips_idle))
+        return found
 
-    def test_the_printed_table_does_not_offer_loopback_as_a_link(self):
+    def test_every_judgement_about_an_interface_skips_the_idle_ones(self):
+        """The other half of the same expressions, and the same blind spot:
+        every interface in the corpus is busy. A box has a pile of virtual
+        interfaces and spare ports carrying nothing, and they cannot report a
+        fault on a cable they are not using - so counting them either finds
+        nothing and says the link is clean on evidence that is not evidence,
+        or blocks a shared-cause finding that needs all of them to agree."""
+        missing = [name for name, (_lo, idle) in self._reading_the_interface_list().items()
+                   if not idle and name not in self.KEEPS_LOOPBACK
+                   and name not in self.KEEPS_THE_IDLE]
+        self.assertEqual(sorted(missing), [])
+
+    def test_every_judgement_about_an_interface_skips_loopback(self):
+        missing = [name for name, (lo, _idle) in self._reading_the_interface_list().items()
+                   if not lo and name not in self.KEEPS_LOOPBACK]
+        self.assertEqual(sorted(missing), [], "these read the interface list and "
+                                              "judge loopback with the rest of them")
+
+    def test_the_printed_table_offers_only_the_cables(self):
         """One behavioural anchor under the contract above, because a contract
         test proves a filter is written and not that it works - `lo` renamed
         to `lop` would satisfy it. This is the reader-visible end: the link
@@ -3641,7 +3675,7 @@ class TestLoopbackIsNotOneOfTheCables(unittest.TestCase):
                         carrier_changes=0, delta_carrier_changes=0,
                         rate_series=None, peak_mbps=None, series_seconds=None)
         report = {"raw": {"link_stats": {"interfaces": [
-            iface("lo", 9_000_000), iface("eth0", 5_000_000)]}},
+            iface("lo", 9_000_000), iface("eth7", 0), iface("eth0", 5_000_000)]}},
             "findings": []}
         out = []
         nd._render_link_tables(report, out, lambda s, _sev=None: s, 100)
@@ -3649,29 +3683,27 @@ class TestLoopbackIsNotOneOfTheCables(unittest.TestCase):
         self.assertIn("eth0", printed, "the table stopped being drawn at all")
         self.assertNotIn("lo ", printed)
         self.assertNotIn("40,000", printed)
+        # And the spare port cabled to nothing, for the same reason: a row per
+        # virtual interface is how a reader learns to skip the table.
+        self.assertNotIn("eth7", printed)
 
     def test_the_list_of_exceptions_is_still_a_list_of_exceptions(self):
         """A name left here after the function stops reading interfaces - or
         after it starts filtering - turns the guard above into a hole nobody
         can see. The same reasoning as the finding-side table: the fallback
         stays a decision somebody made rather than one nobody noticed."""
-        import ast
-        with open(nd.__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        lines = src.splitlines()
-        reading = {}
-        for node in ast.walk(ast.parse(src)):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            body = "\n".join(lines[node.lineno - 1:node.end_lineno])
-            if "link_stats" in body and '"interfaces"' in body:
-                reading[node.name] = ('startswith("lo")' in body
-                                      or '!= "lo"' in body)
+        reading = self._reading_the_interface_list()
         for name, reason in sorted(self.KEEPS_LOOPBACK.items()):
             with self.subTest(name=name):
                 self.assertIn(name, reading, "no longer reads the interface list")
-                self.assertFalse(reading[name],
+                self.assertFalse(reading[name][0],
                                  "filters loopback now, so it is not an exception")
+                self.assertTrue(reason.strip(), "an exception with no reason")
+        for name, reason in sorted(self.KEEPS_THE_IDLE.items()):
+            with self.subTest(name=name):
+                self.assertIn(name, reading, "no longer reads the interface list")
+                self.assertFalse(reading[name][1],
+                                 "skips the idle now, so it is not an exception")
                 self.assertTrue(reason.strip(), "an exception with no reason")
 
 

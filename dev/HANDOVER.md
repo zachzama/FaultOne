@@ -9,7 +9,7 @@ the command that produces it is next to it.
 
 ## Start here (as of v1.24.0 plus the 2026-08-19 batches)
 
-Suite green at **1,830**, tree clean, `dev/counts.py --check` says nothing is
+Suite green at **1,831**, tree clean, `dev/counts.py --check` says nothing is
 stale, nothing pushed since v1.24.0. No release cut on top of it - the work
 since is tests and four behaviour fixes, one of which changes what a report
 says on a live box, so tag it whenever you like.
@@ -37,9 +37,9 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The empty-only sweep, continued.** Batches ten to twenty: **66
-  mutations, 20 holes, 5 equivalent mutants**, in `negatives-batch-ten`
-  through `-twenty.json`. Sixty-two tests moved from unexamined to
+- **The empty-only sweep, continued.** Batches ten to twenty-one: **72
+  mutations, 26 holes, 5 equivalent mutants**, in `negatives-batch-ten`
+  through `-twentyone.json`. Sixty-eight tests moved from unexamined to
   known-real. Still the best rate of anything open, and
   `python3 dev/vacuous.py` lists the 150 left.
 
@@ -508,6 +508,26 @@ satisfy it. So the printed link table is asserted directly against a report
 carrying a loopback moving 40 Gbps, which is the reader-visible end and the
 row that would sit at the top of the table. Every structural test in here
 wants one of those beside it.
+
+**Batch twenty-one: the other half of the same expressions, six mutations, six
+survivors.** In `negatives-batch-twentyone.json`. The guards that skip an
+interface carrying no traffic are as untested as the loopback ones and for the
+identical reason - every interface in the corpus is busy. The comment above one
+of them has said "every box has a pile of idle virtual interfaces" the whole
+time. Same answer: the contract test now covers both halves, with two named
+exceptions that are right not to skip the idle - `_check_link_flaps`, because a
+port with a loose cable flaps without ever passing a packet and that *is* the
+finding, and `_qualify_upstream_verdict`, because the value it reads is only
+ever written for an interface that moved something.
+
+**And the batch found a defect in the contract test itself, which is the part
+to carry.** The first version asked whether the function body contained
+`["packets"]`. `_check_counters` says "packets" several times over for other
+reasons, so deleting its guard left the word behind and the mutation survived a
+test written that hour to catch it. **A structural test that matches on
+vocabulary rather than on the construct is the weak kind** - the same family as
+a test asserting a phrase appears. It matches the shape of the guard now
+(`not x["packets"]`, or `x["packets"] and`), and the mutation is caught.
 
 **How to work through the rest:** take a handful at a time, find the guard that
 keeps the rule quiet, and write a mutation that forces it open. A caught

@@ -1,0 +1,32 @@
+[
+  {
+    "label": "an interface carrying nothing is judged on its error counters",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        bits = [",
+    "new": "        if name.startswith(\"lo\"):\n            continue\n        bits = ["
+  },
+  {
+    "label": "an interface carrying nothing is asked for its optical power",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        o = cmd_optics(name)",
+    "new": "        if name.startswith(\"lo\"):\n            continue\n        o = cmd_optics(name)"
+  },
+  {
+    "label": "an interface carrying nothing is held to a link speed",
+    "old": "        if name.startswith(\"lo\") or not iface[\"packets\"]:\n            continue\n        speed = speed_by_iface.get(name)",
+    "new": "        if name.startswith(\"lo\"):\n            continue\n        speed = speed_by_iface.get(name)"
+  },
+  {
+    "label": "an interface carrying nothing is one a duplex answer is drawn from",
+    "old": "                    if i[\"packets\"] and not i[\"name\"].startswith(\"lo\")}",
+    "new": "                    if not i[\"name\"].startswith(\"lo\")}"
+  },
+  {
+    "label": "an interface carrying nothing is evidence the link is clean",
+    "old": "                  if i[\"packets\"] and not i[\"name\"].startswith(\"lo\")]",
+    "new": "                  if not i[\"name\"].startswith(\"lo\")]"
+  },
+  {
+    "label": "the report lists an interface that has carried nothing",
+    "old": "              if i.get(\"packets\") and not i[\"name\"].startswith(\"lo\")]",
+    "new": "              if not i[\"name\"].startswith(\"lo\")]"
+  }
+]

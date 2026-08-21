@@ -2288,6 +2288,30 @@ def ports_in_order(ports):
     return sorted(ports, key=lambda p: (int(p) if str(p).isdigit() else 0, str(p)))
 
 
+#: What each family's wildcard is called once it is written out in full. BSD
+#: netstat prints "*" for both and puts the family in the protocol column
+#: instead; ss prints the address. Normalising here rather than teaching every
+#: reader about two spellings, because only one of them carries the family and
+#: the readers do not see the protocol column at all.
+_WILDCARD_BY_FAMILY = {"tcp4": "0.0.0.0", "udp4": "0.0.0.0",
+                       "tcp6": "::", "udp6": "::"}
+
+
+def _family_wildcard(addr, family):
+    """`*.443` written the way ss would write it, or unchanged."""
+    # The wildcard test is subsumed by the replace below, which does nothing
+    # when there is no "*" in the address. Kept because it states what this is
+    # for, and because the subsumption is a property of str.replace rather
+    # than of anything here.
+    if not addr or not addr.startswith("*"):
+        return addr
+    full = _WILDCARD_BY_FAMILY.get(family)
+    # A protocol column that does not name a family - plain "tcp" - leaves the
+    # wildcard as it was. Guessing v4 there would put the bug back on any BSD
+    # that does not split them.
+    return addr.replace("*", full, 1) if full else addr
+
+
 def parse_socket_states(text, own_access=(None, None)):
     """Count sockets by state, and note who the pending ones are talking to.
 
@@ -2334,6 +2358,12 @@ def parse_socket_states(text, own_access=(None, None)):
             state = parts[0]
             peer = parts[4] if len(parts) > 4 else None
         elif parts[0].lower().startswith("tcp"):          # netstat: state last
+            # Which family, from the protocol column. BSD prints both wildcards
+            # as a bare "*", so the v4/v6 distinction that _serves depends on
+            # lives only here - and a v4-only listener was counting as cover
+            # for a v6 service address, which is the exact bug that was found
+            # and fixed on the Linux spelling and never reached this one.
+            family = parts[0].lower()
             candidate = canon_socket_state(parts[-1])
             if candidate in TCP_STATES:
                 state = candidate
@@ -2347,6 +2377,7 @@ def parse_socket_states(text, own_access=(None, None)):
                     local, peer = addrs[0], addrs[1]
                 else:
                     peer = parts[-2] if len(parts) >= 2 else None
+                local = _family_wildcard(local, family)
         if not state:
             continue
         key = canon_socket_state(state)
@@ -3789,6 +3820,32 @@ def normalise_mac(mac):
         return mac.lower()
 
 
+#: BSD's spelling of a neighbour state, mapped onto the kernel vocabulary
+#: `ip neigh` uses, so a report reads the same on either. BSD says how long is
+#: left rather than naming a state - "expires in 1200 seconds" for one it has
+#: heard from, "expired" for one it has not, "permanent" for a static entry.
+#: Discarding that left every BSD entry stateless, and the static case is worth
+#: having on its own: a hard-coded gateway address is a configuration fact that
+#: explains a box still resolving a neighbour that is gone.
+_BSD_ARP_STATES = (("permanent", "permanent"), ("expires in", "reachable"),
+                   ("expired", "stale"))
+
+
+def _bsd_arp_state(line):
+    """A neighbour state out of a BSD `arp -a` row, or None.
+
+    The order of the table is not load-bearing, and the comment here used to
+    claim it was: "expires in" and "expired" share a prefix but neither is a
+    substring of the other, so reordering them changes nothing. A mutation
+    reordering them survived, which is how the claim got checked.
+    """
+    low = (line or "").lower()
+    for needle, state in _BSD_ARP_STATES:
+        if needle in low:
+            return state
+    return None
+
+
 def parse_arp_table(text):
     """Entries as {ip, mac, state}. Handles `ip neigh` and BSD/macOS `arp -a`."""
     entries = []
@@ -3806,7 +3863,8 @@ def parse_arp_table(text):
         incomplete = mac.startswith("(")
         entries.append({"ip": m.group(1),
                         "mac": None if incomplete else normalise_mac(mac),
-                        "state": "incomplete" if incomplete else None})
+                        "state": "incomplete" if incomplete
+                        else _bsd_arp_state(line)})
     if entries:
         return entries
     for m in ARP_WINDOWS_RE.finditer(text or ""):

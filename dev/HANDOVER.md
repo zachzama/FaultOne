@@ -95,6 +95,59 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### dev/dialects.py - one reading, written two ways
+
+Six defects in three days shared a shape, and it was **not** "a parser
+crashed". It was a dialect difference turning a reading into an absence,
+silently: mtr quoting its numbers, `ifconfig` writing `10Gbase-SR`, `tc`
+writing `1Kb`, `netstat` writing `Idrop`, `netstat` marking a name `ixl0*`,
+`traceroute` writing `!F-1492`. Every one produced a confident report with a
+number missing from it.
+
+The suite cannot find these, and the reason is structural: its fixtures are
+written from the same understanding as the code. `dev/dialects.py` tests a
+property instead of an expectation - parse one reading in two platforms'
+accents and report any value present in one and not the other. Symmetric, so
+which sample is called the base cannot decide what it can see.
+
+**Two rules make it a harness rather than a rubber stamp**, and getting both
+wrong first is what proved they were needed:
+
+1. **A declared key may change. It may never disappear.** The media case
+   declares `speed_mbps`, and the first version let that excuse the speed going
+   missing entirely - which is the defect the case exists for. The self-test
+   said MISSED.
+2. **The pair must be one reading in two accents, not two platforms reporting
+   different things.** macOS prints no discard column at all, so pairing it
+   against FreeBSD asserts that a column nobody printed should have been read.
+   The honest pair is FreeBSD's `Idrop` against the same table headed `Drop`.
+
+Its `--self-test` puts all five code defects back, one at a time, and requires
+each to be seen - then requires the unbroken tree to be quiet, because a
+harness that always finds something is evidence of nothing. It is in CI and in
+the release gate.
+
+**It found two defects on its first two runs.**
+
+`ss` reports a wildcard listener as `0.0.0.0` and BSD `netstat` as a bare `*`.
+Both are in `_WILDCARD_BINDS`, so nothing crashed - but only one says which
+family, and `_serves` depends on that. A v4-only listener was covering a v6
+service address, which is **the exact bug that was found and fixed on the ss
+spelling and never reached this one**. The family is in the `tcp4`/`tcp6`
+column, which the parser was discarding; `_family_wildcard` normalises it, and
+a protocol column naming no family is left alone rather than guessed at.
+
+BSD `arp -a` says how long is left rather than naming a state, so every BSD
+entry was stateless. Mapped onto the kernel vocabulary `ip neigh` uses, because
+the consumer already tests against those names. `permanent` earns its place on
+its own: a static gateway entry is a configuration fact that explains a box
+still resolving a neighbour that is gone.
+
+**And it corrected a claim of mine.** A mutation reordering `_BSD_ARP_STATES`
+survived, because "expired" and "expires in" share a prefix and neither is a
+substring of the other - so the order is not load-bearing and the comment
+saying it was is now the comment saying it is not.
+
 ### The report that contradicted itself about its own clients
 
 A real report said both of these about one box, out of the same socket table:

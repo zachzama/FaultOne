@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a bsd wildcard listener loses which family it is",
+  "old": "                local = _family_wildcard(local, family)",
+  "new": "                local = local"
+ },
+ {
+  "label": "a v4 wildcard covers a v6 service address again",
+  "old": "_WILDCARD_BY_FAMILY = {\"tcp4\": \"0.0.0.0\", \"udp4\": \"0.0.0.0\",\n                       \"tcp6\": \"::\", \"udp6\": \"::\"}",
+  "new": "_WILDCARD_BY_FAMILY = {\"tcp4\": \"::\", \"udp4\": \"::\",\n                       \"tcp6\": \"::\", \"udp6\": \"::\"}"
+ },
+ {
+  "label": "a protocol column naming no family is guessed at",
+  "old": "    return addr.replace(\"*\", full, 1) if full else addr",
+  "new": "    return addr.replace(\"*\", full or \"0.0.0.0\", 1)"
+ },
+ {
+  "label": "a bsd arp entry carries no state again",
+  "old": "                        \"state\": \"incomplete\" if incomplete\n                        else _bsd_arp_state(line)})",
+  "new": "                        \"state\": \"incomplete\" if incomplete else None})"
+ },
+ {
+  "label": "a row with no lifetime is given one anyway",
+  "old": "    for needle, state in _BSD_ARP_STATES:\n        if needle in low:\n            return state\n    return None",
+  "new": "    for needle, state in _BSD_ARP_STATES:\n        if needle in low:\n            return state\n    return \"reachable\""
+ }
+]

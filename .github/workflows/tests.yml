@@ -119,3 +119,9 @@ jobs:
       # Asks of all 1,780 tests the cheap question dev/mutate.py asks of 73:
       # did this test execute an assertion, and did it have anything in it.
       - run: python dev/vacuous.py
+      # Parses one reading in two platforms' accents and reports any value that
+      # survives one and not the other. Six defects in three days had that
+      # shape, and the suite could not see any of them: its fixtures were
+      # written from the same understanding as the code.
+      - run: python dev/dialects.py
+      - run: python dev/dialects.py --self-test

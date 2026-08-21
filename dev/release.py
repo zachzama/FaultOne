@@ -204,6 +204,9 @@ def main():
                       ("dev/deep_e2e.py", [sys.executable, "dev/deep_e2e.py"]),
                       ("dev/audit.py", [sys.executable, "dev/audit.py"]),
                       ("dev/vacuous.py", [sys.executable, "dev/vacuous.py"]),
+                      ("dev/dialects.py", [sys.executable, "dev/dialects.py"]),
+                      ("dev/dialects.py --self-test",
+                       [sys.executable, "dev/dialects.py", "--self-test"]),
                       ("dev/counts.py --check",
                        [sys.executable, "dev/counts.py", "--check"])):
         print(f"running {what}")

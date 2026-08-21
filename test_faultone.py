@@ -1778,6 +1778,47 @@ class TestArpTable(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertIsNone(entries[2]["mac"])       # (incomplete)
 
+    # ---- BSD says how long is left rather than naming a state -------------
+    #
+    # Found by dev/dialects.py: `ip neigh` gives every entry a state and BSD
+    # gave every entry None but the incomplete ones. Mapped onto the kernel's
+    # vocabulary rather than a second one, because the reader that consumes it
+    # already tests against the kernel's names.
+
+    TIMED = ("? (192.0.2.1) at 0:0:5e:0:53:1 on em0 expires in 1200 seconds"
+             " [ethernet]\n"
+             "? (192.0.2.9) at 0:a:b:0:53:9 on em0 expired [ethernet]\n"
+             "? (192.0.2.7) at 0:a:b:0:53:7 on em0 permanent [ethernet]\n")
+
+    def test_a_bsd_entry_carries_the_state_it_was_given(self):
+        states = [e["state"] for e in nd.parse_arp_table(self.TIMED)]
+        self.assertEqual(states, ["reachable", "stale", "permanent"])
+
+    def test_expires_in_is_not_read_as_expired(self):
+        """They share a prefix and mean opposite things: one has been heard
+        from and the other has not. Neither is a substring of the other, so
+        the table's order is not what keeps them apart - a mutation reordering
+        it survived, and the comment claiming otherwise was wrong."""
+        self.assertEqual(nd.parse_arp_table(self.TIMED)[0]["state"], "reachable")
+
+    def test_a_static_entry_is_worth_saying_so(self):
+        """A hard-coded gateway address is a configuration fact, and it
+        explains a box still resolving a neighbour that is gone."""
+        self.assertEqual(nd.parse_arp_table(self.TIMED)[2]["state"], "permanent")
+
+    def test_bsd_strips_the_leading_zero_off_every_octet(self):
+        """`0:0:5e:0:53:1` and `00:00:5e:00:53:01` are one address, and a
+        failover pair reads as an address conflict if they are two."""
+        self.assertEqual(nd.parse_arp_table(self.TIMED)[0]["mac"],
+                         "00:00:5e:00:53:01")
+
+    def test_a_row_with_no_lifetime_at_all_still_parses(self):
+        """macOS prints `ifscope` and no expiry. Absent is absent, not a
+        state invented to fill the column."""
+        entries = nd.parse_arp_table(self.BSD)
+        self.assertIsNone(entries[0]["state"])
+        self.assertEqual(entries[0]["mac"], "aa:bb:cc:dd:ee:01")
+
     WINDOWS = ("\nInterface: 192.168.1.10 --- 0xa\n"
                "  Internet Address      Physical Address      Type\n"
                "  192.168.1.1           aa-bb-cc-dd-ee-01     dynamic\n"
@@ -16965,6 +17006,63 @@ tcp4       0      0  10.0.0.5.80      10.0.0.9.52000    CLOSE_WAIT
 tcp4       0      0  *.22             *.*               LISTEN
 """
 
+    # ---- BSD writes both wildcards the same way ---------------------------
+    #
+    # Found by dev/dialects.py on its first run: `ss` reports a wildcard
+    # listener as 0.0.0.0 and BSD netstat reports it as a bare "*". Both are in
+    # _WILDCARD_BINDS, so nothing crashed - but only one of them says which
+    # family, and _serves depends on that. A v4-only listener was counting as
+    # cover for a v6 service address, which is the exact bug that was found and
+    # fixed on the ss spelling and never reached this one.
+
+    def bsd(self, proto):
+        text = ("Proto Recv-Q Send-Q Local Address    Foreign Address   (state)\n"
+                "%-5s     0      0 *.443            *.*               LISTEN\n"
+                % proto)
+        return nd.parse_socket_states(text)["bound"]
+
+    def test_the_family_comes_off_the_protocol_column(self):
+        """It is the only place it exists in this output."""
+        self.assertEqual(self.bsd("tcp4"), [("0.0.0.0", "443")])
+        self.assertEqual(self.bsd("tcp6"), [("::", "443")])
+
+    def test_a_v4_listener_does_not_cover_a_v6_service_address(self):
+        """The whole point. 0.0.0.0 never accepts an IPv6 connection, so
+        counting it as cover suppresses service_address_unserved on an address
+        that really does have nothing accepting on it."""
+        self.assertFalse(nd._serves(self.bsd("tcp4"), "2001:db8::1"))
+        self.assertTrue(nd._serves(self.bsd("tcp6"), "2001:db8::1"))
+
+    def test_a_v6_listener_still_covers_a_v4_address(self):
+        """A dual-stack listener on :: takes v4 as mapped addresses, which is
+        how most of them are built."""
+        self.assertTrue(nd._serves(self.bsd("tcp6"), "10.0.0.5"))
+
+    def test_a_protocol_column_naming_no_family_is_left_alone(self):
+        """Some netstats print plain "tcp". Guessing v4 there would put the bug
+        back on every box that does not split them."""
+        self.assertEqual(self.bsd("tcp"), [("*", "443")])
+
+    def test_a_real_address_is_never_rewritten(self):
+        text = ("Proto Recv-Q Send-Q Local Address    Foreign Address   (state)\n"
+                "tcp4      0      0 10.0.0.5.443     *.*               LISTEN\n")
+        self.assertEqual(nd.parse_socket_states(text)["bound"],
+                         [("10.0.0.5", "443")])
+
+    def test_both_tools_describe_one_box_the_same_way(self):
+        """What the harness actually asserts, kept here so the suite says it
+        too: one machine, two commands, one set of readings."""
+        ss = ("State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n"
+              "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"
+              "ESTAB  0 0 10.0.0.5:443 198.51.100.7:51000\n")
+        bsd = ("Proto Recv-Q Send-Q Local Address    Foreign Address    (state)\n"
+               "tcp4       0      0 *.443            *.*                LISTEN\n"
+               "tcp4       0      0 10.0.0.5.443     198.51.100.7.51000 ESTABLISHED\n")
+        a, b = nd.parse_socket_states(ss), nd.parse_socket_states(bsd)
+        for key in ("bound", "listen_ports", "inbound", "outbound", "served_on"):
+            with self.subTest(key=key):
+                self.assertEqual(a[key], b[key])
+
     def test_ss_states_counted(self):
         parsed = nd.parse_socket_states(self.SS)
         self.assertEqual(parsed["states"]["ESTABLISHED"], 2)
@@ -17466,8 +17564,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1103),
-            "compressed": (len(gzip.compress(raw, 9)), 334),
+            "on disk": (len(raw), 1106),
+            "compressed": (len(gzip.compress(raw, 9)), 335),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
         }
         for label, (measured, quoted) in claims.items():

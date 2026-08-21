@@ -3280,6 +3280,118 @@ class TestTheSuiteCleansUpAfterItself(unittest.TestCase):
                          "closed under it: " + "; ".join(bare))
 
 
+class TestEveryCommandGoesThroughOneDoor(unittest.TestCase):
+    """No shell, ever, and exactly one place that starts a process.
+
+    This was true and nothing held it there. `run()` says in its own docstring
+    that a command is "an argv list (never a shell string)", the validators say
+    in theirs that they are "defense-in-depth ... not the only thing standing
+    between user input and the shell" - and both of those are comments. A
+    second call site added three hundred lines away would have been right on
+    the day it was written and unreviewed forever after, which is the shape
+    every guard in this file exists for.
+
+    Scoped to the tool rather than `dev/`. The harnesses run processes freely
+    and are supposed to: they run on a machine their author owns, and they are
+    not the file that gets piped onto somebody else's box during an outage.
+
+    What this does *not* claim to prove is that the tool is safe from its
+    inputs. The reachable surface for untrusted text here is the report - PTR
+    names, LLDP neighbours, certificate fields, all rendered into HTML that
+    gets pasted into tickets - and that is guarded separately by `cls()`,
+    `escapeHtml()` and TestAStateFromAReportCannotLeaveItsAttribute.
+    """
+
+    #: Anything that can reach a shell, or start a process outside `run()`.
+    #: `getoutput` and `getstatusoutput` are on the list because they are
+    #: `shell=True` wearing a different name.
+    FORBIDDEN = (
+        ("os", "system"), ("os", "popen"), ("os", "spawnl"), ("os", "spawnv"),
+        ("os", "execv"), ("os", "execvp"),
+        ("subprocess", "Popen"), ("subprocess", "call"),
+        ("subprocess", "check_call"), ("subprocess", "check_output"),
+        ("subprocess", "getoutput"), ("subprocess", "getstatusoutput"),
+    )
+
+    def process_calls(self):
+        """[(enclosing function, module, attribute)] for every process start.
+
+        Read from the syntax tree rather than by grepping, because the string
+        "subprocess.run" appears in this file's own prose and a text search
+        would either trip on the documentation or be loosened until it stopped
+        catching the thing it is for.
+        """
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        found = []
+
+        def walk(node, where):
+            for child in ast.iter_child_nodes(node):
+                inside = child.name if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef)) else where
+                if (isinstance(child, ast.Call)
+                        and isinstance(child.func, ast.Attribute)
+                        and isinstance(child.func.value, ast.Name)):
+                    found.append((where, child.func.value.id, child.func.attr))
+                walk(child, inside)
+
+        walk(tree, "<module>")
+        return [c for c in found if c[1] in ("os", "subprocess")]
+
+    def test_nothing_reaches_a_shell(self):
+        """The literal question. A shell is what turns a hostname into a
+        command, and there is no reason for one here: every argument this tool
+        passes is a value, never a fragment of a sentence."""
+        banned = [c for c in self.process_calls() if (c[1], c[2]) in self.FORBIDDEN]
+        self.assertEqual(banned, [], "these can reach a shell or start a "
+                                     "process outside run(): %s" % banned)
+
+    def test_no_call_ever_asks_for_a_shell(self):
+        """`shell=True` on the one permitted call would undo all of it, and it
+        is one keyword long."""
+        import ast
+        with open(nd.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        asked = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "shell" and not (isinstance(kw.value, ast.Constant)
+                                              and kw.value.value is False):
+                    asked.append(ast.dump(kw.value)[:60])
+        self.assertEqual(asked, [], "shell= passed as something other than "
+                                    "False: %s" % asked)
+
+    def test_exactly_one_function_starts_a_process(self):
+        """The choke point is the point. Validation, the timeout, the "a
+        command that answered" convention and the not-ok contract all live in
+        `run()`, and a second call site gets none of them - not by being
+        careless, but by being somewhere else."""
+        starters = sorted({where for where, mod, attr in self.process_calls()
+                           if (mod, attr) == ("subprocess", "run")})
+        self.assertEqual(starters, ["run"],
+                         "these start a process without going through run(): %s"
+                         % starters)
+
+    def test_the_guard_can_see_a_call_it_should_refuse(self):
+        """The instrument, against a case whose answer is known to be
+        different. A guard that reads the syntax tree can fail to find what it
+        is looking for and report a clean file, which is the same output as
+        success."""
+        import ast
+        tree = ast.parse("import subprocess\n"
+                         "def sneaky(cmd):\n"
+                         "    return subprocess.Popen(cmd, shell=True)\n")
+        calls = [(n.func.value.id, n.func.attr) for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Name)]
+        self.assertIn(("subprocess", "Popen"), calls)
+        self.assertIn(("subprocess", "Popen"), [(m, a) for m, a in calls
+                                                if (m, a) in self.FORBIDDEN])
+
+
 class TestNoSecondCopy(unittest.TestCase):
     """Judgements that must exist in exactly one place.
 

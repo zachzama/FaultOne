@@ -95,6 +95,43 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### One door for every command, held there by a test
+
+An audit for OS command injection found **nothing**, which is the answer worth
+writing down rather than working around. One `subprocess` call site in the
+whole file - line 273, inside `run()` - no `shell=True`, no `os.system`, no
+`os.popen`, no `Popen`. Every hostname reaching an argv passes `valid_target`
+first, interface names pass a character-class check, and `--source` passes
+`valid_ip`. Tests for the shape already existed: `cmd_ethtool("eth0; id")`,
+`cmd_optics("eth0; id")` and `cmd_tls_check("host; id")` all return None.
+
+There is a subtler property holding too, and it is worth knowing it is
+load-bearing: **`HOSTNAME_RE` requires a leading alphanumeric**, which is what
+stops a target being read as a *flag* rather than a host. That is argument
+injection, the class that survives `shell=False`. Anyone relaxing that regex to
+allow a leading `-` would be opening something without knowing it.
+
+**What was missing was a guard.** All of the above was true by discipline and
+asserted in comments. `TestEveryCommandGoesThroughOneDoor` reads the syntax
+tree - not the text, because "subprocess.run" appears in this file's own prose
+- and holds three things: nothing reaches a shell, no call passes `shell=` as
+anything but False, and exactly one function starts a process. Scoped to the
+tool, not `dev/`: the harnesses run processes freely and are supposed to, and
+they are not the file piped onto somebody else's box during an outage.
+
+Five mutations, each caught **by the guard aimed at it** - checked with
+`--catchers`, because `shell=True` also breaks two unrelated tests about output
+capping, and a catch by a neighbour would have left the shell guard as unproven
+as it was.
+
+**The surface this does not cover, and where the real risk is.** Untrusted text
+here is not command arguments - it is what gets *rendered*: PTR names, LLDP
+neighbours, certificate issuer fields, resolver answers, all going into HTML
+that gets pasted into tickets. That is guarded separately by `cls()`,
+`escapeHtml()` and `test_every_class_attribute_in_the_template_is_filtered`,
+which reads the source rather than executing fragments precisely because
+"executing a fragment says it is safe; only counting says nothing was missed."
+
 ### One broken check costs its own findings, not the report
 
 A real box lost its **entire** report to a `TypeError` in `annotate_hops`.

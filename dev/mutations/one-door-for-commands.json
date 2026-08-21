@@ -1,0 +1,28 @@
+[
+ {
+  "label": "H: a second place starts a process, away from the door",
+  "old": "def cmd_ethtool(iface):\n    \"\"\"Negotiated link state for one interface, or None if ethtool isn't there.\"\"\"\n    if not which(\"ethtool\") or not re.fullmatch(r\"[A-Za-z0-9_.\\-]{1,32}\", iface or \"\"):\n        return None\n    res = run([\"ethtool\", iface], timeout=5)",
+  "new": "def cmd_ethtool(iface):\n    \"\"\"Negotiated link state for one interface, or None if ethtool isn't there.\"\"\"\n    if not which(\"ethtool\") or not re.fullmatch(r\"[A-Za-z0-9_.\\-]{1,32}\", iface or \"\"):\n        return None\n    res = subprocess.run([\"ethtool\", iface], capture_output=True, text=True)\n    res = run([\"ethtool\", iface], timeout=5)"
+ },
+ {
+  "label": "H: the one permitted call asks for a shell",
+  "old": "        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,",
+  "new": "        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout,"
+ },
+ {
+  "label": "H: a command is run through os.system",
+  "old": "    if OS_NAME == \"Windows\":\n        return run([\"ping\", \"-n\", str(count), target])",
+  "new": "    if OS_NAME == \"Windows\":\n        os.system(\"ping -n %s %s\" % (count, target))\n        return run([\"ping\", \"-n\", str(count), target])"
+ },
+ {
+  "label": "H: output is read through the shell-in-disguise helper",
+  "old": "        return run([\"arp\", \"-a\"])",
+  "new": "        return {\"ok\": True, \"stdout\": subprocess.getoutput(\"arp -a\")}"
+ },
+ {
+  "label": "H: the guard stops looking at attribute calls at all",
+  "file": "test_faultone.py",
+  "old": "                        and isinstance(child.func, ast.Attribute)\n                        and isinstance(child.func.value, ast.Name)):",
+  "new": "                        and isinstance(child.func, ast.Attribute)\n                        and isinstance(child.func.value, ast.Name) and False):"
+ }
+]

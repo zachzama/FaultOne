@@ -1104,6 +1104,12 @@ ETHTOOL_LINK_RE = re.compile(r"^\s*Link detected:\s*(\w+)", re.M)
 # "Something:" key, so it is taken whole and the speeds picked out of it.
 ETHTOOL_SUPPORTED_RE = re.compile(
     r"^\s*Supported link modes:(.*?)(?=^\s*[A-Z][\w -]*:)", re.M | re.S)
+#: Deliberately NOT the same pattern as MEDIA_SPEED_RE beside `ifconfig`, and
+#: the difference is in the tools rather than in this file. ethtool writes a
+#: link mode in whole megabits every time - 1000baseT/Full, 10000baseT/Full,
+#: 100000baseSR4/Full - so there is no multiplier to read. BSD's `media:` line
+#: writes 10Gbase-SR for the same link. Unifying the two would silently make a
+#: 10000baseT link report 10000 gigabits.
 ETHTOOL_BASE_RE = re.compile(r"(\d+)base", re.I)
 
 
@@ -3224,7 +3230,20 @@ def _dropped_by(raw):
 _QDISC_HEAD = re.compile(r"^qdisc (\S+) (\S+) dev (\S+)")
 _QDISC_SENT = re.compile(r"Sent \d+ bytes (\d+) pkt \(dropped (\d+), "
                          r"overlimits (\d+) requeues (\d+)\)")
-_QDISC_BACKLOG = re.compile(r"backlog (\d+)b (\d+)p")
+#: iproute2 prints the backlog through sprint_size(), which switches to Kb, Mb
+#: or Gb as soon as the figure reaches 1024 bytes - so one ordinary packet
+#: waiting prints "1Kb 1p". The pattern used to require digits immediately
+#: before the "b" and matched neither number when a unit appeared, which meant
+#: the packet count was lost along with the byte count and every real backlog
+#: read as an empty queue. That is the one failure here that produces a
+#: confident false sentence rather than a missing one: `queue_standing_here`
+#: could not fire, and `_which_side_of_the_local_queue` said the wait was not
+#: this box's while this box held it.
+_QDISC_BACKLOG = re.compile(r"backlog (\d+)([KMG])?b (\d+)p", re.I)
+
+#: sprint_size() divides by 1024 each step, so these are binary multiples and
+#: not the decimal ones a rate would use.
+QDISC_SIZE_UNITS = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
 
 
 def parse_qdisc(text):
@@ -3254,8 +3273,9 @@ def parse_qdisc(text):
             current["requeues"] = int(sent.group(4))
         backlog = _QDISC_BACKLOG.search(line)
         if backlog:
-            current["backlog_bytes"] = int(backlog.group(1))
-            current["backlog_pkts"] = int(backlog.group(2))
+            unit = QDISC_SIZE_UNITS[(backlog.group(2) or "").lower()]
+            current["backlog_bytes"] = int(backlog.group(1)) * unit
+            current["backlog_pkts"] = int(backlog.group(3))
     return out
 
 

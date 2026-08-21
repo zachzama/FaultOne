@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a backlog with a unit loses both its numbers again",
+  "old": "_QDISC_BACKLOG = re.compile(r\"backlog (\\d+)([KMG])?b (\\d+)p\", re.I)",
+  "new": "_QDISC_BACKLOG = re.compile(r\"backlog (\\d+)b (\\d+)p\")"
+ },
+ {
+  "label": "a kilobyte of backlog is read as a thousand bytes",
+  "old": "QDISC_SIZE_UNITS = {\"\": 1, \"k\": 1024, \"m\": 1024 ** 2, \"g\": 1024 ** 3}",
+  "new": "QDISC_SIZE_UNITS = {\"\": 1, \"k\": 1000, \"m\": 1000 ** 2, \"g\": 1000 ** 3}"
+ },
+ {
+  "label": "the unit on the byte count is ignored",
+  "old": "            unit = QDISC_SIZE_UNITS[(backlog.group(2) or \"\").lower()]\n            current[\"backlog_bytes\"] = int(backlog.group(1)) * unit",
+  "new": "            unit = QDISC_SIZE_UNITS[(backlog.group(2) or \"\").lower()]\n            current[\"backlog_bytes\"] = int(backlog.group(1))"
+ },
+ {
+  "label": "the packet count is taken from the byte group",
+  "old": "            current[\"backlog_pkts\"] = int(backlog.group(3))",
+  "new": "            current[\"backlog_pkts\"] = int(backlog.group(1))"
+ },
+ {
+  "label": "ethtool's whole megabits are read as gigabits",
+  "old": "ETHTOOL_BASE_RE = re.compile(r\"(\\d+)base\", re.I)",
+  "new": "ETHTOOL_BASE_RE = re.compile(r\"(\\d+(?:\\.\\d+)?)\\s*([GM]?)base\", re.I)"
+ }
+]

@@ -95,6 +95,54 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### A unit on a foreign number, which is the shape that keeps biting
+
+Three defects in two days had one shape: **a pattern or type check on somebody
+else's output, whose failure mode is silence rather than an error.** mtr quoting
+its numbers, `ifconfig` writing `10Gbase-SR`, and then the worst of them.
+
+**`tc -s qdisc` prints the backlog through iproute2's `sprint_size()`**, which
+divides by 1024 and switches to `Kb`, `Mb`, `Gb` - so one ordinary packet
+waiting prints `backlog 1Kb 1p`. `_QDISC_BACKLOG` required digits immediately
+before the "b" and matched **neither** number when a unit appeared, so the
+packet count went with the byte count. `queue_standing_here` could therefore
+never fire on a backlog big enough to have a unit, which is every backlog above
+a kilobyte.
+
+That one is worse than a gap. `_which_side_of_the_local_queue`, written the day
+before, reads the same figure and prints *"It is not this box: its own egress
+queue is holding 0 packet(s)"* - a confident, wrong sentence sending a reader
+upstream while this box holds the queue. A missing reading is a gap; this was
+the tool asserting the opposite of the truth.
+
+**The fixture had been unrealistic in exactly the way that hid it**, saying
+`backlog 1876543b 1240p` where iproute2 would print `1Mb`. Same lesson as
+`bonding_masters`: the fixtures are tidier than any machine this runs on, and
+each way they are tidy is a guard nothing tests.
+
+**`ETHTOOL_BASE_RE` looks identical and is correct.** ethtool writes a link
+mode in whole megabits every time - `10000baseT/Full` for the link BSD calls
+`10Gbase-SR` - so there is no multiplier to read, and unifying the two patterns
+would turn ten gigabits into ten thousand of them. A test pins the pair,
+because the next reader will see the difference and try to remove it.
+
+`ss -i`'s consumed fields (`rtt`, `minrtt`, `bytes_*`) were checked and carry no
+units. `send` and `pacing_rate` do, and are not read.
+
+### dev/vacuous.py was reporting real assertions as none
+
+Its list of assertion methods was hand-written and had drifted:
+`assertIsInstance` was absent, so two tests written the same day were reported
+as executing no assertion. The names come off `unittest.TestCase` now.
+
+That first attempt was wrong in a way worth keeping: unittest **dispatches
+between its own assertions**, so `assertEqual` on two lists calls
+`assertListEqual`, which calls `assertSequenceEqual`. Wrapping all of them
+counted one assertion three times and judged the inner ones by rules meant for
+the outer, which turned a genuinely empty-only test into a substantial one. A
+depth guard records only the assertion the test itself wrote. The planted
+control caught it immediately, which is the whole reason that self-test exists.
+
 ### What a run on a real BSD box said, and the three things it found
 
 The box reports a vendor string from `platform.system()` rather than `FreeBSD`,

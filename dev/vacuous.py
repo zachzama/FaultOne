@@ -83,6 +83,10 @@ class Watcher(object):
     def __init__(self):
         self.seen = {}          # test id -> [substantial, total]
         self.current = None
+        #: How deep inside a wrapped assertion we are. unittest dispatches
+        #: between its own assertions, and only the outermost one is the one
+        #: the test wrote.
+        self.depth = 0
         self._original = {}
 
     def install(self):
@@ -90,11 +94,18 @@ class Watcher(object):
             original = getattr(unittest.TestCase, name)
             self._original[name] = original
             setattr(unittest.TestCase, name, self._wrap(original, where))
-        for name in ("assertTrue", "assertFalse", "assertIsNone",
-                     "assertIsNotNone", "assertIs", "assertIsNot",
-                     "assertRaises", "assertAlmostEqual", "assertRegex"):
+        # Everything else unittest calls an assertion, taken from the class
+        # rather than listed here. The list was hand-written and had drifted:
+        # assertIsInstance was missing, so two tests that assert a parsed hop
+        # number is an int - written the same day this was noticed - were
+        # reported as executing no assertion at all. A tool that reports a real
+        # assertion as none teaches the reader to distrust its output, which is
+        # worse than not having it.
+        for name in dir(unittest.TestCase):
+            if not name.startswith("assert") or name in CHECKED:
+                continue
             original = getattr(unittest.TestCase, name, None)
-            if original is None:
+            if not callable(original):
                 continue
             self._original[name] = original
             setattr(unittest.TestCase, name, self._wrap(original, None))
@@ -107,13 +118,26 @@ class Watcher(object):
         watcher = self
 
         def wrapped(case, *args, **kwargs):
-            row = watcher.seen.setdefault(watcher.current, [0, 0])
-            row[1] += 1
-            if where is None or len(args) <= max(where):
-                row[0] += 1                      # nothing to inspect: counts
-            elif not all(is_empty(args[i]) for i in where):
-                row[0] += 1
-            return original(case, *args, **kwargs)
+            # Only the assertion the test itself called. unittest dispatches
+            # between them - assertEqual on two lists calls assertListEqual,
+            # which calls assertSequenceEqual - so counting every wrapped call
+            # counts one assertion up to three times, and counts the inner ones
+            # under rules meant for the outer. That turned a test comparing two
+            # empty lists into a test with a substantial assertion in it,
+            # because the innermost helper has no operands this inspects.
+            if watcher.depth:
+                return original(case, *args, **kwargs)
+            watcher.depth += 1
+            try:
+                row = watcher.seen.setdefault(watcher.current, [0, 0])
+                row[1] += 1
+                if where is None or len(args) <= max(where):
+                    row[0] += 1                  # nothing to inspect: counts
+                elif not all(is_empty(args[i]) for i in where):
+                    row[0] += 1
+                return original(case, *args, **kwargs)
+            finally:
+                watcher.depth -= 1
         return wrapped
 
 
@@ -252,6 +276,12 @@ def self_test():
             self.assertEqual([1, 2], [1, 2])
             self.assertIn(1, [1, 2])
 
+        def test_asserts_with_something_off_the_hand_written_list(self):
+            # The control for taking the assertion names off the class rather
+            # than listing them. assertIsInstance was missing from that list
+            # and two real tests were reported as asserting nothing.
+            self.assertIsInstance(1, int)
+
         def test_was_skipped(self):
             # Asserts nothing because it did not run, which the suite already
             # says. Naming it here would be noise on top of a fact.
@@ -267,6 +297,8 @@ def self_test():
             ("test_only_asserts_if_it_fired", silent, True),
             ("test_asserts_only_on_things_that_are_empty", empty_only, True),
             ("test_is_a_real_test", silent + empty_only, False),
+            ("test_asserts_with_something_off_the_hand_written_list",
+             silent + empty_only, False),
             ("test_was_skipped", silent + empty_only, False)):
         found = any(name in t for t in where)
         if found != expect:
@@ -284,7 +316,7 @@ def self_test():
         if declares_not_raising("X.%s" % name, "") != expect:
             print("  FAIL the not-raising filter is wrong about %s" % name, flush=True)
             ok = False
-    if not ok or ran != 5:
+    if not ok or ran != 6:
         print("\nFAILED: the instrument cannot see what it is for", flush=True)
         return 1
     print("\nok: a silent test, a guarded one and an empty-only one are all "

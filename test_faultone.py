@@ -2288,6 +2288,16 @@ class TestSysfsCounterReading(unittest.TestCase):
             "\tmedia: Ethernet autoselect (40Gbase-SR4 <full-duplex>)\n"
             "\tstatus: active\n")
 
+    def test_ethtool_writes_whole_megabits_and_bsd_does_not(self):
+        """The two patterns look alike and mean different things, which is the
+        shape of an edit that unifies them. ethtool says 10000baseT/Full for
+        the link BSD calls 10Gbase-SR, so reading a multiplier out of ethtool
+        would turn ten gigabits into ten thousand of them."""
+        et = nd.parse_ethtool("Supported link modes:   10000baseT/Full\n"
+                              "\tSpeed: 10000Mb/s\n\tDuplex: Full\n")
+        self.assertEqual(et["max_mbps"], 10000)
+        self.assertEqual(nd.media_speed_mbps("10Gbase-SR"), 10000)
+
     def test_a_ten_gig_link_is_ten_thousand_megabits(self):
         modes = nd.parse_ifconfig_modes(self.FAST)
         self.assertEqual(modes["ixl0"]["speed_mbps"], 10000)
@@ -10014,7 +10024,7 @@ class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
           " backlog 0b 0p requeues 0\n"
           "qdisc fq_codel 8003: dev eth0 root refcnt 2 limit 10240p flows 1024\n"
           " Sent 998877665 bytes 7654321 pkt (dropped 8412, overlimits 0 requeues 3)\n"
-          " backlog 1876543b 1240p requeues 3\n"
+          " backlog 1Mb 1240p requeues 3\n"
           "  maxpacket 1514 drop_overlimit 0 new_flow_count 12 ecn_mark 0\n"
           "qdisc mq 1: dev eth1 root\n"
           " Sent 55 bytes 1 pkt (dropped 0, overlimits 0 requeues 0)\n"
@@ -10027,6 +10037,68 @@ class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
         eth0 = next(q for q in nd.parse_qdisc(self.TC) if q["iface"] == "eth0")
         self.assertEqual((eth0["kind"], eth0["dropped"], eth0["backlog_pkts"]),
                          ("fq_codel", 8412, 1240))
+
+    # ---- iproute2 does not print this field in plain bytes ----------------
+    #
+    # It prints it through sprint_size(), which divides by 1024 and switches to
+    # Kb, Mb or Gb - so one ordinary packet waiting prints "1Kb 1p". The
+    # pattern required digits immediately before the "b" and matched *neither*
+    # number when a unit appeared, so the packet count went with the byte
+    # count and every real backlog read as an empty queue.
+    #
+    # The fixture above said "backlog 1876543b 1240p", which iproute2 would
+    # never print for 1.8MB. It was tidier than any box this runs on, and each
+    # way a fixture is tidy is a guard nothing tests.
+
+    def one_queue(self, backlog):
+        text = ("qdisc fq_codel 1: dev eth0 root refcnt 2\n"
+                " Sent 100 bytes 2 pkt (dropped 0, overlimits 0 requeues 0)\n"
+                " backlog %s requeues 0\n" % backlog)
+        return nd.parse_qdisc(text)[0]
+
+    def test_a_backlog_with_a_unit_is_read_at_all(self):
+        """The packet count is the number every finding here reads, and it was
+        being lost to a unit on the *byte* count beside it."""
+        self.assertEqual(self.one_queue("1Kb 1p")["backlog_pkts"], 1)
+        self.assertEqual(self.one_queue("148Kb 100p")["backlog_pkts"], 100)
+        self.assertEqual(self.one_queue("3Mb 2048p")["backlog_pkts"], 2048)
+
+    def test_the_unit_is_binary_because_sprint_size_divides_by_1024(self):
+        """Not 1000. Reading it as decimal understates a queue by 2.4% at Kb
+        and 7% at Mb, which is small and is still a number this reports."""
+        self.assertEqual(self.one_queue("1Kb 1p")["backlog_bytes"], 1024)
+        self.assertEqual(self.one_queue("2Mb 1p")["backlog_bytes"], 2 * 1024 ** 2)
+        self.assertEqual(self.one_queue("1Gb 1p")["backlog_bytes"], 1024 ** 3)
+
+    def test_a_backlog_under_a_kilobyte_still_prints_plain_bytes(self):
+        """sprint_size only reaches for a unit at 1024, so the plain form is
+        real output too and both have to work."""
+        q = self.one_queue("900b 1p")
+        self.assertEqual((q["backlog_bytes"], q["backlog_pkts"]), (900, 1))
+
+    def test_a_queue_holding_a_megabyte_is_not_reported_as_empty(self):
+        """What this actually cost. queue_standing_here fires at
+        LOCAL_QUEUE_STANDING_PKTS, and with the count lost it could not fire on
+        any backlog large enough to have a unit - which is all of them."""
+        raw = self.raw_with(
+            "qdisc fq_codel 1: dev eth0 root refcnt 2\n"
+            " Sent 100 bytes 2 pkt (dropped 0, overlimits 0 requeues 0)\n"
+            " backlog 3Mb 2048p requeues 0\n")
+        worst = nd.worst_local_queue(raw)
+        self.assertIsNotNone(worst)
+        self.assertEqual(worst["backlog_pkts"], 2048)
+
+    def test_the_latency_sentence_does_not_rule_this_box_out_over_a_full_queue(self):
+        """The worst of it. A missing reading is a gap; this one produced a
+        confident wrong sentence, telling the reader the wait was somebody
+        else's while this box was holding it."""
+        raw = self.raw_with(
+            "qdisc fq_codel 1: dev eth0 root refcnt 2\n"
+            " Sent 100 bytes 2 pkt (dropped 0, overlimits 0 requeues 0)\n"
+            " backlog 3Mb 2048p requeues 0\n")
+        said = nd._which_side_of_the_local_queue(raw)
+        self.assertIn("Part of it is this box", said)
+        self.assertNotIn("It is not this box", said)
 
     def test_a_queueing_discipline_it_does_not_know_still_parses(self):
         """The header names the kind and the interface whatever the kind is,
@@ -10052,7 +10124,7 @@ class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
         whatever order the kernel walks them, and taking the first real one
         would name whichever interface happened to come back first."""
         self.assertEqual(nd.worst_local_queue(self.raw_with(self.TC))["iface"], "eth0")
-        moved = (self.TC.replace("backlog 1876543b 1240p", "backlog 0b 0p")
+        moved = (self.TC.replace("backlog 1Mb 1240p", "backlog 0b 0p")
                         .replace("(dropped 8412", "(dropped 0")
                  + "qdisc htb 9: dev eth7 root\n"
                    " Sent 900 bytes 9 pkt (dropped 3, overlimits 1 requeues 0)\n"
@@ -10072,7 +10144,7 @@ class TestTheQueuesOnThisBoxsOwnInterfaces(unittest.TestCase):
         three candidates and leaves the reader to eliminate them by hand; an
         empty queue eliminates one of them, on the box the report is about."""
         idle = self.TC.replace("(dropped 8412", "(dropped 0").replace(
-            "backlog 1876543b 1240p", "backlog 0b 0p")
+            "backlog 1Mb 1240p", "backlog 0b 0p")
         said = nd._queues_here_say(self.raw_with(idle))
         self.assertIn("not happening here", said)
 
@@ -17186,7 +17258,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1097),
+            "on disk": (len(raw), 1098),
             "compressed": (len(gzip.compress(raw, 9)), 332),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 227),
         }

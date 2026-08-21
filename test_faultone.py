@@ -8670,6 +8670,17 @@ class TestWhatTheProxyItselfBelieves(unittest.TestCase):
             with self.subTest(text=junk):
                 self.assertEqual(nd.parse_proxy_stats(junk), [])
 
+    def test_a_csv_that_is_not_that_csv_reads_as_nothing(self):
+        """The `#` is the whole claim that this is the proxy's own statistics
+        rather than any comma-separated file. The junk fed above has no column
+        names this recognises, so it fell out one step later and the check was
+        never reached - a mutation deleting it survived. A file with the right
+        column names and no `#` reaches it, and some other tool's export is
+        exactly that."""
+        self.assertEqual(nd.parse_proxy_stats("svname,status\nweb1,UP\n"), [])
+        got = nd.parse_proxy_stats("# pxname,svname,status\nweb,web1,UP\n")
+        self.assertEqual([r["server"] for r in got], ["web1"])
+
     def test_a_row_with_no_status_costs_that_row_and_not_the_run(self):
         """Three ways to get one, and the read cap makes the third routine.
         None of them may raise: nothing catches an exception between here and
@@ -17674,8 +17685,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1107),
-            "compressed": (len(gzip.compress(raw, 9)), 335),
+            "on disk": (len(raw), 1108),
+            "compressed": (len(gzip.compress(raw, 9)), 336),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
         }
         for label, (measured, quoted) in claims.items():

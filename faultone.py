@@ -14373,6 +14373,10 @@ def _check_relay_volume(raw):
     found = []
     by_side = ((raw.get("tcp_flows") or {}).get("by_side")) or {}
     client, backend = by_side.get("client") or {}, by_side.get("backend") or {}
+    # Subsumed by the readability check below - an absent side answers None to
+    # `volume_readable` and returns there - so no mutation can reach it. Kept
+    # because it states the precondition this whole check rests on, which the
+    # line below does not.
     if not client or not backend:
         return found                              # not a box with two sides to compare
     # A kernel that does not report bytes_received leaves this unanswerable,

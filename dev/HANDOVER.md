@@ -416,6 +416,24 @@ changed nothing. Retargeted at the `return {}` that actually decides, it was
 caught immediately. Worth writing down because a badly aimed mutation reads
 exactly like an untested guard.
 
+**Group four is closed: the rules that stay quiet.**
+`dev/mutations/rules-that-stay-quiet.json` widens each rule so it fires on a
+healthy fixture - a bond with every member up reporting one down, a box at one
+runnable task per CPU called saturated, one private subnet called double NAT, a
+box broadly relaying reported as lopsided. **Nine of eleven held**, which is the
+answer this group was expected to give and is now on the record.
+
+**The gap was `parse_proxy_stats`.** The `#` on the header line is the whole
+claim that this is the proxy's own statistics rather than any comma-separated
+file, and the junk fed to it had no column names the parser recognises - so it
+fell out one step later and the check was never reached. A file with the right
+column names and no `#` reaches it, and some other tool's export is exactly
+that.
+
+**One survivor was equivalent**: the two-sides precondition in
+`_check_relay_volume` is subsumed by the readability check on the next line,
+because an absent side answers None. Commented, not excused.
+
 **Group one is closed.** "Absent is not zero" is the contract worth proving
 first, because reading absence as zero is how a diagnostic invents faults.
 `dev/mutations/absent-is-not-zero.json`. Two real gaps, both the same shape -

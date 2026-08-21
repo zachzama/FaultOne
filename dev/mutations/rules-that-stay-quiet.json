@@ -1,0 +1,52 @@
+[
+ {
+  "label": "D: a bond with every member down reads as a partial failure",
+  "old": "        if not down or len(down) >= len(members):",
+  "new": "        if not down:"
+ },
+ {
+  "label": "D: a healthy bond reports a member down",
+  "old": "        if not down or len(down) >= len(members):",
+  "new": "        if False:"
+ },
+ {
+  "label": "D: a box at one runnable task per CPU is called saturated",
+  "old": "    saturated = per_cpu >= LOAD_PER_CPU_WARN",
+  "new": "    saturated = per_cpu >= 1.0"
+ },
+ {
+  "label": "D: a box with no orphan ceiling is judged against nothing",
+  "old": "    if not count or not limit:\n        return found",
+  "new": "    if False:\n        return found"
+ },
+ {
+  "label": "D: one private subnet on the path is called double NAT",
+  "old": "    double_nat = private_subnets if len(private_subnets) > 1 else []",
+  "new": "    double_nat = private_subnets"
+ },
+ {
+  "label": "D: a run that knows no source address still reports translations",
+  "old": "    if not sent_from:\n        return []",
+  "new": "    if False:\n        return []"
+ },
+ {
+  "label": "D: anything at all is read as the proxy's own statistics",
+  "old": "    if not lines or not lines[0].startswith(\"#\"):\n        return []",
+  "new": "    if not lines:\n        return []"
+ },
+ {
+  "label": "D: a side whose volume cannot be read is called empty",
+  "old": "    if not client.get(\"volume_readable\") or not backend.get(\"volume_readable\"):\n        return found",
+  "new": "    if False:\n        return found"
+ },
+ {
+  "label": "D: a box that is relaying most of what arrives is reported anyway",
+  "old": "    if not enough_to_judge or broadly_relaying:\n        return found",
+  "new": "    if not enough_to_judge:\n        return found"
+ },
+ {
+  "label": "D: too little traffic to judge is judged",
+  "old": "    if not enough_to_judge or broadly_relaying:\n        return found",
+  "new": "    if not broadly_relaying:\n        return found"
+ }
+]

@@ -199,6 +199,51 @@ class TestTracerouteParsing(unittest.TestCase):
         self.assertEqual(nd.parse_traceroute_hops(""), [])
         self.assertEqual(nd.parse_traceroute_hops(None), [])
 
+    # ---- the annotation that carries a measurement ------------------------
+    #
+    # BSD traceroute writes fragmentation-needed as `!F-1492`, with the
+    # next-hop MTU glued on by a hyphen. The pattern demanded whitespace
+    # straight after the flag, so of all the `!` codes a router can send, the
+    # only one carrying a number was the only one dropped.
+
+    WITH_PMTU = ("traceroute to example.net (192.0.2.9), 30 hops max\n"
+                 " 1  192.0.2.1  1.2 ms  1.1 ms  1.3 ms\n"
+                 " 2  198.51.100.1  5.0 ms !F-1492  5.1 ms  5.2 ms\n"
+                 " 3  198.51.100.9  9.0 ms !H\n")
+
+    def test_a_fragmentation_needed_flag_is_kept(self):
+        hops = nd.parse_traceroute_hops(self.WITH_PMTU)
+        self.assertEqual(hops[1]["flags"], ["!F-1492"])
+
+    def test_the_mtu_that_flag_carries_reaches_the_hop(self):
+        """It is better data than tracepath's, because it names the hop that
+        sent it as well as the number - and this tool has a whole section for
+        the question it answers."""
+        hops = nd.parse_traceroute_hops(self.WITH_PMTU)
+        self.assertEqual(hops[1]["pmtu"], 1492)
+        self.assertIsNone(hops[0]["pmtu"])
+
+    def test_the_other_flags_still_read_as_they_did(self):
+        hops = nd.parse_traceroute_hops(self.WITH_PMTU)
+        self.assertEqual(hops[2]["flags"], ["!H"])
+
+    def test_tracepaths_own_spelling_of_the_mtu_still_works(self):
+        """Two tools, two spellings, one field. Adding the second must not
+        cost the first."""
+        hops = nd.parse_traceroute_hops(
+            " 1:  192.0.2.1   0.5ms pmtu 1400\n"
+            " 2:  198.51.100.1  1.5ms\n")
+        self.assertEqual(hops[0]["pmtu"], 1400)
+
+    def test_an_unreachable_code_is_not_read_as_an_mtu(self):
+        """`!13` is an ICMP code, not a size. The two patterns sit next to each
+        other and the numeric one has to stay out of the size field."""
+        hops = nd.parse_traceroute_hops(
+            "traceroute to example.net (192.0.2.9), 30 hops max\n"
+            " 1  192.0.2.1  1.2 ms !13\n")
+        self.assertEqual(hops[0]["flags"], ["!13"])
+        self.assertIsNone(hops[0]["pmtu"])
+
 
 class TestPingAndInterfaceParsing(unittest.TestCase):
     def loss(self, out):
@@ -2241,6 +2286,114 @@ class TestSysfsCounterReading(unittest.TestCase):
                   encoding="utf-8") as fh:
             fh.write("bond0\n")
         self.assertEqual(sorted(nd._link_modes_linux(base)), ["eth0"])
+
+    # ---- the same counters off netstat, which had no fixture at all -------
+    #
+    # The Linux reader has a dozen tests against a real sysfs tree and its BSD
+    # twin had none, so every way the table could be misread was silent. Found
+    # on a real box, which is a worse way to find it.
+
+    FREEBSD = (
+        "Name    Mtu Network       Address              Ipkts Ierrs Idrop"
+        "     Ibytes    Opkts Oerrs     Obytes  Coll\n"
+        "igb0   1500 <Link#1>      00:00:5e:00:53:01 673142717     0    42"
+        "  900000000   500000     0  700000000     0\n"
+        "igb0   1500 198.51.100.0  198.51.100.4      673142717     -     -"
+        "  900000000   500000     -  700000000     -\n"
+        "ixl0*  1500 <Link#2>      00:00:5e:00:53:02    379984     3     7"
+        "    9000000     1000     1     900000     0\n"
+        "lo0   16384 <Link#3>                              900     0     0"
+        "      90000      900     0      90000     0\n")
+
+    MACOS = (
+        "Name  Mtu   Network       Address            Ipkts Ierrs"
+        "     Ibytes    Opkts Oerrs     Obytes  Coll\n"
+        "en0   1500  <Link#4>      00:00:5e:00:53:03   1000     1"
+        "      90000      900     0      80000     0\n")
+
+    def test_a_down_interface_is_not_named_with_an_asterisk(self):
+        """netstat(1) marks an interface that is down with a trailing asterisk.
+        Left on, the name is not the name: `ixl0*` never matches the `ixl0`
+        that ifconfig reports, and the report's link-mode table - which is
+        filtered to interfaces the counter table names - silently loses the
+        row. That is what happened on the real box."""
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)
+        self.assertIn("ixl0", stats)
+        self.assertNotIn("ixl0*", stats)
+
+    def test_the_asterisk_is_the_link_state_and_is_kept(self):
+        """It is the only thing this table says about link state, and it was
+        being thrown away along with the name it broke."""
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)
+        self.assertEqual(stats["ixl0"]["operstate"], "down")
+        self.assertEqual(stats["igb0"]["operstate"], "unknown")
+
+    def test_freebsd_names_its_discard_column_idrop(self):
+        """Reading only "Drop" reported exactly zero discards on every
+        interface of every FreeBSD box. Zero is a number, not a gap, and a
+        reassuring one on a box that is dropping traffic."""
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)
+        self.assertEqual(stats["igb0"]["rx_dropped"], 42)
+        self.assertEqual(stats["ixl0"]["rx_dropped"], 7)
+
+    def test_a_table_with_no_discard_column_reports_none_not_a_guess(self):
+        """macOS prints no drop column at all without -d. Absent has to stay
+        absent rather than becoming a confident zero from the wrong field."""
+        stats = nd.parse_netstat_link_stats(self.MACOS)
+        self.assertEqual(stats["en0"]["rx_dropped"], 0)
+        self.assertEqual(stats["en0"]["rx_errors"], 1)
+
+    def test_only_the_link_rows_are_counted(self):
+        """netstat repeats every interface once per address family, with the
+        same cumulative totals. Counting them all doubles every figure."""
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)
+        self.assertEqual(stats["igb0"]["rx_packets"], 673142717)
+        self.assertEqual(sorted(stats), ["igb0", "ixl0", "lo0"])
+
+    def test_the_counters_that_matter_come_off_the_right_columns(self):
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)["ixl0"]
+        self.assertEqual(
+            (stats["rx_packets"], stats["tx_packets"],
+             stats["rx_errors"], stats["tx_errors"]),
+            (379984, 1000, 3, 1))
+
+    def test_a_table_this_does_not_recognise_yields_nothing(self):
+        """Not zeroes. A header without the columns this reads is a table for
+        some other question, and inventing counters from it would report a
+        healthy interface that was never measured."""
+        for text in ("", None, "not a table at all\n",
+                     "Name Mtu Network Address\nen0 1500 <Link#1> x\n"):
+            with self.subTest(text=text):
+                self.assertEqual(nd.parse_netstat_link_stats(text), {})
+
+    def test_an_interface_with_no_link_layer_address_is_still_read(self):
+        """The Address column is empty for loopback, a tunnel, or pflog, and
+        this is a table of columns rather than of fields - so splitting on
+        whitespace shifts every column after it left by one. Loopback is
+        excluded elsewhere and would not be missed; a tunnel carrying the way
+        out would be, and a proxy is exactly the box that has one."""
+        stats = nd.parse_netstat_link_stats(self.FREEBSD)
+        self.assertIn("lo0", stats)
+        self.assertEqual((stats["lo0"]["rx_packets"], stats["lo0"]["rx_errors"],
+                          stats["lo0"]["rx_dropped"]), (900, 0, 0))
+
+    def test_the_shift_would_have_been_silent_and_wrong_not_absent(self):
+        """A tunnel with real errors, to show what the shift produced: not a
+        missing row but a row whose every number came from the column beside
+        it. Ipkts would have read the MTU."""
+        text = (self.FREEBSD +
+                "gif0   1280 <Link#5>                          55000     9"
+                "     4    5000000    54000     2    4000000     0\n")
+        gif = nd.parse_netstat_link_stats(text)["gif0"]
+        self.assertEqual((gif["rx_packets"], gif["rx_errors"],
+                          gif["rx_dropped"], gif["tx_packets"]),
+                         (55000, 9, 4, 54000))
+        self.assertNotEqual(gif["rx_packets"], 1280)
+
+    def test_a_short_row_is_skipped_rather_than_read_off_the_end(self):
+        stats = nd.parse_netstat_link_stats(
+            self.FREEBSD + "truncated 1500 <Link#9>\n")
+        self.assertNotIn("truncated", stats)
 
     # ---- the other platform's spelling of the same state ------------------
 
@@ -17258,8 +17411,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1098),
-            "compressed": (len(gzip.compress(raw, 9)), 332),
+            "on disk": (len(raw), 1101),
+            "compressed": (len(gzip.compress(raw, 9)), 333),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 227),
         }
         for label, (measured, quoted) in claims.items():

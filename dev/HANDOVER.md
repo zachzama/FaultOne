@@ -95,6 +95,39 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The rest of the foreign-format sweep: a table is not a list of fields
+
+`netstat -i -b -n` had **no fixture at all**, while its Linux twin has a dozen
+against a real sysfs tree. Three defects, all silent:
+
+- **A down interface is named with a trailing asterisk.** netstat(1) documents
+  it. Left on, `ixl0*` never matches the `ixl0` that `ifconfig` reports, and the
+  report's LINK MODE table is filtered to names the counter table carries - so
+  the row for a down interface silently disappeared. That anomaly was visible in
+  a real report and was explained by the report alone. The asterisk is also the
+  only thing this table says about link state, and it was being discarded along
+  with the name it broke.
+- **FreeBSD calls the discard column `Idrop`.** Only `Drop` was read, so every
+  FreeBSD box reported exactly zero discards on every interface. Zero is a
+  number rather than a gap, and a reassuring one on a box dropping traffic.
+- **The `Address` column is empty for anything with no link-layer address** -
+  loopback, a tunnel, pflog. This is a table of *columns*, so splitting on
+  whitespace shifts every field after it left by one. Loopback is excluded
+  anyway; a tunnel carrying the way out is not, and a proxy is exactly the box
+  that has one. Columns before `Address` count from the left and everything
+  after it counts from the right, because `Address` is the only optional one.
+
+**`!F-1492`.** Of all the `!` codes a router can attach to a hop, the only one
+carrying a measurement was the only one dropped: BSD traceroute glues the
+next-hop MTU on with a hyphen and `TRACE_ANNOTATION_RE` demanded whitespace
+straight after the flag. It now reaches `hop["pmtu"]`, which is better data than
+tracepath's `pmtu 1400` because it names the hop that sent it as well as the
+number. `!13` is an ICMP code and is kept out of that field.
+
+`parse_arp_table` was checked and is sound - BSD strips leading zeros from a MAC
+and `normalise_mac` pads them, which is why VRRP detection worked on the real
+box.
+
 ### A unit on a foreign number, which is the shape that keeps biting
 
 Three defects in two days had one shape: **a pattern or type check on somebody

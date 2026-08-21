@@ -5880,6 +5880,14 @@ def _link_stats_linux(base="/sys/class/net"):
     return stats
 
 
+#: What each BSD calls the discarded-packet columns of `netstat -i`. FreeBSD
+#: prints Idrop as standard and Odrop with -d; macOS has no drop column at all
+#: unless -d is given, and calls it Drop. Reading only "Drop" meant every
+#: FreeBSD box reported exactly zero discards on every interface - a number,
+#: not a gap, and a reassuring one on a box that is dropping traffic.
+NETSTAT_DROP_COLUMNS = {"rx_dropped": ("Idrop", "Drop"), "tx_dropped": ("Odrop",)}
+
+
 @collector
 def _link_stats_bsd():
     """macOS/BSD: parse `netstat -i -b -n`, using only the <Link#...> rows so
@@ -5887,7 +5895,17 @@ def _link_stats_bsd():
     res = run(["netstat", "-i", "-b", "-n"])
     if not res.get("ok"):
         return {}
-    lines = [ln for ln in res.get("stdout", "").splitlines() if ln.strip()]
+    return parse_netstat_link_stats(res.get("stdout", ""))
+
+
+def parse_netstat_link_stats(text):
+    """`netstat -i -b -n` into the same per-interface shape sysfs gives.
+
+    Split from the command so it can be handed a fixture, for the same reason
+    the others were: this reads a table whose columns differ between the BSDs
+    and every way it could be wrong is silent.
+    """
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
     if not lines:
         return {}
     hdr = lines[0].split()
@@ -5895,26 +5913,54 @@ def _link_stats_bsd():
     if not all(k in idx for k in ("Name", "Network", "Ipkts", "Ierrs", "Opkts", "Oerrs")):
         return {}
     stats = {}
+    # The Address column is empty for any interface with no link-layer address
+    # - loopback, a tunnel, pflog - and this is a table of columns rather than
+    # of fields, so splitting on whitespace shifts everything after it left by
+    # one. Counting the counter columns from the right instead makes the gap
+    # harmless: Address is the only optional column and every column after it
+    # is always printed. Name, Mtu and Network come before it and keep counting
+    # from the left.
+    tail = idx.get("Address", len(hdr))
     for line in lines[1:]:
         parts = line.split()
-        if len(parts) <= max(idx.values()):
+        if len(parts) < len(hdr) - 1 or len(parts) > len(hdr):
             continue
-        if not parts[idx["Network"]].startswith("<Link"):
+        if idx["Network"] >= len(parts) or not parts[idx["Network"]].startswith("<Link"):
             continue
 
         def get(key):
             try:
-                return int(parts[idx[key]])
+                at = idx[key]
+                if at > tail:
+                    at = len(parts) - (len(hdr) - at)
+                return int(parts[at])
             except (KeyError, ValueError, IndexError):
                 return 0
 
-        stats[parts[idx["Name"]]] = {
+        def first_of(keys):
+            for key in keys:
+                if key in idx:
+                    return get(key)
+            return 0
+
+        # netstat(1) marks an interface that is down with a trailing asterisk.
+        # Left on, the name is not the name: `ixl0*` never matches the `ixl0`
+        # that ifconfig reports, so the two tables in a report describe
+        # different sets of interfaces and the link-mode row for a down
+        # interface silently disappears. It happened on a real box.
+        raw_name = parts[idx["Name"]]
+        name, down = raw_name.rstrip("*"), raw_name.endswith("*")
+        stats[name] = {
             "rx_packets": get("Ipkts"), "tx_packets": get("Opkts"),
             "rx_bytes": get("Ibytes"), "tx_bytes": get("Obytes"),
             "rx_errors": get("Ierrs"), "tx_errors": get("Oerrs"),
-            "rx_dropped": get("Drop"), "tx_dropped": 0,
+            "rx_dropped": first_of(NETSTAT_DROP_COLUMNS["rx_dropped"]),
+            "tx_dropped": first_of(NETSTAT_DROP_COLUMNS["tx_dropped"]),
             "rx_crc_errors": 0, "rx_frame_errors": 0, "rx_over_errors": 0,
-            "collisions": get("Coll"), "operstate": "unknown",
+            "collisions": get("Coll"),
+            # And the asterisk is the one thing this table says about link
+            # state, which was being thrown away along with the name it broke.
+            "operstate": "down" if down else "unknown",
         }
     return stats
 
@@ -7160,7 +7206,16 @@ def annotation_means(flag):
     if flag.startswith("!") and flag[1:].isdigit():
         return "an ICMP unreachable, code %s" % flag[1:]
     return flag
-TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]|!\d{1,3})(?=\s|$)")
+#: The `!` codes a router can attach to a hop. `!F-1492` is the odd one: BSD
+#: traceroute writes fragmentation-needed with the next-hop MTU glued on with a
+#: hyphen, and the old lookahead demanded whitespace straight after the flag -
+#: so the one annotation that carries a measurement was the one dropped.
+TRACE_ANNOTATION_RE = re.compile(r"(![A-Z]-\d{3,5}|![A-Z]|!\d{1,3})(?=\s|$)")
+
+#: The path MTU as each tool reports it. tracepath says `pmtu 1400` on a line
+#: of its own; traceroute says `!F-1400` against the hop that sent it, which is
+#: better data - it names the hop as well as the number.
+TRACE_PMTU_RE = re.compile(r"\bpmtu\s+(\d{3,5})\b|![A-Z]-(\d{3,5})\b")
 # A deliberate refusal by a policy device, as opposed to a path that is broken
 # or silent. Different owner entirely: somebody configured this.
 #
@@ -7227,8 +7282,8 @@ def parse_traceroute_hops(output):
         times = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*ms", line)]
         ip_match = IP_ANY_RE.search(line)
         host = ip_match.group(0) if ip_match else None
-        pmtu_m = re.search(r"\bpmtu\s+(\d{3,5})\b", line)
-        pmtu = int(pmtu_m.group(1)) if pmtu_m else None
+        pmtu_m = TRACE_PMTU_RE.search(line)
+        pmtu = int(pmtu_m.group(1) or pmtu_m.group(2)) if pmtu_m else None
         # Who owns this hop, where the tool that walked the path said so.
         # traceroute -A and mtr -z both print it in square brackets, and "[*]"
         # is the router answering with no AS known - a different thing from the

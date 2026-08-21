@@ -95,6 +95,41 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### Waiting on the repository going public: showing the HTML output
+
+The README's hero is a **generated SVG**, not a screenshot, and `dev/hero.py`
+says why: a screenshot is a claim about the output that stops being true the
+moment the output changes, and nothing would notice. That decision stands.
+
+But the hero shows the **terminal** report. The HTML export - the page with its
+panels, the thing `--export` actually produces - appears nowhere, so anyone
+evaluating this sees only half of what it makes. Two pieces, both deferred
+until the repo is public (2026-08-21):
+
+1. **Publish the demo pages to GitHub Pages**, wired into `dev/release.py` so
+   they republish with every tag. `dev/demos.py` already builds nine of them
+   from the synthetic corpus and already verifies each one - it exits non-zero
+   if a page's verdict does not name the fault its filename claims. That is the
+   honest artefact: the real, current, interactive page rather than a picture
+   of one, and it cannot drift because it is regenerated. Pages on a private
+   repo needs a paid plan, which is the only reason this waits.
+
+2. **One screenshot for the README**, because a link renders as a line of text
+   and an image is the first thing anyone sees. Drift is handled the way this
+   project handles everything: commit the PNG, record the `VIEWER_TEMPLATE`
+   hash beside it, and fail a test when the template changes and the image was
+   not recaptured - the same shape as
+   `test_the_committed_viewer_matches_the_embedded_one`. Capture stays a manual
+   release step; it needs a browser and that is not a dependency worth pulling
+   into the harnesses.
+
+Use **demo 1, inbound loss**. It is the page whose whole argument is visible at
+a glance: clients in FAULT, this box and the way out both OK.
+
+Not considered: drawing the HTML page as an SVG the way the hero is drawn. That
+means hand-maintaining a second renderer imitating the first, which is the
+[[verify-the-drawing]] trap rather than an answer to it.
+
 ### dev/dialects.py - one reading, written two ways
 
 Six defects in three days shared a shape, and it was **not** "a parser

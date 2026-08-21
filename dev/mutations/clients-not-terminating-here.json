@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a forwarding box is told nothing is reaching it",
+  "old": "    if outbound_dests >= FORWARDER_DESTINATIONS:",
+  "new": "    if False:"
+ },
+ {
+  "label": "a quiet box is excused as a forwarder",
+  "old": "    if outbound_dests >= FORWARDER_DESTINATIONS:",
+  "new": "    if True:"
+ },
+ {
+  "label": "the forwarding boundary is off by one",
+  "old": "    if outbound_dests >= FORWARDER_DESTINATIONS:",
+  "new": "    if outbound_dests > FORWARDER_DESTINATIONS:"
+ },
+ {
+  "label": "the forwarding finding is ranked as a fault",
+  "old": "                  \"clients_are_not_terminating_here\",",
+  "new": "                  \"clients_are_not_terminating_here_x\","
+ },
+ {
+  "label": "it guesses at a number of clients instead of declining to",
+  "old": "                f\"the answer is not none - check the outbound side above for \"",
+  "new": "                f\"there are probably many - check the outbound side above for \""
+ }
+]

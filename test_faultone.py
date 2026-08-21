@@ -3380,6 +3380,61 @@ class TestQuietGotchas(unittest.TestCase):
         self.assertFalse([f for f in self.listening(["443"], clients=9)
                           if f["code"] == "no_clients_connected"])
 
+    # ---- a box passing traffic on rather than terminating it ---------------
+    #
+    # From a real report, which said both of these about one box: "clients:
+    # none connected", and "this box has connections open to 52 distinct
+    # destinations ... forwarding traffic on behalf of other people". Both came
+    # out of the same socket table. A report that contradicts itself in plain
+    # English is worse than one that says less.
+
+    def forwarding(self, destinations):
+        text = ["State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+                "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*"]
+        for i in range(destinations):
+            text.append("ESTAB 0 0 10.0.0.5:%d 203.0.113.%d:443"
+                        % (40000 + i, 1 + i % 200))
+        m = fresh()
+        serving(m, "\n".join(text) + "\n")
+        return {f["code"]: f for f in
+                m.diagnose("8.8.8.8", None, quick=False)["findings"]}
+
+    def test_a_forwarding_box_is_not_told_nothing_is_reaching_it(self):
+        """It is doing work for somebody. The client side is simply not a
+        socket this table can see."""
+        found = self.forwarding(nd.FORWARDER_DESTINATIONS + 2)
+        self.assertNotIn("no_clients_connected", found)
+        self.assertIn("clients_are_not_terminating_here", found)
+
+    def test_it_says_the_answer_is_not_none_rather_than_guessing_a_number(self):
+        """How many clients there are cannot be answered from here. That the
+        answer is not zero can be."""
+        said = self.forwarding(
+            nd.FORWARDER_DESTINATIONS + 2)["clients_are_not_terminating_here"]
+        self.assertIn("the answer is not none", said["message"])
+        self.assertEqual(said["severity"], "ok")
+
+    def test_it_is_not_a_fault_to_rank(self):
+        """A limit of the instrument, not a fault of the box - so it must not
+        reach a verdict, for the same reason the datagram one does not."""
+        self.assertIn("clients_are_not_terminating_here", nd.VERDICT_EXEMPT)
+
+    def test_a_quiet_box_is_still_told_nothing_is_reaching_it(self):
+        """The finding this qualifies has to survive. A box with one or two
+        outbound connections and no clients is out of a pool, and that is the
+        case the original was written for."""
+        found = self.forwarding(3)
+        self.assertIn("no_clients_connected", found)
+        self.assertNotIn("clients_are_not_terminating_here", found)
+
+    def test_the_boundary_is_where_forwarding_is_declared(self):
+        """One threshold, read by both, so the two cannot disagree about what
+        a forwarding box is."""
+        self.assertNotIn("clients_are_not_terminating_here",
+                         self.forwarding(nd.FORWARDER_DESTINATIONS - 1))
+        self.assertIn("clients_are_not_terminating_here",
+                      self.forwarding(nd.FORWARDER_DESTINATIONS))
+
     def test_listening_is_not_the_same_as_existing_to_be_connected_to(self):
         """Almost every machine listens on something. Gated to ports whose
         purpose is answering clients, or this fires on any box with sshd -
@@ -17411,9 +17466,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1101),
-            "compressed": (len(gzip.compress(raw, 9)), 333),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 227),
+            "on disk": (len(raw), 1103),
+            "compressed": (len(gzip.compress(raw, 9)), 334),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -23644,6 +23699,24 @@ def _(nd):
                     "4 packets transmitted, 0 received, 100% packet loss\n"}
         return real(target, count, wait)
     nd.cmd_ping = ping
+
+@scenario("clients_are_not_terminating_here")
+def _(nd):
+    """A box passing traffic on rather than terminating it.
+
+    The contradiction this exists to stop: the same socket table that says no
+    client is connected also says this box is holding connections out to fifty
+    destinations on somebody's behalf. Whatever carries the client side, it is
+    not a TCP socket here - a kernel that forwards, a rule that redirects - and
+    "nothing is reaching it" is the one answer that is certainly wrong.
+    """
+    rows = ["State  Recv-Q Send-Q Local Address:Port  Peer Address:Port",
+            "LISTEN 0 128 0.0.0.0:443 0.0.0.0:*"]
+    for i in range(nd.FORWARDER_DESTINATIONS + 2):
+        rows.append("ESTAB 0 0 10.20.4.11:%d 203.0.113.%d:443"
+                    % (40000 + i, 1 + i % 200))
+    serving(nd, "\n".join(rows) + "\n")
+
 
 @scenario("clients_may_be_on_the_datagram_plane")
 def _(nd):

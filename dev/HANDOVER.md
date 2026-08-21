@@ -95,6 +95,37 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The report that contradicted itself about its own clients
+
+A real report said both of these about one box, out of the same socket table:
+
+> clients: **none connected**
+> "connections open to 52 distinct destinations ... **a box forwarding traffic
+> on behalf of other people**"
+
+The BSD socket parsing was checked first and is sound - `peer_host` and
+`peer_port` handle `10.0.0.5.443`, `*.443`, `*.*` and the v6 forms, and
+`_is_loopback_socket` is right about all of them. So `no_clients_connected` was
+telling the truth about **userland TCP sockets** and saying it in words that
+were false about the box.
+
+`clients_are_not_terminating_here` is the same shape as
+`clients_may_be_on_the_datagram_plane` beside it: no inbound TCP, and a named
+reason the socket table cannot see the client side - here, that the box is
+demonstrably working for somebody. It declines to say how many clients there
+are, because that cannot be answered from here, and says the answer is not
+none, because that can. Exempt from the verdict for the same reason the
+datagram one is: a limit of the instrument is not a fault of the box.
+
+`no_clients_connected` still fires on a quiet box with a handful of outbound
+connections, which is the case it was written for - being taken out of a
+pool. One threshold, `FORWARDER_DESTINATIONS`, read by both.
+
+**Still unresolved, and honestly so:** whether that box's inbound leg is in the
+kernel, behind a redirect, or something the parse is missing. That needs an
+`--export` from it, which is not currently available. What this change fixes is
+the report asserting something it could not know.
+
 ### The rest of the foreign-format sweep: a table is not a list of fields
 
 `netstat -i -b -n` had **no fixture at all**, while its Linux twin has a dozen

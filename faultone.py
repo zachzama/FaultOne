@@ -9001,6 +9001,10 @@ VERDICT_EXEMPT = {"all_clear", "path_loss_cosmetic", "ports_truncated", "switch_
                   # Says a question cannot be answered from a socket table,
                   # which is the opposite of a fault to rank.
                   "clients_may_be_on_the_datagram_plane",
+                  # Same: says the client side is somewhere this reading does
+                  # not reach, which is a limit of the instrument rather than
+                  # a fault of the box.
+                  "clients_are_not_terminating_here",
                   "tunnel_payload_room",
                   "forwards_inside_tunnels",
                   # This box shipping its own logs, encrypted. Context on
@@ -9288,6 +9292,7 @@ FINDING_SIDE.update({
     "source_address_absent": "local",
     "source_cannot_reach": "upstream",
     "clients_may_be_on_the_datagram_plane": "downstream",
+    "clients_are_not_terminating_here": "downstream",
     "no_clients_connected": "downstream",
     "no_traffic_at_all": "local",
     "queuing_delay_clients": "downstream",
@@ -17636,6 +17641,33 @@ def _check_rotation(raw):
                 f"for datagrams on {where}. A datagram socket serves any number of "
                 f"peers without the kernel recording one of them, so the socket table "
                 f"cannot say how many are being served."
+                + _tunnels_counted(raw)),
+        })
+        return found
+    # And a box passing traffic on rather than terminating it. The same run
+    # that reports "nothing is reaching it" can also report, out of the same
+    # socket table, that this box holds connections to fifty-odd destinations
+    # on other people's behalf - which is a report contradicting itself in
+    # plain English, and it happened on a real box. Whatever carries the client
+    # side there, it is not a TCP socket this table can see: a kernel that
+    # forwards, a rule that redirects, or a plane this reading does not cover.
+    # The one thing that is certainly untrue is that nothing is reaching it.
+    outbound_dests = sock.get("outbound_destinations") or 0
+    if outbound_dests >= FORWARDER_DESTINATIONS:
+        found.append({
+            "severity": "ok",
+            "layer": 4,
+            "code": "clients_are_not_terminating_here",
+            "message": (
+                f"No TCP connection is open inbound, and this box is holding "
+                f"connections out to {outbound_dests} distinct destinations - "
+                f"which is work being done on somebody's behalf rather than a "
+                f"box nobody is using. So the client side is not a socket this "
+                f"table can see: a kernel that forwards rather than accepts, a "
+                f"rule that redirects, or a plane this reading does not cover. "
+                f"How many clients there are cannot be answered from here, but "
+                f"the answer is not none - check the outbound side above for "
+                f"what this box is doing for them."
                 + _tunnels_counted(raw)),
         })
         return found

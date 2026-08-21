@@ -1505,6 +1505,119 @@ class TestASlowResolverSaysHowSlow(unittest.TestCase):
         self.assertIn("Resolver 10.0.0.53 answered in 900ms", said)
 
 
+class TestEveryResolverIsAskedAtOnce(unittest.TestCase):
+    """Four resolvers were asked one after another at a two second timeout.
+
+    On a real box with one unresponsive resolver that was four seconds of a
+    seven second run - two queries to it, the name probe and the NXDOMAIN one -
+    and the entire budget of a `--quick`. Nothing here is CPU-bound; it is four
+    UDP round trips that have no reason to queue behind each other.
+
+    The concurrency is proved with a barrier rather than a stopwatch. A test
+    that asserts "this took less than N seconds" is a test that fails on a busy
+    machine for reasons that are not the code's, and a flaky test inside
+    `dev/mutate.py` reads as a mutation being caught - the one answer that
+    harness must never invent.
+    """
+
+    def ask(self, servers, hijack, blocking=False, timeout=5.0):
+        """Run the check with a stubbed query, optionally one that will not
+        return until every other query has also started."""
+        import threading
+        mod = fresh()
+        mod._read_resolvers = lambda with_reason=False: (list(servers), None)
+        expected = len(servers) * (2 if hijack else 1)
+        gate = threading.Barrier(expected, timeout=timeout) if blocking else None
+        asked = []
+        lock = threading.Lock()
+
+        def query(server, name, qtype=1, timeout=2.0):
+            with lock:
+                asked.append((server, name))
+            if gate:
+                gate.wait()               # only returns if all of them are here
+            return {"ok": True, "rcode": 0, "rcode_name": "NOERROR",
+                    "elapsed_ms": 7, "answers": ["192.0.2.9"]}
+
+        mod.dns_query = query
+        # The real collector bound to this module copy. fresh() stubs
+        # cmd_dns_health like every other one, and AS_WRITTEN exists for
+        # exactly this: a test of a collector's own behaviour.
+        return mod.AS_WRITTEN["cmd_dns_health"](check_hijack=hijack), asked
+
+    SERVERS = ["192.0.2.53", "198.51.100.53", "203.0.113.53", "192.0.2.54"]
+
+    def test_no_query_waits_for_the_one_before_it(self):
+        """The barrier only releases when every probe has started, so a serial
+        implementation cannot get past it and a concurrent one cannot fail."""
+        got, asked = self.ask(self.SERVERS, hijack=False, blocking=True)
+        self.assertEqual(len(asked), 4)
+        self.assertEqual([r["server"] for r in got["resolvers"]], self.SERVERS)
+
+    def test_the_hijack_probe_does_not_wait_for_the_name_probe(self):
+        """Where the four seconds were. A resolver that answers neither costs
+        two timeouts, and they have no reason to be one after the other."""
+        got, asked = self.ask(self.SERVERS, hijack=True, blocking=True)
+        self.assertEqual(len(asked), 8)
+        self.assertEqual(len(got["resolvers"]), 4)
+
+    def test_the_answers_stay_in_the_order_the_box_has_them(self):
+        """The order is the contract. The panel prints them as configured and
+        dns_resolver_partial names the ones that did not answer against the
+        ones that did, so answers arriving in completion order would rename
+        them."""
+        got, _asked = self.ask(self.SERVERS, hijack=True)
+        self.assertEqual([r["server"] for r in got["resolvers"]], self.SERVERS)
+
+    def test_each_resolver_is_asked_both_questions_and_no_others(self):
+        _got, asked = self.ask(self.SERVERS, hijack=True)
+        self.assertEqual(sorted(s for s, _n in asked), sorted(self.SERVERS * 2))
+        self.assertEqual({n for _s, n in asked},
+                         {"google.com", nd.NXDOMAIN_PROBE})
+
+    def test_a_quick_run_still_asks_one_question_each(self):
+        _got, asked = self.ask(self.SERVERS, hijack=False)
+        self.assertEqual({n for _s, n in asked}, {"google.com"})
+
+    def test_the_hijack_answer_lands_on_the_resolver_that_gave_it(self):
+        """Split by position out of one list, so an off-by-one here would put
+        one resolver's interception on another one's row - and that row names
+        an address somebody is about to go and look at."""
+        mod = fresh()
+        mod._read_resolvers = lambda with_reason=False: (list(self.SERVERS), None)
+
+        def query(server, name, qtype=1, timeout=2.0):
+            answered = name != nd.NXDOMAIN_PROBE or server == "203.0.113.53"
+            return {"ok": True, "rcode": 0 if answered else 3,
+                    "rcode_name": "NOERROR" if answered else "NXDOMAIN",
+                    "elapsed_ms": 7,
+                    "answers": ["192.0.2.9"] if answered else []}
+
+        mod.dns_query = query
+        got = mod.AS_WRITTEN["cmd_dns_health"]()["resolvers"]
+        self.assertEqual([r["server"] for r in got if r["hijacks_nxdomain"]],
+                         ["203.0.113.53"])
+
+    def test_one_resolver_needs_no_pool_at_all(self):
+        """A thread and a queue to do what a call does."""
+        got, asked = self.ask(["192.0.2.53"], hijack=False)
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(got["resolvers"][0]["server"], "192.0.2.53")
+
+    def test_the_time_each_resolver_took_is_still_its_own(self):
+        """The panel prints these milliseconds and a reader compares them
+        between resolvers, so running the probes together must not smear them
+        into each other."""
+        mod = fresh()
+        mod._read_resolvers = lambda with_reason=False: (list(self.SERVERS), None)
+        ms = {s: n for n, s in enumerate(self.SERVERS, start=1)}
+        mod.dns_query = lambda server, name, qtype=1, timeout=2.0: {
+            "ok": True, "rcode": 0, "rcode_name": "NOERROR",
+            "elapsed_ms": ms[server], "answers": ["192.0.2.9"]}
+        got = mod.AS_WRITTEN["cmd_dns_health"](check_hijack=False)["resolvers"]
+        self.assertEqual([r["elapsed_ms"] for r in got], [1, 2, 3, 4])
+
+
 class TestResolverList(unittest.TestCase):
     def test_parses_resolv_conf(self):
         text = ("# Generated by NetworkManager\n"
@@ -17685,7 +17798,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1108),
+            "on disk": (len(raw), 1110),
             "compressed": (len(gzip.compress(raw, 9)), 336),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
         }

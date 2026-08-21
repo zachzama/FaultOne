@@ -1341,6 +1341,39 @@ def _answer_summary(answers, keep=3):
     return shown + (f" (+{len(answers) - keep} more)" if len(answers) > keep else "")
 
 
+#: How many resolver probes to have in flight at once.
+#:
+#: A full run asks each configured resolver two questions - the name probe and
+#: the NXDOMAIN one - so four resolvers is eight queries, and they were being
+#: asked one after another at a two second timeout each. On a real box with one
+#: unresponsive resolver that was four seconds of a seven second run, and the
+#: whole of a `--quick` budget.
+#:
+#: Bounded for the same reason the port checks are, and far less provocatively:
+#: these are the resolvers this box already uses constantly, and eight UDP
+#: queries is less than a browser makes opening one page.
+DNS_PROBE_WORKERS = 8
+
+
+def _ask_resolvers(jobs):
+    """Every (server, name) probe at once, answers in the order asked.
+
+    `pool.map` rather than a dict of futures because the order *is* the
+    contract here: the resolver panel prints them in the order the box has them
+    configured, and `dns_resolver_partial` names the ones that did not answer
+    against the ones that did. A set of answers that arrived in completion
+    order would rename them.
+
+    One job runs inline. A pool for a single query is a thread and a queue to
+    do what a call does.
+    """
+    if len(jobs) < 2:
+        return [dns_query(server, name) for server, name in jobs]
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(DNS_PROBE_WORKERS, len(jobs))) as pool:
+        return list(pool.map(lambda job: dns_query(*job), jobs))
+
+
 @collector
 def cmd_dns_health(probe_name="google.com", check_hijack=True):
     """Query each configured resolver individually and compare them."""
@@ -1354,14 +1387,25 @@ def cmd_dns_health(probe_name="google.com", check_hijack=True):
                 "error": unreadable or "no DNS resolvers are configured on this device",
                 "unreadable": unreadable,
                 "resolvers": []}
+    # Every probe asked at once, name probes first so the two halves can be
+    # split apart again by position. Each `elapsed_ms` is still that query's
+    # own round trip - they are separate sockets and the kernel is not the
+    # bottleneck at this volume - which matters because the panel prints those
+    # milliseconds and a reader compares them between resolvers.
+    jobs = [(server, probe_name) for server in resolvers]
+    if check_hijack:
+        jobs += [(server, NXDOMAIN_PROBE) for server in resolvers]
+    got = _ask_resolvers(jobs)
+    named, hijacked = got[:len(resolvers)], got[len(resolvers):]
+
     results = []
-    for server in resolvers:
-        r = dns_query(server, probe_name)
+    for at, server in enumerate(resolvers):
+        r = named[at]
         entry = {"server": server, "ok": bool(r.get("ok")) and r.get("rcode") == 0,
                  "rcode": r.get("rcode_name"), "elapsed_ms": r.get("elapsed_ms"),
                  "answers": sorted(r.get("answers", [])), "error": r.get("error")}
         if check_hijack:
-            hj = dns_query(server, NXDOMAIN_PROBE)
+            hj = hijacked[at]
             # A name in .invalid must not resolve; an answer means interception.
             entry["hijacks_nxdomain"] = bool(hj.get("ok") and hj.get("rcode") == 0
                                              and hj.get("answers"))

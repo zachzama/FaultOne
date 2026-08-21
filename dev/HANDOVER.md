@@ -95,6 +95,45 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The one serial loop that was costing real seconds
+
+A generic "refactor blocking loops and add a CLI" prompt was checked against
+the code rather than acted on. Most of it did not apply: argparse is already
+there with fifteen flags and a description hand-wrapped for eighty columns, and
+`click` would be a **regression** - a third-party dependency breaks
+`ssh ... "python3 - --report" < faultone.py`, which is the whole distribution
+story. Five `ThreadPoolExecutor` sites already existed, with their bounds
+reasoned about.
+
+**One thing was real, and it came out of the box's own report rather than a
+grep.** `cmd_dns_health` asked its resolvers one after another, two questions
+each on a full run, at a two second timeout. Four resolvers with one
+unresponsive is **four seconds of a seven second run**, and the whole of a
+`--quick` budget. That box had exactly that: three resolvers at ~1ms and
+`8.8.8.8` at 2015ms.
+
+Both halves had to overlap to get the win. Parallelising across resolvers alone
+leaves the dead one's two probes back to back and saves nothing, so the jobs
+are one flat list - name probes first, then hijack probes - split apart again
+by position.
+
+**Order is the contract**, so `pool.map` rather than `as_completed`: the panel
+prints resolvers as the box has them configured, and `dns_resolver_partial`
+names the ones that did not answer against the ones that did. Answers arriving
+in completion order would rename them.
+
+**The concurrency is proved with a barrier, not a stopwatch.** A probe does not
+return until every other probe has started, so a serial implementation cannot
+get past it and a concurrent one cannot fail by being slow. A wall-clock
+assertion would fail on a busy machine for reasons that are not the code's -
+and a flaky test inside `dev/mutate.py` reads as a mutation being caught, which
+is the one answer that harness must never invent. See
+[[flaky-until-proven-flaky]].
+
+The tests needed `fresh().AS_WRITTEN`, which exists for precisely this: fresh()
+stubs every collector, and a test of a collector's *own* behaviour needs the
+real function bound to that module copy.
+
 ### Waiting on the repository going public: showing the HTML output
 
 The README's hero is a **generated SVG**, not a screenshot, and `dev/hero.py`

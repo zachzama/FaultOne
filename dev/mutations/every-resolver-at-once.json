@@ -1,0 +1,37 @@
+[
+ {
+  "label": "F: the resolvers go back to being asked one at a time",
+  "old": "    if len(jobs) < 2:\n        return [dns_query(server, name) for server, name in jobs]\n    with concurrent.futures.ThreadPoolExecutor(\n            max_workers=min(DNS_PROBE_WORKERS, len(jobs))) as pool:\n        return list(pool.map(lambda job: dns_query(*job), jobs))",
+  "new": "    return [dns_query(server, name) for server, name in jobs]"
+ },
+ {
+  "label": "F: only one probe is in flight however many are asked",
+  "old": "            max_workers=min(DNS_PROBE_WORKERS, len(jobs))) as pool:",
+  "new": "            max_workers=1) as pool:"
+ },
+ {
+  "label": "F: the answers come back in whatever order they arrived",
+  "old": "        return list(pool.map(lambda job: dns_query(*job), jobs))",
+  "new": "        return [f.result() for f in concurrent.futures.as_completed(\n            [pool.submit(dns_query, *job) for job in jobs])]"
+ },
+ {
+  "label": "F: the hijack probe is never asked",
+  "old": "    if check_hijack:\n        jobs += [(server, NXDOMAIN_PROBE) for server in resolvers]",
+  "new": "    if False:\n        jobs += [(server, NXDOMAIN_PROBE) for server in resolvers]"
+ },
+ {
+  "label": "F: a quick run asks the hijack probe anyway",
+  "old": "    jobs = [(server, probe_name) for server in resolvers]\n    if check_hijack:",
+  "new": "    jobs = [(server, probe_name) for server in resolvers]\n    if True:"
+ },
+ {
+  "label": "F: the two halves are split apart one resolver out",
+  "old": "    named, hijacked = got[:len(resolvers)], got[len(resolvers):]",
+  "new": "    named, hijacked = got[:len(resolvers)], got[len(resolvers) - 1:]"
+ },
+ {
+  "label": "F: every resolver reports the same round trip",
+  "old": "                 \"rcode\": r.get(\"rcode_name\"), \"elapsed_ms\": r.get(\"elapsed_ms\"),",
+  "new": "                 \"rcode\": r.get(\"rcode_name\"), \"elapsed_ms\": got[0].get(\"elapsed_ms\"),"
+ }
+]

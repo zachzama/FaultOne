@@ -3133,6 +3133,21 @@ class TestNoSecondCopy(unittest.TestCase):
 
     # Addresses that have to be real, and why. Everything else in a fixture
     # must come from RFC 5737 / RFC 3849 documentation space.
+    #: What counts as an address written into the source.
+    #:
+    #: `(?!\.?\d)` rather than `(?![\d.])`: the full stop ending a sentence is
+    #: not a fifth octet, and an address written into prose usually ends one.
+    #: A planted address walked straight past the older pattern - a leak in
+    #: exactly the place a leak comes from, somebody writing down where a
+    #: capture came from. A version string or a BSD socket address is still
+    #: rejected, because those really do carry a digit after the dot.
+    #:
+    #: One definition, used by the guard and by the tests of the guard. They
+    #: each compiled their own for a while, so a mutation reverting this
+    #: survived: the tests were exercising a copy and the guard was the thing
+    #: being changed.
+    ADDRESS_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)")
+
     REAL_ADDRESSES_ALLOWED = {
         "8.8.8.8": "the default target, and it has to resolve for anyone who runs it",
         "1.1.1.1": "quoted as an alternative --target",
@@ -3140,6 +3155,12 @@ class TestNoSecondCopy(unittest.TestCase):
         "100.128.0.1": "deliberately just outside CGNAT, to test the boundary",
         "172.32.0.1": "deliberately just outside RFC1918, same reason",
         "0.0.0.0": "a wildcard bind, not a host",
+        # Not a host anybody reaches: it is 192.168.1.1 read the wrong way
+        # round, quoted in the comment warning against reading it that way.
+        # Surfaced when this guard was taught that a sentence's full stop is
+        # not a fifth octet - it had been sitting there unseen.
+        "1.1.168.192": "the byte-order trap in /proc/net/route, quoted as the "
+                       "wrong answer it produces",
     }
 
     def test_no_real_network_addresses_in_the_source(self):
@@ -3159,7 +3180,7 @@ class TestNoSecondCopy(unittest.TestCase):
             path = os.path.join(os.path.dirname(os.path.abspath(nd.__file__)), name)
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
-            for m in re.finditer(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", text):
+            for m in self.ADDRESS_RE.finditer(text):
                 ip = m.group(0)
                 if ip in self.REAL_ADDRESSES_ALLOWED or ip.startswith(DOC):
                     continue
@@ -3174,6 +3195,24 @@ class TestNoSecondCopy(unittest.TestCase):
         self.assertEqual(offenders, [], "real public addresses in the source - use "
                                         "RFC 5737 documentation ranges, or add them to "
                                         "REAL_ADDRESSES_ALLOWED with a reason")
+
+    def test_an_address_ending_a_sentence_is_still_an_address(self):
+        """The gap that let a planted one through. A leaked address arrives in
+        prose more often than in a fixture - somebody writing down where the
+        capture came from - and prose ends in a full stop."""
+        pattern = self.ADDRESS_RE
+        self.assertEqual(pattern.findall("captured from 203.0.113.9."),
+                         ["203.0.113.9"])
+        self.assertEqual(pattern.findall("captured from 203.0.113.9 last week"),
+                         ["203.0.113.9"])
+
+    def test_a_version_string_is_not_an_address(self):
+        """And neither is a BSD socket address, which is four octets and a
+        port. Both carry a digit after the dot, which is what tells them from
+        a sentence ending."""
+        pattern = self.ADDRESS_RE
+        self.assertEqual(pattern.findall("version 1.2.3.4.5 of it"), [])
+        self.assertEqual(pattern.findall("socket 10.0.0.5.443"), [])
 
     def test_every_allowed_real_address_is_still_used(self):
         """An exemption for an address nobody uses any more is an exemption

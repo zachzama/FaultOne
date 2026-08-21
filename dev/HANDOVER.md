@@ -365,6 +365,33 @@ every mutation, in full, and crossed against `vacuous.py` the split is:
   ("no sysfs tree yields nothing"), structural guards whose healthy state is an
   empty violation set, parsers on empty or garbage input, and rule negatives.
 
+**Group two is closed: the structural guards.** `dev/mutations/structural-guards.json`
+plants one real violation per guard - a transport symptom naming a finding
+nothing emits, an X.733 cause no finding uses, a raw key mapped to a stage that
+does not exist, a `var()` for a colour never declared, a text file opened with
+no encoding, a hint using a synonym. **Eight of the nine held on the first
+run**, which is the answer this group was most likely to give and is worth
+having on the record rather than assumed.
+
+**The ninth was a real gap in the guard that keeps this repository
+publishable.** `test_no_real_network_addresses_in_the_source` matched an
+address only when it was *not* followed by a dot, so a full stop at the end of
+a sentence hid one - and prose is exactly where a leak arrives, in somebody
+writing down where a capture came from. `(?!\.?\d)` instead: a version string
+and a BSD socket address still carry a digit after the dot and are still
+rejected.
+
+Teaching it that immediately found one that had been sitting in the source:
+`1.1.168.192`, in the comment warning that `/proc/net/route` prints the quad
+reversed. Not a leak - it is quoted as the wrong answer - so it is an
+exemption with a reason, which is what that list is for.
+
+**And the first fix was untested in the way that matters.** The tests of the
+pattern compiled their own copy of it, so a mutation reverting the guard's
+pattern survived while every test passed. One definition now, used by the guard
+and by the tests of the guard. Shape 1 from [[a-survivor-is-not-a-defect]]: a
+test with an accurate name that never reaches the line.
+
 **Group one is closed.** "Absent is not zero" is the contract worth proving
 first, because reading absence as zero is how a diagnostic invents faults.
 `dev/mutations/absent-is-not-zero.json`. Two real gaps, both the same shape -

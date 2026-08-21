@@ -1,0 +1,53 @@
+[
+ {
+  "label": "A: a transport symptom names a finding nothing emits",
+  "old": "TRANSPORT_SYMPTOMS = {\n    # Traffic that did not arrive, or did not arrive on time.\n    \"inet_partial_loss\",",
+  "new": "TRANSPORT_SYMPTOMS = {\n    # Traffic that did not arrive, or did not arrive on time.\n    \"inet_partial_loss_v2\", \"inet_partial_loss\","
+ },
+ {
+  "label": "A: the X.733 vocabulary carries a cause no finding uses",
+  "old": "X733_CAUSES = frozenset((\n    \"applicationSubsystemFailure\",",
+  "new": "X733_CAUSES = frozenset((\n    \"adapterError\", \"applicationSubsystemFailure\","
+ },
+ {
+  "label": "A: the box-blaming set names a finding that does not exist",
+  "old": "CAUSE_OWNED_BY_BOX = frozenset({",
+  "new": "CAUSE_OWNED_BY_BOX = frozenset({\n    \"accept_overflow_yesterday\","
+ },
+ {
+  "label": "A: the hardware set names a finding nothing emits",
+  "old": "HARDWARE_FINDINGS = {\n    # The optic, its fibre, and the connectors at both ends.\n    \"optics_alarm\",",
+  "new": "HARDWARE_FINDINGS = {\n    # The optic, its fibre, and the connectors at both ends.\n    \"optics_scorched\", \"optics_alarm\","
+ },
+ {
+  "label": "A: a hint uses a synonym instead of the vocabulary",
+  "old": "HINT_WORDS = (\n    \"cable\", \"switch port\",",
+  "new": "HINT_WORDS = (\n    \"cabling\", \"switch port\","
+ },
+ {
+  "label": "A: a raw key is mapped to a stage that does not exist",
+  "old": "    \"own_addresses\": \"address\", \"service_addresses\": \"address\",",
+  "new": "    \"own_addresses\": \"addresses\", \"service_addresses\": \"address\","
+ },
+ {
+  "label": "A: a text file is opened without naming its encoding",
+  "old": "    \"\"\"A file under /proc as text, or None if it is not there to read.\"\"\"\n    try:\n        with open(path, encoding=\"utf-8\", errors=\"replace\") as fh:",
+  "new": "    \"\"\"A file under /proc as text, or None if it is not there to read.\"\"\"\n    try:\n        with open(path, errors=\"replace\") as fh:"
+ },
+ {
+  "label": "A: the page asks for a colour the stylesheet never declares",
+  "old": "    margin:0; background:var(--bg); color:var(--text);",
+  "new": "    margin:0; background:var(--background); color:var(--text);"
+ },
+ {
+  "label": "A: a routable address is written into the source",
+  "old": "#: How many failed units to name before summarising the rest.",
+  "new": "#: How many failed units to name before summarising the rest. See 8.8.4.4 first."
+ },
+ {
+  "label": "A: the address guard stops seeing one that ends a sentence",
+  "file": "test_faultone.py",
+  "old": "    ADDRESS_RE = re.compile(r\"(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?!\\.?\\d)\")",
+  "new": "    ADDRESS_RE = re.compile(r\"(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?![\\d.])\")"
+ }
+]

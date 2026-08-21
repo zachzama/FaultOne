@@ -95,6 +95,32 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### mtr's JSON is not consistently typed, and the crash was the small half
+
+A real box ended a run with `TypeError: unsupported operand type(s) for -:
+'str' and 'str'` in `annotate_hops`. mtr's JSON quotes its numbers on some
+builds, so `count` arrived as `"1"` and was subtracted from another hop number.
+
+**The crash was the least of it.** `count` is used in arithmetic, so a string
+there fails loudly where somebody can see it. `Avg`, `Loss%` and `Best` are
+guarded by `isinstance(x, (int, float))` checks, and a string fails those
+**silently**: no per-hop timing, no per-hop loss, and no floor - which is not an
+error on any box, it is what a filtered path looks like. The tool would have
+described one, in detail, with a verdict.
+
+Fixed at the parse boundary with `_mtr_number`, which takes whatever the build
+typed and refuses booleans (`isinstance(True, int)` is true). `count` and `Snt`
+come out as integers because they count things; the rest stay floats. A hub
+with no `count` at all falls back to its position, which is what `count` would
+have said - mtr lists hubs in TTL order.
+
+**The fixture had the evidence the whole time.** The sample in `TestMtrParsing`
+was copied from a real build and its `psize` is quoted while everything else is
+not. Nobody read it as a statement about mtr's typing. The quoted fixture is
+now built by rewriting that sample rather than by hand, so the two cannot
+drift, and the crash is asserted end to end through `annotate_hops` rather than
+only at the parser that produced the bad value.
+
 ### The empty-only tests, and how to tell which of them hold anything
 
 `dev/vacuous.py` lists tests whose every assertion compared empty things. It

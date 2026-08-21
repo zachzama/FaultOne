@@ -1,0 +1,42 @@
+[
+ {
+  "label": "a quoted hop number is carried through as the string mtr gave",
+  "old": "            \"hop\": int(counted) if counted is not None else len(hops) + 1,",
+  "new": "            \"hop\": hub.get(\"count\"),"
+ },
+ {
+  "label": "a hub with no count at all has no hop number",
+  "old": "            \"hop\": int(counted) if counted is not None else len(hops) + 1,",
+  "new": "            \"hop\": int(counted) if counted is not None else None,"
+ },
+ {
+  "label": "a quoted loss reads as a path that could not be measured",
+  "old": "        loss = _mtr_number(hub.get(\"Loss%\"))",
+  "new": "        loss = hub.get(\"Loss%\")"
+ },
+ {
+  "label": "a quoted average leaves the hop with no timing",
+  "old": "        avg = _mtr_number(hub.get(\"Avg\"))",
+  "new": "        avg = hub.get(\"Avg\")"
+ },
+ {
+  "label": "the floor every latency conclusion rests on stays a string",
+  "old": "            \"best_ms\": _mtr_number(hub.get(\"Best\")),",
+  "new": "            \"best_ms\": hub.get(\"Best\"),"
+ },
+ {
+  "label": "a probe count is reported as ten point zero probes",
+  "old": "            \"sent\": int(sent) if sent is not None else None,",
+  "new": "            \"sent\": sent,"
+ },
+ {
+  "label": "a boolean is counted as the number one",
+  "old": "    if isinstance(value, bool):\n        return None",
+  "new": "    if False:\n        return None"
+ },
+ {
+  "label": "a value that is not a number at all becomes zero",
+  "old": "        return float(str(value).strip())\n    except (TypeError, ValueError):\n        return None",
+  "new": "        return float(str(value).strip())\n    except (TypeError, ValueError):\n        return 0.0"
+ }
+]

@@ -836,6 +836,31 @@ def cmd_dns(target):
 # python3.
 # ---------------------------------------------------------------------------
 
+def _mtr_number(value):
+    """A number out of mtr's JSON, whatever that build typed it as.
+
+    mtr's JSON is not consistently typed across builds: some quote every value,
+    so `count` arrives as "1" and `Avg` as "12.4". Nothing downstream was
+    ready for that, and the ways it went wrong were unequal - `count` is
+    subtracted from another hop number and raised TypeError where a reader
+    could see it, while `Avg`, `Loss%` and `Best` are guarded by isinstance
+    checks that a string fails silently. A path with no per-hop timings, no
+    per-hop loss and no floor is not an error on any box; it is what a filtered
+    path looks like, so the tool would have described one.
+
+    Booleans are refused rather than counted as 1 and 0, which is what
+    isinstance would have done with them.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_mtr_json(text):
     """Turn `mtr --json` output into the same hop shape as parse_traceroute_hops.
 
@@ -862,8 +887,8 @@ def parse_mtr_json(text):
         if raw_host in ("???", "", "waiting for reply"):
             display, host = "*", None
 
-        loss = hub.get("Loss%")
-        avg = hub.get("Avg")
+        loss = _mtr_number(hub.get("Loss%"))
+        avg = _mtr_number(hub.get("Avg"))
         times = []
         # mtr reports aggregates, not individual probes. Synthesize a single
         # representative timing so shared code (avg, jitter) keeps working, and
@@ -876,18 +901,27 @@ def parse_mtr_json(text):
         asn = hub.get("ASN") or None
         if asn in ("???", "AS???", "*"):
             asn = None
+        # An integer, always. It is subtracted from another hop number three
+        # lines into annotate_hops, and a hub with no count at all is as fatal
+        # there as a quoted one. mtr lists its hubs in TTL order and `count` is
+        # that position, so the position is the honest fallback rather than a
+        # guess.
+        counted = _mtr_number(hub.get("count"))
+        sent = _mtr_number(hub.get("Snt"))
         hops.append({
-            "hop": hub.get("count"),
+            "hop": int(counted) if counted is not None else len(hops) + 1,
             "host": host,
             "display": display or "*",
             "asn": asn,
             "times_ms": times,
-            "timed_out": bool(loss is not None and float(loss) >= 100),
-            "loss_pct": round(float(loss), 1) if isinstance(loss, (int, float)) else None,
-            "sent": hub.get("Snt"),
-            "best_ms": hub.get("Best"),
-            "worst_ms": hub.get("Wrst"),
-            "stdev_ms": hub.get("StDev"),
+            "timed_out": bool(loss is not None and loss >= 100),
+            "loss_pct": round(loss, 1) if loss is not None else None,
+            # A count of probes, so an integer for the same reason `hop` is:
+            # it is a number of things, and "10.0 probes" is not a sentence.
+            "sent": int(sent) if sent is not None else None,
+            "best_ms": _mtr_number(hub.get("Best")),
+            "worst_ms": _mtr_number(hub.get("Wrst")),
+            "stdev_ms": _mtr_number(hub.get("StDev")),
         })
     return hops
 

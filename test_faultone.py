@@ -326,6 +326,78 @@ class TestMtrParsing(unittest.TestCase):
         self.assertEqual(nd.parse_mtr_json(""), [])
         self.assertEqual(nd.parse_mtr_json('{"report":{}}'), [])
 
+    # ---- mtr's JSON is not consistently typed across builds ---------------
+    #
+    # Found on a real box, which crashed the whole run. The sample above was
+    # copied from a build that types its numbers, and its own `psize` is
+    # quoted - the inconsistency was sitting in the fixture the entire time.
+
+    QUOTED = SAMPLE.replace('"count":', '"count":"Q').replace(
+        ',"Loss%":', ',"Loss%":"Q').replace(',"Snt":', ',"Snt":"Q').replace(
+        ',"Avg":', ',"Avg":"Q').replace(',"Best":', ',"Best":"Q').replace(
+        ',"Wrst":', ',"Wrst":"Q').replace(',"StDev":', ',"StDev":"Q')
+
+    def quoted(self):
+        """The same report with every number a string, built by rewriting the
+        sample rather than by hand so the two cannot drift apart."""
+        return re.sub(r'"Q([\d.]+)', r'"\1"', self.QUOTED)
+
+    def test_a_build_that_quotes_its_numbers_parses_the_same(self):
+        """Every field, not only the one that crashed. The others fail
+        `isinstance` checks instead, which is silent."""
+        self.assertEqual(nd.parse_mtr_json(self.quoted()),
+                         nd.parse_mtr_json(self.SAMPLE))
+
+    def test_a_quoted_hop_number_is_an_integer(self):
+        """The crash. `annotate_hops` subtracts one hop number from another
+        three lines in, and two strings there is a TypeError that ends the
+        run."""
+        for h in nd.parse_mtr_json(self.quoted()):
+            with self.subTest(hop=h["display"]):
+                self.assertIsInstance(h["hop"], int)
+
+    def test_the_quoted_path_survives_being_annotated(self):
+        """What actually failed on the box, asserted end to end rather than
+        only at the parser that produced the bad value."""
+        hops = nd.parse_mtr_json(self.quoted())
+        nd.annotate_hops(hops, gateway="192.168.1.1", target="8.8.8.8")
+
+    def test_a_quoted_loss_is_still_a_loss(self):
+        """`loss_pct` was guarded by an isinstance check a string fails, so a
+        path measured over ten cycles reported no per-hop loss at all - which
+        is what a path that could not be measured looks like."""
+        hops = nd.parse_mtr_json(self.quoted())
+        self.assertEqual([h["loss_pct"] for h in hops], [0.0, 0.0, 100.0, 12.0])
+
+    def test_a_quoted_average_still_becomes_a_timing(self):
+        """Same shape, and worse: with no times_ms the hop has no timing, and
+        the floor every latency conclusion rests on comes from Best."""
+        hops = nd.parse_mtr_json(self.quoted())
+        self.assertEqual(hops[1]["times_ms"], [13.1])
+        self.assertEqual(hops[1]["best_ms"], 11.2)
+
+    def test_a_hub_with_no_count_falls_back_to_its_position(self):
+        """As fatal as a quoted one, and reachable the same way. mtr lists its
+        hubs in TTL order, so the position is what count would have said."""
+        hops = nd.parse_mtr_json(
+            '{"report":{"hubs":[{"host":"192.0.2.1"},{"host":"192.0.2.2"}]}}')
+        self.assertEqual([h["hop"] for h in hops], [1, 2])
+
+    def test_a_boolean_is_not_a_number(self):
+        """isinstance(True, int) is true, so a bool would have counted as 1
+        rather than as the wrong type it is."""
+        self.assertIsNone(nd._mtr_number(True))
+        self.assertIsNone(nd._mtr_number(None))
+        self.assertIsNone(nd._mtr_number("???"))
+        self.assertEqual(nd._mtr_number(" 12.4 "), 12.4)
+
+    def test_a_probe_count_is_a_whole_number(self):
+        """Snt counts probes. Coercing every field through one float helper
+        would have made it 10.0."""
+        for h in nd.parse_mtr_json(self.quoted()):
+            with self.subTest(hop=h["display"]):
+                self.assertIsInstance(h["sent"], int)
+
 
 class TestEthtoolParsing(unittest.TestCase):
     SAMPLE = """Settings for eth0:
@@ -16989,8 +17061,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1092),
-            "compressed": (len(gzip.compress(raw, 9)), 330),
+            "on disk": (len(raw), 1094),
+            "compressed": (len(gzip.compress(raw, 9)), 331),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 226),
         }
         for label, (measured, quoted) in claims.items():

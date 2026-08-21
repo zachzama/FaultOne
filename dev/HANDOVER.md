@@ -95,6 +95,47 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### What a run on a real BSD box said, and the three things it found
+
+The box reports a vendor string from `platform.system()` rather than `FreeBSD`,
+and that is **why so much of it worked**: the branches here are `== "Linux"` for
+the Linux-only readers and `!= "Windows"` for the rest, so an unrecognised name
+falls to the BSD path by default rather than to nothing. Worth keeping. Any
+future BSD work should follow the same shape and branch on what a box *has*
+rather than on what it calls itself, because on that box the name is not a
+platform at all.
+
+**Every link above a gigabit reported no speed.** `MEDIA_SPEED_RE` was
+`(\d+)base`, which takes digits immediately before "base" - and in
+`10Gbase-SR` the character before "base" is a G. It matched `1000baseT` and
+every fixture in this suite, and none of `10Gbase-SR`, `40Gbase-SR4`,
+`25Gbase-CR`. On the real box that was six interfaces of seven, all of them the
+ones carrying traffic. `media_speed_mbps` reads the multiplier now, in decimal,
+because `2.5Gbase-T` is ordinary on copper.
+
+Note which way this failed: it printed `-`, which reads as "not known". Had the
+regex been slightly different it would have printed **10M for a 10G link**, and
+a speed that low beside a busy interface is what a duplex fault looks like.
+
+**`dns_disagree` was firing on any box with two resolvers.** The probe is a
+global name and a global name answers from wherever the asking resolver is, so
+two different addresses is a load balancer working. The real box produced two
+neighbours in one network under the sentence "usually a stale cache on one of
+them". `_resolvers_truly_disagree` keeps only what the finding was written for
+- an answer **off the public internet altogether**, which is a portal, a
+redirect or a middlebox handing back its own address, and is decidable without
+knowing the right answer. A stale cache holding an old *public* address is
+given up on purpose: telling it from a load balancer means knowing the right
+answer, which is the question being asked.
+
+The scenario had to change with it. It was two public addresses, which is now
+the case the finding declines to make.
+
+**`target_alone_unreachable` fired correctly on that box** - 8.8.8.8 blocked by
+policy, the uplink proven by a resolver on the far side, and the verdict named
+the destination rather than the way out. That is the China case working on a
+box in China, which is the first real confirmation of it.
+
 ### mtr's JSON is not consistently typed, and the crash was the small half
 
 A real box ended a run with `TypeError: unsupported operand type(s) for -:

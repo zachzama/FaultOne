@@ -1486,6 +1486,88 @@ class TestResolverList(unittest.TestCase):
         self.assertEqual(nd.parse_resolvers(None), [])
 
 
+class TestResolversDisagreeingAboutAGlobalName(unittest.TestCase):
+    """Two resolvers giving different answers is usually correct behaviour.
+
+    The probe is a global service, and a global service answers from wherever
+    the asking resolver is. So different addresses are the normal case, and
+    reporting them as a fault fired on any box with more than one resolver.
+    A real box produced two addresses one /16 apart, two front ends of the
+    same thing, under the sentence "usually a stale cache on one of them".
+    Written here in documentation space, per the rule that no routable address
+    appears in this repository: the shape is two neighbours and the shape is
+    the whole point.
+
+    What the finding was written for is a resolver answering with something
+    that is not the service: a captive portal, an ISP redirect, a middlebox
+    handing back its own address. That is decidable without knowing the right
+    answer, because the answer is off the public internet entirely.
+
+    A stale cache holding an old public address is given up on purpose. Telling
+    it from a load balancer needs to know what the right answer is, which is
+    the question being asked.
+    """
+
+    def disagree(self, *sets):
+        return nd._resolvers_truly_disagree({tuple(s) for s in sets})
+
+    def test_two_front_ends_of_one_service_are_not_a_disagreement(self):
+        """The real box's shape. Same network, one service, no fault."""
+        self.assertFalse(self.disagree(["203.0.113.10"], ["203.0.113.87"]))
+
+    def test_two_unrelated_public_addresses_are_still_not_reported(self):
+        """A global name can answer from genuinely different networks - a CDN
+        with more than one provider does exactly this. Reporting it needs to
+        know which one is right, and nothing here does."""
+        self.assertFalse(self.disagree(["192.0.2.4"], ["198.51.100.7"]))
+
+    def test_an_answer_off_the_public_internet_is_a_disagreement(self):
+        """A portal or a redirect handing back its own address. Not a matter
+        of degree: that is not the service under any load balancing."""
+        self.assertTrue(self.disagree(["192.0.2.4"], ["10.0.0.99"]))
+        self.assertTrue(self.disagree(["192.0.2.4"], ["192.168.1.1"]))
+        self.assertTrue(self.disagree(["192.0.2.4"], ["127.0.0.1"]))
+
+    def test_carrier_nat_space_counts_as_off_the_public_internet(self):
+        """100.64/10 is the provider's side rather than the site's, and a name
+        answering there is not the service either."""
+        self.assertTrue(self.disagree(["192.0.2.4"], ["100.64.0.1"]))
+
+    def test_a_portal_answering_alongside_a_real_address_still_counts(self):
+        """Any private address in a set is the whole set's character. A portal
+        that hands back its own address next to a real one is still a portal
+        answering."""
+        self.assertTrue(self.disagree(["192.0.2.4"],
+                                      ["198.51.100.7", "10.0.0.99"]))
+
+    def test_resolvers_that_all_agree_say_nothing(self):
+        self.assertFalse(self.disagree(["192.0.2.4"]))
+
+    def test_all_of_them_off_the_public_internet_is_not_a_disagreement(self):
+        """A site whose resolvers all answer internally is a split-horizon
+        setup working as intended, not a middlebox on one of them."""
+        self.assertFalse(self.disagree(["10.0.0.99"], ["10.0.0.98"]))
+
+    def test_the_finding_says_why_a_plain_difference_is_not_reported(self):
+        """Or the next person reads a quiet report as the check not running,
+        and adds it back."""
+        mod = fresh()
+        setup, kwargs = S["dns_disagree"]
+        setup(mod)
+        said = next(f["message"] for f in mod.diagnose(**scenario_kwargs(kwargs))
+                    ["findings"] if f["code"] == "dns_disagree")
+        self.assertIn("load balancer doing its job and is not", said)
+
+    def test_the_ordinary_multi_resolver_box_reports_nothing(self):
+        """End to end, because the unit above is only half of it: the caller
+        has to consult it."""
+        mod = fresh()
+        resolvers(mod, [R("10.0.0.53", answers=("203.0.113.10",)),
+                        R("10.0.0.54", answers=("203.0.113.87",))])
+        codes = [f["code"] for f in mod.diagnose("8.8.8.8", None)["findings"]]
+        self.assertNotIn("dns_disagree", codes)
+
+
 class TestLldpParsing(unittest.TestCase):
     """The point of LLDP here is turning "check the switch port" into a named
     port, so the switch and port fields matter more than completeness."""
@@ -2190,6 +2272,49 @@ class TestSysfsCounterReading(unittest.TestCase):
         after = nd.parse_ifconfig_modes(
             self.IFCONFIG.replace("status: active", "status: inactive"))["en0"]["operstate"]
         self.assertNotEqual(before, after)
+
+    # ---- anything above a gigabit is written with a multiplier ------------
+    #
+    # Found on a real box: seven interfaces, six of them 10G or better, and
+    # every one of those six reported no speed at all. The old pattern took
+    # digits immediately before "base", and in "10Gbase-SR" the character
+    # before "base" is a G - so it matched every speed this tool was tested
+    # against and none of the speeds the box it was written for actually runs.
+
+    FAST = ("ixl0: flags=8943<UP,BROADCAST,RUNNING> metric 0 mtu 1500\n"
+            "\tmedia: Ethernet autoselect (10Gbase-SR <full-duplex>)\n"
+            "\tstatus: active\n"
+            "ixl1: flags=8943<UP,BROADCAST,RUNNING> metric 0 mtu 9000\n"
+            "\tmedia: Ethernet autoselect (40Gbase-SR4 <full-duplex>)\n"
+            "\tstatus: active\n")
+
+    def test_a_ten_gig_link_is_ten_thousand_megabits(self):
+        modes = nd.parse_ifconfig_modes(self.FAST)
+        self.assertEqual(modes["ixl0"]["speed_mbps"], 10000)
+        self.assertEqual(modes["ixl1"]["speed_mbps"], 40000)
+
+    def test_the_multiplier_is_read_and_not_dropped(self):
+        """Dropping the G would read a 10G link as a 10 megabit one, which is
+        worse than the "-" it used to print: a speed that low beside a busy
+        interface is what a duplex or negotiation fault looks like."""
+        self.assertEqual(nd.media_speed_mbps("(10Gbase-SR <full-duplex>)"), 10000)
+        self.assertEqual(nd.media_speed_mbps("(10baseT/UTP)"), 10)
+
+    def test_every_rate_a_media_line_can_name(self):
+        for text, mbps in (("1000baseT", 1000), ("100baseTX", 100),
+                           ("10baseT/UTP", 10), ("2.5Gbase-T", 2500),
+                           ("5Gbase-T", 5000), ("25Gbase-CR", 25000),
+                           ("40Gbase-SR4", 40000), ("100Gbase-SR4", 100000),
+                           ("10Gbase-Twinax", 10000)):
+            with self.subTest(media=text):
+                self.assertEqual(nd.media_speed_mbps(text), mbps)
+
+    def test_a_media_line_naming_no_rate_names_none(self):
+        """Not zero. An interface whose media is autoselect and has not settled
+        has no speed to report, and nothing is what that is."""
+        for text in ("media: Ethernet autoselect", "media: none", "", None):
+            with self.subTest(media=text):
+                self.assertIsNone(nd.media_speed_mbps(text))
 
     def test_the_wireless_spelling_of_up_is_up(self):
         modes = nd.parse_ifconfig_modes(
@@ -17061,9 +17186,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1094),
-            "compressed": (len(gzip.compress(raw, 9)), 331),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 226),
+            "on disk": (len(raw), 1097),
+            "compressed": (len(gzip.compress(raw, 9)), 332),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 227),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -23830,7 +23955,16 @@ def _(nd): resolvers(nd, [R("10.0.0.53", ms=900.0)])
 def _(nd): resolvers(nd, [R("10.0.0.53", hijack=True)])
 
 @scenario("dns_disagree")
-def _(nd): resolvers(nd, [R("10.0.0.53", answers=("192.0.2.4",)), R("8.8.8.8", answers=("9.9.9.9",))])
+def _(nd):
+    """One resolver answering with an address that is not on the public
+    internet at all, which is a portal or a redirect rather than the service.
+
+    This used to be two public addresses, and that is the case the finding no
+    longer makes: a global name answers from wherever the asking resolver is,
+    so two public answers are one service load-balancing.
+    """
+    resolvers(nd, [R("10.0.0.53", answers=("10.0.0.99",)),
+                   R("8.8.8.8", answers=("192.0.2.4",))])
 
 @scenario("call_quality_degraded")
 def _(nd): ping_map(nd, inet_loss=3, avg=120.0, mdev=45.0)

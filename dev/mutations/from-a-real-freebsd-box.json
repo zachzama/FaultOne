@@ -1,0 +1,42 @@
+[
+ {
+  "label": "a ten gig link reads as ten megabits",
+  "old": "MEDIA_SPEED_UNITS = {\"\": 1, \"m\": 1, \"g\": 1000}",
+  "new": "MEDIA_SPEED_UNITS = {\"\": 1, \"m\": 1, \"g\": 1}"
+ },
+ {
+  "label": "anything above a gigabit stops naming a speed at all",
+  "old": "MEDIA_SPEED_RE = re.compile(r\"(\\d+(?:\\.\\d+)?)\\s*([GM]?)base\", re.I)",
+  "new": "MEDIA_SPEED_RE = re.compile(r\"(\\d+(?:\\.\\d+)?)base\", re.I)"
+ },
+ {
+  "label": "a fractional rate is truncated rather than rounded",
+  "old": "    return int(round(float(m.group(1)) * MEDIA_SPEED_UNITS[m.group(2).lower()]))",
+  "new": "    return int(float(m.group(1)))"
+ },
+ {
+  "label": "a media line naming no rate reports zero rather than nothing",
+  "old": "    m = MEDIA_SPEED_RE.search(text or \"\")\n    if not m:\n        return None",
+  "new": "    m = MEDIA_SPEED_RE.search(text or \"\")\n    if not m:\n        return 0"
+ },
+ {
+  "label": "two front ends of one service are called a resolver disagreement",
+  "old": "        if len(answer_sets) > 1 and _resolvers_truly_disagree(answer_sets):",
+  "new": "        if len(answer_sets) > 1:"
+ },
+ {
+  "label": "a portal answering with its own address is called load balancing",
+  "old": "        if len(answer_sets) > 1 and _resolvers_truly_disagree(answer_sets):",
+  "new": "        if False:"
+ },
+ {
+  "label": "a portal answering beside a real address stops counting",
+  "old": "    kinds = {\"private\" if any(is_private_ip(a) for a in answers) else \"public\"\n             for answers in answer_sets}",
+  "new": "    kinds = {\"private\" if all(is_private_ip(a) for a in answers) else \"public\"\n             for answers in answer_sets}"
+ },
+ {
+  "label": "carrier NAT space counts as the public internet",
+  "old": "    if a == 100 and 64 <= b <= 127:  # CGNAT - still the provider's side\n        return True",
+  "new": "    if False:  # CGNAT - still the provider's side\n        return True"
+ }
+]

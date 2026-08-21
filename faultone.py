@@ -6228,7 +6228,31 @@ def _link_modes_linux(base="/sys/class/net"):
     return modes
 
 
-MEDIA_SPEED_RE = re.compile(r"(\d+)base", re.I)
+#: The speed out of a media string, with the multiplier that precedes `base`.
+#: `1000baseT` is 1000 Mbps and `10Gbase-SR` is ten thousand, and the older
+#: pattern - digits immediately before "base" - matched the first and not the
+#: second, because the character before "base" there is a G. Every interface
+#: above a gigabit therefore reported no speed at all: on a real box, six of
+#: seven, all of them the ones carrying the traffic.
+#:
+#: Decimal because 2.5Gbase-T and 5Gbase-T exist and are ordinary on copper.
+MEDIA_SPEED_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([GM]?)base", re.I)
+
+#: What each multiplier means in Mbps. An absent one is already Mbps, which is
+#: how every speed under a gigabit is written.
+MEDIA_SPEED_UNITS = {"": 1, "m": 1, "g": 1000}
+
+
+def media_speed_mbps(text):
+    """Mbps out of a media string, or None if it does not name a speed.
+
+    Rounded to a whole number of Mbps: 2.5Gbase-T is 2500, and nothing in this
+    tool reports a fraction of a megabit.
+    """
+    m = MEDIA_SPEED_RE.search(text or "")
+    if not m:
+        return None
+    return int(round(float(m.group(1)) * MEDIA_SPEED_UNITS[m.group(2).lower()]))
 
 
 # What `status:` reads on a link that is actually carrying. Held as whole words
@@ -6262,9 +6286,9 @@ def parse_ifconfig_modes(text):
             continue
         stripped = line.strip()
         if stripped.startswith("media:"):
-            sm = MEDIA_SPEED_RE.search(stripped)
-            if sm:
-                modes[current]["speed_mbps"] = int(sm.group(1))
+            speed = media_speed_mbps(stripped)
+            if speed:
+                modes[current]["speed_mbps"] = speed
             if "full-duplex" in stripped:
                 modes[current]["duplex"] = "full"
             elif "half-duplex" in stripped:
@@ -7353,6 +7377,35 @@ def mark_fanout(hops, fanned):
     for hop in hops or []:
         if hop.get("hop") in wanted and hop.get("also"):
             hop["fanout_hedged"] = True
+
+
+def _resolvers_truly_disagree(answer_sets):
+    """Whether differing answers are a fault rather than a load balancer.
+
+    They almost always are not. The probe name is a global service, and a
+    global service answers from wherever the asking resolver is - so two
+    resolvers on one site returning different addresses is the normal case and
+    was being reported as a fault on every box with more than one resolver.
+    A real box returned 203.0.113.10 and 203.0.113.87, adjacent addresses
+    in one network, under the sentence "usually a stale cache".
+
+    What the finding was written for is a resolver answering with something
+    that is not the service at all: a captive portal, an ISP redirect, a
+    middlebox handing back its own address. That is not a matter of degree -
+    the answer is off the public internet entirely, or it is not there at all
+    while another resolver has one. Both of those are decidable here.
+
+    A stale cache holding an old public address is not, and is deliberately
+    given up rather than guessed at: telling it from a load balancer needs to
+    know what the right answer is, which is exactly what this tool is asking.
+    """
+    # Any private address in a set is the whole set's character. A portal that
+    # answers with its own address alongside a real one is still a portal
+    # answering. Empty sets cannot arrive here - the caller builds this from
+    # resolvers that returned something - so there is no third kind.
+    kinds = {"private" if any(is_private_ip(a) for a in answers) else "public"
+             for answers in answer_sets}
+    return len(kinds) > 1
 
 
 def is_private_ip(ip):
@@ -15510,7 +15563,7 @@ def _check_dns(raw, findings, target, inet_loss, quick):
                            f"on a lookup failing will misbehave in ways that look unrelated.",
             })
         answer_sets = {tuple(r["answers"]) for r in working if r["answers"]}
-        if len(answer_sets) > 1:
+        if len(answer_sets) > 1 and _resolvers_truly_disagree(answer_sets):
             findings.append({
                 "severity": "warning",
                 "layer": 7,
@@ -15522,8 +15575,13 @@ def _check_dns(raw, findings, target, inet_loss, quick):
                            # to the next - which reads as a change on the next
                            # --baseline, and makes a pasted report unrepeatable.
                            + " vs ".join(", ".join(a) or "(none)" for a in sorted(answer_sets))
-                           + ". Usually a stale cache on one of them, or a middlebox answering "
-                             "for some queries but not others.",
+                           + ". These are not the same service answering from different "
+                             "places: one resolver is handing back an address off the "
+                             "public internet altogether, which is a middlebox or a "
+                             "portal answering for some queries and not others. Two "
+                             "resolvers returning different public addresses in the same "
+                             "network is a load balancer doing its job and is not "
+                             "reported.",
             })
 
     return dns_failed

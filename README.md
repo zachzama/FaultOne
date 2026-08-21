@@ -93,7 +93,7 @@ to `8.8.8.8`. Either way the report names what it chose and why, and
 > ssh -C -J jump user@box "python3 - --report" < faultone.py
 > ```
 
-`-C` because OpenSSH doesn't compress by default, and the file is 1106 KB of
+`-C` because OpenSSH doesn't compress by default, and the file is 1107 KB of
 repetitive text: it goes over the wire at 335 KB with compression on, for the
 cost of one flag.
 
@@ -107,7 +107,7 @@ ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 228 KB on t
 ```
 
 That needs Python 3.9 on **your** machine, and so does the box.
-Stripped and compressed together it's 228 KB instead of 1106. That is 79%
+Stripped and compressed together it's 228 KB instead of 1107. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
@@ -401,8 +401,8 @@ separate programs, never linked or copied in.
 Anyone can write checks. The claim worth making is that the checks are
 themselves checked, and these are the numbers behind it:
 
-- **1959 tests**, and a test that fails if any of them asserts nothing at all.
-- **350 mutations**, each one breaking a rule on purpose. Every one has to make
+- **1965 tests**, and a test that fails if any of them asserts nothing at all.
+- **355 mutations**, each one breaking a rule on purpose. Every one has to make
   a test fail; a mutation that survives means the rule is not really covered,
   and it is treated as a defect in the suite rather than a curiosity.
 - **202 scenarios**, one per finding, driven through the whole pipeline - and
@@ -423,7 +423,7 @@ vocabularies above are for.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1959 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1965 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

@@ -1,0 +1,27 @@
+[
+ {
+  "label": "a bsd protocol column skips every datagram row",
+  "old": "        if proto and proto not in (\"UNCONN\", \"ESTAB\") and not proto.startswith(\"UDP\"):",
+  "new": "        if proto and proto not in (\"UNCONN\", \"ESTAB\", \"UDP\"):"
+ },
+ {
+  "label": "a tcp row is read as a datagram one",
+  "old": "        if proto and proto not in (\"UNCONN\", \"ESTAB\") and not proto.startswith(\"UDP\"):",
+  "new": "        if False:"
+ },
+ {
+  "label": "a bsd listener with no peer is counted as a connection",
+  "old": "UDP_NO_PEER = (\"*:*\", \"0.0.0.0:*\", \"[::]:*\", \":::*\", \"*.*\")",
+  "new": "UDP_NO_PEER = (\"*:*\", \"0.0.0.0:*\", \"[::]:*\", \":::*\")"
+ },
+ {
+  "label": "a connected datagram socket is counted as a listener",
+  "old": "        if peer not in UDP_NO_PEER:\n            connected += 1\n            continue",
+  "new": "        if False:\n            connected += 1\n            continue"
+ },
+ {
+  "label": "a bsd datagram wildcard loses which family it is",
+  "old": "        local = _family_wildcard(local, family)\n        port = peer_port(local)",
+  "new": "        port = peer_port(local)"
+ }
+]

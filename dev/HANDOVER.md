@@ -143,6 +143,29 @@ the consumer already tests against those names. `permanent` earns its place on
 its own: a static gateway entry is a configuration fact that explains a box
 still resolving a neighbour that is gone.
 
+**Extended to twenty cases, and it found a third.** `parse_udp_sockets`
+returned **nothing at all** for BSD `netstat` output - and `cmd_udp_sockets`
+falls back to `netstat -an -u`, which is the path every box without `ss` takes.
+Two failures in one branch: BSD writes the family into the protocol column
+(`udp4`, `udp6`), so an exact match against `"UDP"` skipped every row; and it
+spells "no peer" as `*.*` rather than `*:*`, so any row that had got through
+would have counted every listener as a *connection*. The second is the same
+reading inverted rather than missing. On a BSD box that meant
+`clients_may_be_on_the_datagram_plane` and every datagram-queue finding could
+never fire - on the one platform whose fallback command reaches this parser.
+
+The other new pairs came back clean and are worth having as guards: one round
+trip summarised by Linux, BSD and Windows (which is where the average and the
+maximum once swapped); one next hop from `ip route get` and `route -n get`;
+one firewall's counters from `iptables-save` and `nft`.
+
+**One case was written and then removed**, which is the discipline the file
+sets for itself. It asserted that lldpd numbers a neighbour when an interface
+has more than one - `lldp.em0.1.chassis.name` - and `parse_lldp_keyvalue` does
+return nothing for that shape. But whether lldpd emits it is a guess, and a
+guess there produces a finding about a format nobody sends. It is recorded in
+the file as a known gap needing a real sample, not as a case.
+
 **And it corrected a claim of mine.** A mutation reordering `_BSD_ARP_STATES`
 survived, because "expired" and "expires in" share a prefix and neither is a
 substring of the other - so the order is not load-bearing and the comment

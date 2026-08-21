@@ -177,6 +177,82 @@ ARP_BSD = ("? (192.0.2.1) at 0:0:5e:0:53:1 on em0 expires in 1200 seconds [ether
 RESOLV = ("# generated\nsearch example.lan\n"
           "nameserver 192.0.2.53\nnameserver 198.51.100.53\n")
 
+# One round trip, summarised by the three pings that exist. Linux and BSD
+# differ only in what they call the fourth figure; Windows names each one and
+# prints them in another order, which is how the average and the maximum came
+# to swap places once - a wrong number rather than a missing one.
+PING_LINUX = {"ok": True, "stdout":
+              "rtt min/avg/max/mdev = 1.000/2.000/3.000/0.500 ms\n"}
+PING_BSD = {"ok": True, "stdout":
+            "round-trip min/avg/max/stddev = 1.000/2.000/3.000/0.500 ms\n"}
+PING_WINDOWS = {"ok": True, "stdout":
+                "Approximate round trip times in milli-seconds:\n"
+                "    Minimum = 1ms, Maximum = 3ms, Average = 2ms\n"}
+
+# One next hop, asked for by the two commands that ask. The interface is named
+# the same on both here on purpose: a real box would call it eth0 or em0, and
+# that difference is the platform rather than the reading.
+ROUTE_LINUX = "8.8.8.8 via 10.0.0.1 dev em0 src 10.0.0.5 uid 0 \n    cache \n"
+ROUTE_BSD = ("   route to: 8.8.8.8\ndestination: default\n       mask: default\n"
+             "    gateway: 10.0.0.1\n  interface: em0\n"
+             "      flags: <UP,GATEWAY,DONE>\n")
+
+UDP_SS = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+          "UNCONN 4096 0 0.0.0.0:443 0.0.0.0:*\n"
+          "UNCONN 0 0 10.0.0.5:53 0.0.0.0:*\n")
+UDP_BSD = ("Proto Recv-Q Send-Q Local Address     Foreign Address   (state)\n"
+           "udp4    4096      0 *.443             *.*\n"
+           "udp4       0      0 10.0.0.5.53       *.*\n")
+
+# One firewall, counted by the two tools that count it. Only the rules that
+# stop a packet, which is what the consumer keeps: nft declines to record an
+# accept verdict on purpose, and comparing that would be asserting a deliberate
+# difference is a defect.
+IPTABLES = ("[120:9000] -A INPUT -p tcp -m tcp --dport 443 -j ACCEPT\n"
+            "[3:180] -A INPUT -j DROP\n")
+NFT = ("table inet filter {\n"
+       "  chain input {\n"
+       "    tcp dport 443 counter packets 120 bytes 9000 accept\n"
+       "    counter packets 3 bytes 180 drop\n"
+       "  }\n"
+       "}\n")
+
+def route_next_hop(text):
+    """Only what both commands answer. Linux prints the source address it
+    would use and BSD does not, which is the platform rather than the accent."""
+    got = nd.parse_route_to(text) or {}
+    return {k: got.get(k) for k in ("via", "dev", "onlink")}
+
+
+def firewall_stops(text):
+    """The counters on the rules that stop a packet, however the tool spelt
+    the verdict. That is exactly the set rules_that_counted keeps."""
+    parsed = (nd.parse_nft_ruleset(text) if text.lstrip().startswith("table")
+              else nd.parse_iptables_save(text))
+    return {"stops": [(r["packets"], r["bytes"])
+                      for r in parsed["rules"]
+                      if r.get("verdict") in nd.STOPS_A_PACKET]}
+
+
+# ---------------------------------------------------------------------------
+# Not here, and on purpose.
+#
+# `lldpctl -f keyvalue` is a single format and this has no second accent for it
+# that can be vouched for. A case was written asserting that lldpd numbers the
+# neighbour when an interface has more than one - `lldp.em0.1.chassis.name` -
+# and the parser does indeed return nothing for that shape. It came out again,
+# because whether lldpd emits it is a guess, and a guess here produces a
+# finding about a format nobody sends. The rule at the top of this file is the
+# rule: a dialect is a documented difference, not a plausible one.
+#
+# The same goes for `ethtool` optics, `parse_proxy_stats` and the systemd unit
+# list, which have one producer each. They are covered by the suite, which is
+# the right place for a format with no second spelling.
+#
+# What would settle the LLDP one is output from a box with two neighbours on
+# an interface. Until then it stays a known gap rather than an invented case.
+# ---------------------------------------------------------------------------
+
 
 def sockets(text):
     return nd.parse_socket_states(text)
@@ -226,6 +302,24 @@ CASES = [
 
     ("resolv.conf: pasted through a Windows terminal",
      nd.parse_resolvers, RESOLV, crlf(RESOLV), ()),
+
+    ("ping: one round trip, summarised by Linux and by BSD",
+     nd.parse_ping_stats, PING_LINUX, PING_BSD, ()),
+    # Windows offers no deviation at all and this synthesises one from the
+    # spread, so that figure is declared - it must still be there, and it is
+    # not the same number.
+    ("ping: the same round trip summarised by Windows",
+     nd.parse_ping_stats, PING_LINUX, PING_WINDOWS, ("stdev_ms",)),
+
+    ("route: one next hop, asked for two ways",
+     route_next_hop, ROUTE_LINUX, ROUTE_BSD, ()),
+
+    ("udp: ss and BSD netstat on one datagram listener",
+     nd.parse_udp_sockets, UDP_SS, UDP_BSD, ()),
+
+    ("firewall: one rule's counters, from iptables and from nft",
+     firewall_stops, IPTABLES, NFT, ()),
+
 ]
 
 

@@ -14278,6 +14278,64 @@ class TestTheOtherPlane(unittest.TestCase):
     def test_a_connected_datagram_socket_is_counted_apart(self):
         self.assertEqual(nd.parse_udp_sockets(self.SS)["connected"], 1)
 
+    # ---- BSD reaches this table through netstat, and was getting nothing ---
+    #
+    # Found by dev/dialects.py. `cmd_udp_sockets` falls back to `netstat -an
+    # -u`, which is what any box without `ss` runs - so this is the path every
+    # BSD box takes. Two failures in one branch, and the second would have
+    # inverted the reading rather than losing it.
+
+    BSD = ("Proto Recv-Q Send-Q Local Address     Foreign Address   (state)\n"
+           "udp4    4096      0 *.443             *.*\n"
+           "udp4       0      0 10.0.0.5.53       *.*\n"
+           "udp6       0      0 *.443             *.*\n"
+           "udp4       0      0 10.0.0.5.41000    203.0.113.9.4500\n")
+
+    def test_the_family_in_the_protocol_column_does_not_skip_the_row(self):
+        """BSD writes udp4, udp6, udp46. An exact match against "UDP" skipped
+        every row, so the entire datagram plane was absent on the platform the
+        fallback command exists for."""
+        got = nd.parse_udp_sockets(self.BSD)
+        self.assertEqual(got["listen_ports"], ["53", "443"])
+
+    def test_no_peer_spelled_the_bsd_way_is_still_no_peer(self):
+        """`*.*` rather than `*:*`. Unlisted, every listener counted as a
+        connection instead - the same reading inverted, not missing."""
+        got = nd.parse_udp_sockets(self.BSD)
+        self.assertEqual(got["connected"], 1)
+        self.assertEqual(len(got["listeners"]), 3)
+
+    def test_the_backlog_behind_a_bsd_listener_is_read(self):
+        """The one number this table has that says the box cannot keep up."""
+        self.assertEqual(nd.parse_udp_sockets(self.BSD)["queued_bytes"], 4096)
+
+    def test_a_bsd_wildcard_listener_says_which_family_it_is(self):
+        """Same rule as the TCP table: BSD prints both wildcards as "*" and
+        puts the family in the protocol column."""
+        got = nd.parse_udp_sockets(self.BSD)["listeners"]
+        self.assertEqual(sorted(l["address"] for l in got),
+                         ["0.0.0.0", "10.0.0.5", "::"])
+
+    def test_both_tools_describe_one_datagram_listener_the_same_way(self):
+        ss = ("State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+              "UNCONN 4096 0 0.0.0.0:443 0.0.0.0:*\n")
+        bsd = ("Proto Recv-Q Send-Q Local Address     Foreign Address   (state)\n"
+               "udp4    4096      0 *.443             *.*\n")
+        self.assertEqual(nd.parse_udp_sockets(ss), nd.parse_udp_sockets(bsd))
+
+    def test_a_tcp_row_in_the_same_table_is_not_a_datagram_socket(self):
+        """Every command this parser is given asks for UDP only, so no fixture
+        had a TCP row in it and a mutation deleting the protocol filter
+        survived. `netstat -an` with no family flag prints both, which is what
+        somebody pasting a table by hand runs - and a TCP listener counted here
+        would put a port on the datagram plane that has nothing on it."""
+        mixed = ("Proto Recv-Q Send-Q Local Address     Foreign Address   (state)\n"
+                 "tcp4       0      0 *.8080            *.*               LISTEN\n"
+                 "udp4    4096      0 *.443             *.*\n")
+        got = nd.parse_udp_sockets(mixed)
+        self.assertEqual(got["listen_ports"], ["443"])
+        self.assertNotIn("8080", got["listen_ports"])
+
     def test_a_windows_datagram_row_is_three_fields_not_five(self):
         """`cmd_udp_sockets` runs `netstat -an -p UDP` on Windows, and that
         prints protocol, local and foreign with no queues. Every row was one
@@ -17564,7 +17622,7 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1106),
+            "on disk": (len(raw), 1107),
             "compressed": (len(gzip.compress(raw, 9)), 335),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
         }

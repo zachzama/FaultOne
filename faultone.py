@@ -2492,6 +2492,13 @@ def parse_socket_states(text, own_access=(None, None)):
 _SKMEM_RB = re.compile(r"skmem:\([^)]*?\brb(\d+)")
 
 
+#: How each tool writes "this socket has no peer". A datagram socket that is
+#: bound and unconnected is the listener; one with a peer is a conversation.
+#: Getting the spelling wrong turns every listener into a connection, which is
+#: the same reading inverted rather than missing.
+UDP_NO_PEER = ("*:*", "0.0.0.0:*", "[::]:*", ":::*", "*.*")
+
+
 def parse_udp_sockets(text):
     """`ss -uan` into the two things a datagram socket can honestly tell us.
 
@@ -2514,8 +2521,15 @@ def parse_udp_sockets(text):
         # its absence is handled rather than assumed.
         buffered = _SKMEM_RB.search(line)
         parts = line.split()
-        if parts[:1] and parts[0].upper() not in ("UNCONN", "ESTAB", "UDP"):
+        # BSD writes the family into the protocol column - udp4, udp6, udp46 -
+        # so an exact match against "UDP" skipped every row on every BSD box.
+        # The fallback command here is `netstat -an -u`, which is what any box
+        # without ss runs, so the whole datagram plane came back empty on the
+        # platform that reaches for it.
+        proto = (parts[0].upper() if parts[:1] else "")
+        if proto and proto not in ("UNCONN", "ESTAB") and not proto.startswith("UDP"):
             continue
+        family = parts[0].lower() if parts[:1] else ""
         if len(parts) >= 5:
             try:
                 recv_q, send_q = int(parts[1]), int(parts[2])
@@ -2531,10 +2545,15 @@ def parse_udp_sockets(text):
             local, peer = parts[1], parts[2]
         else:
             continue
+        local = _family_wildcard(local, family)
         port = peer_port(local)
         if not port:
             continue
-        if peer not in ("*:*", "0.0.0.0:*", "[::]:*", ":::*"):
+        # And BSD spells "no peer" as `*.*` rather than `*:*`. Unlisted, every
+        # listener on such a box counted as a connection instead - so the one
+        # reading this makes would have been wrong in both directions at once,
+        # had the rows reached here at all.
+        if peer not in UDP_NO_PEER:
             connected += 1
             continue
         if _is_loopback_socket(local):

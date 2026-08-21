@@ -1655,6 +1655,19 @@ lldp.eth0.vlan.vlan-id=30
         # must not show up as a switch we're connected to.
         self.assertEqual(nd.parse_lldp_keyvalue("lldp.eth9.age=0 day, 00:00:01\n"), [])
 
+    def test_a_key_from_some_other_tool_is_not_a_neighbour(self):
+        """The `lldp.` prefix is what says this line came from lldpctl at all.
+        Without it, any three-part key whose second field looks like an
+        interface becomes a switch this box is plugged into - and the fixtures
+        only ever fed it lines with no `=` in them, so a mutation deleting the
+        prefix check survived. The report names that switch and its port to
+        somebody about to go and look at it."""
+        self.assertEqual(
+            nd.parse_lldp_keyvalue("other.eth0.chassis.name=SW-WRONG\n"), [])
+        self.assertEqual(
+            nd.parse_lldp_keyvalue("lldp.eth0.chassis.name=SW-RIGHT\n")[0]["switch"],
+            "SW-RIGHT")
+
     def test_garbage_and_empty_input(self):
         self.assertEqual(nd.parse_lldp_keyvalue(""), [])
         self.assertEqual(nd.parse_lldp_keyvalue(None), [])

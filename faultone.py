@@ -2349,6 +2349,10 @@ def parse_socket_states(text, own_access=(None, None)):
     local_ends = []
     for line in (text or "").splitlines():
         parts = line.split()
+        # Subsumed by everything below it: a row this short has no state either
+        # reader recognises, and both address fields are guarded by their own
+        # length checks. Kept as a cheap early-out that says what a row needs
+        # to be worth reading. A mutation deleting it survives and always will.
         if len(parts) < 4:
             continue
         state = None
@@ -3773,6 +3777,10 @@ def parse_ping_stats(ping_result):
     returned nothing at all, while the branch below claimed in a comment to be
     handling it.
     """
+    # Subsumed by the convention that a result marked not-ok carries no output,
+    # which TestDiagnoseHarness checks directly: an empty summary matches
+    # neither pattern below and returns the same empty dict. Kept because the
+    # convention is a convention rather than a guarantee.
     if not ping_result.get("ok"):
         return {}
     text = ping_result.get("stdout") or ""

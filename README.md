@@ -401,8 +401,8 @@ separate programs, never linked or copied in.
 Anyone can write checks. The claim worth making is that the checks are
 themselves checked, and these are the numbers behind it:
 
-- **1967 tests**, and a test that fails if any of them asserts nothing at all.
-- **365 mutations**, each one breaking a rule on purpose. Every one has to make
+- **1968 tests**, and a test that fails if any of them asserts nothing at all.
+- **373 mutations**, each one breaking a rule on purpose. Every one has to make
   a test fail; a mutation that survives means the rule is not really covered,
   and it is treated as a defect in the suite rather than a curiosity.
 - **202 scenarios**, one per finding, driven through the whole pipeline - and
@@ -423,7 +423,7 @@ vocabularies above are for.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1967 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 1968 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

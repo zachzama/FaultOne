@@ -392,6 +392,30 @@ pattern survived while every test passed. One definition now, used by the guard
 and by the tests of the guard. Shape 1 from [[a-survivor-is-not-a-defect]]: a
 test with an accurate name that never reaches the line.
 
+**Group three is closed: the parsers on junk.**
+`dev/mutations/parsers-on-junk.json` makes each parser invent something from
+input it should refuse - a nameserver line with no address, an implausible
+link speed, a duplex it does not understand, two characters of binary noise
+read as a name, an interface with no neighbour detail reported as a switch.
+Six of ten held.
+
+**The real gap was the `lldp.` prefix.** Without it, any three-part key whose
+second field looks like an interface becomes a switch this box is plugged into
+- and the fixtures only ever fed lines with no `=` in them, so nothing reached
+the check. A report naming a switch and a port sends somebody to go and look at
+it, so inventing one is not a quiet kind of wrong.
+
+**Two survivors were equivalent and are commented rather than excused**: the
+short-row guard in `parse_socket_states` (a row that short has no state either
+reader recognises, and both address fields have their own length checks) and
+the not-ok guard in `parse_ping_stats` (the `run()` convention again).
+
+**And one survivor was my mutation being wrong, not the test.** It planted
+`0/0/0/0` as a fallback summary - which the pattern does not match, so it
+changed nothing. Retargeted at the `return {}` that actually decides, it was
+caught immediately. Worth writing down because a badly aimed mutation reads
+exactly like an untested guard.
+
 **Group one is closed.** "Absent is not zero" is the contract worth proving
 first, because reading absence as zero is how a diagnostic invents faults.
 `dev/mutations/absent-is-not-zero.json`. Two real gaps, both the same shape -

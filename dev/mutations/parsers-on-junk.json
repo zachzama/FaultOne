@@ -1,0 +1,42 @@
+[
+ {
+  "label": "B: a nameserver line with no address is read as a resolver",
+  "old": "            if len(parts) >= 2 and valid_ip(parts[1]) and parts[1] not in servers:",
+  "new": "            if len(parts) >= 2 and parts[1] not in servers:"
+ },
+ {
+  "label": "B: a nameserver line with nothing after it is read as one",
+  "old": "            if len(parts) >= 2 and valid_ip(parts[1]) and parts[1] not in servers:",
+  "new": "            if valid_ip(parts[-1]) or parts[-1] not in servers:"
+ },
+ {
+  "label": "B: an interface with no neighbour detail is reported as a switch",
+  "old": "    return [r for r in ifaces.values() if r.get(\"switch\") or r.get(\"port\") or r.get(\"chassis_mac\")]",
+  "new": "    return list(ifaces.values())"
+ },
+ {
+  "label": "B: a line that is not lldp output at all becomes a neighbour",
+  "old": "        if not line.startswith(\"lldp.\") or \"=\" not in line:\n            continue",
+  "new": "        if \"=\" not in line:\n            continue"
+ },
+ {
+  "label": "B: two characters of binary noise are read as a name",
+  "old": "            if len(run) >= minimum:\n                out.append(\"\".join(run))\n            run = []",
+  "new": "            if run:\n                out.append(\"\".join(run))\n            run = []"
+ },
+ {
+  "label": "B: a ping that printed no summary invents a round trip",
+  "old": "        win = PING_STATS_WIN_RE.search(text)\n        if not win:\n            return {}",
+  "new": "        win = PING_STATS_WIN_RE.search(text)\n        if not win:\n            return {\"min_ms\": 0.0, \"avg_ms\": 0.0, \"max_ms\": 0.0}"
+ },
+ {
+  "label": "B: an implausible link speed is reported as one",
+  "old": "    if m and plausible_mbps(int(m.group(1))) is not None:",
+  "new": "    if m:"
+ },
+ {
+  "label": "B: a duplex this does not understand is reported as negotiated",
+  "old": "    if m and m.group(1).lower() in (\"full\", \"half\"):",
+  "new": "    if m:"
+ }
+]

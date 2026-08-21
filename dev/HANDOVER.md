@@ -350,6 +350,44 @@ now built by rewriting that sample rather than by hand, so the two cannot
 drift, and the crash is asserted end to end through `annotate_hops` rather than
 only at the parser that produced the bad value.
 
+### What the empty-only measurement actually says (re-measured 2026-08-21)
+
+Fresh numbers after the four groups, off `dev/mutate.py --catchers` crossed
+against `dev/vacuous.py`. **160 empty-only tests, 104 proven, 56 not.**
+
+**But "unproven" does not mean "the rule is untested", and reading it that way
+was wrong.** It means *that test* has never been made to fail. A mutation is
+frequently caught by a **sibling** in the same class instead:
+`test_a_healthy_bond_reports_nothing_down` is still unproven, and the mutation
+aimed at it was caught by `test_a_bond_with_every_cable_up_produces_no_finding`
+- a different test asserting the same silence, better aimed. The rule is
+covered; the named test is redundant.
+
+Split that way, the 56 are:
+
+- **47 in a class where a sibling has been made to fail.** Redundant coverage,
+  not a gap. Not worth burning down.
+- **9 in a class where nothing has**, and two of those nine
+  (`TestTheSuiteCleansUpAfterItself`, `TestTheSuiteDoesNotBreakItsOwnClock`)
+  guard the *suite* rather than the tool, so no mutation of `faultone.py` can
+  reach them by construction.
+
+**So the real remaining list is seven**, and it is worth writing down because
+it is short enough to finish:
+
+    TestAStateFromAReportCannotLeaveItsAttribute.test_every_class_attribute_in_the_template_is_filtered
+    TestOwnTlsListener.test_reading_the_fields_leaves_no_file_behind
+    TestSamplingWindow.test_a_window_already_elapsed_is_not_waited_out_again
+    TestSamplingWindow.test_no_sampling_requested_means_no_waiting
+    TestTheStylesheetHasNothingLeftOver.test_no_comment_explains_a_rule_that_is_gone
+    TestTheStylesheetHasNothingLeftOver.test_no_rule_styles_something_the_page_never_draws
+    TestTheStylesheetHasNothingLeftOver.test_the_runtime_list_cannot_hide_a_real_orphan
+
+All four groups are closed, and each yielded exactly one real defect where none
+was expected: the two sysfs inputs no fixture built, the address guard that
+could not see a full stop, the `lldp.` prefix, and the `#` on the proxy CSV
+header.
+
 ### The empty-only tests, and how to tell which of them hold anything
 
 `dev/vacuous.py` lists tests whose every assertion compared empty things. It

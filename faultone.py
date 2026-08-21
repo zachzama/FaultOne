@@ -5872,7 +5872,17 @@ def exit_status(report):
     """The worst thing the report found, as a status code."""
     severities = {f.get("severity") for f in report.get("findings", [])}
     if "critical" in severities:
-        return EXIT_CRITICAL
+        return EXIT_CRITICAL                # a real fault outranks a broken tool
+    # Above WARNING, and deliberately. The crash handler at the bottom of this
+    # file makes the same argument for the same reason: 1 means WARNING, so a
+    # scheduled check would read a broken tool as a mild network finding. A
+    # check that failed did not answer the question, which is what UNKNOWN is
+    # for - and it must not be masked by the warning it raises about itself.
+    #
+    # Under a critical, though, the network fault is the actionable thing and
+    # keeps the code. Somebody paged at 3am needs the outage, not the bug.
+    if (report.get("raw") or {}).get("check_failures"):
+        return EXIT_UNKNOWN
     if "warning" in severities:
         return EXIT_WARNING
     # No verdict at all means the run produced nothing to judge.
@@ -8266,6 +8276,12 @@ VERDICT_RULES = [
      "another instance. Nothing else in this report can see it - a service that "
      "never started holds no address and answers no probe - so read this before "
      "any reading below that calls the network healthy."),
+    ("checks_did_not_run", "this tool, not the network",
+     "Some of this tool's own checks failed while reading what it collected",
+     "The collection worked and the reading of it did not, so this is a bug "
+     "here rather than a fault out there. Everything else in this report still "
+     "stands; what those checks would have said is missing from it. Treat a "
+     "clean result as incomplete, and send the error - it is what a fix needs."),
     ("units_failed", "whatever should have started, and did not",
      "Something this box is configured to run is not running",
      "systemd was asked directly, so this needs no previous visit and no "
@@ -9415,6 +9431,7 @@ FINDING_SIDE.update({
     "tcp_return_stalled_clients": "downstream",
     "service_address_unserved": "downstream",
     "unit_failed_that_carries_traffic": "local",
+    "checks_did_not_run": "local",
     "units_failed": "local",
     "service_address_idle": "downstream",
     "service_endpoint_idle": "downstream",
@@ -9716,6 +9733,9 @@ RAW_STAGE = {
     "kernel_source_address": "address",
     # Which addresses this box holds, which of them it serves rather than
     # owns, and which one this run left from.
+    # Not on a stage: it describes this tool rather than the chain. Kept in the
+    # export because a bug report needs it.
+    "check_failures": None,
     "own_addresses": "address", "service_addresses": "address",
     # One row per thing this box serves. The ports stage, because that is
     # where what this box offers is judged.
@@ -10770,6 +10790,7 @@ FINDING_CLASS = {
 "service_address_unserved": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "unit_failed_that_carries_traffic": ("processingErrorAlarm",
                                     "applicationSubsystemFailure"),
+"checks_did_not_run": ("processingErrorAlarm", "softwareError"),
 "units_failed": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "service_endpoint_idle": ("processingErrorAlarm", "applicationSubsystemFailure"),
 "own_service_not_accepting": ("processingErrorAlarm", "applicationSubsystemFailure"),
@@ -11335,6 +11356,99 @@ def compare_findings(current, baseline, same_target=True):
         out.append({"what": HEADLINE.get(code) or code, "before": before, "after": after,
                     "direction": "worse" if after == "critical" else "better"})
     return out
+
+
+class checked:
+    """A region of analysis whose failure costs its own findings, not the run.
+
+    Collection already survives partial failure: `run()` never raises, a
+    collector that fails returns `ok False`, and `collection_coverage` counts
+    it so the verdict says how much of what could run did. **Analysis had none
+    of that.** Forty-odd checks ran unguarded over data already in hand, and
+    one of them meeting a value of the wrong type ended the whole run - which
+    is not a hypothetical: a real box lost its entire report to a `TypeError`
+    in `annotate_hops`, after every collector had already succeeded.
+
+    Deliberately narrow about what it swallows. A `KeyboardInterrupt` or a
+    `SystemExit` is somebody stopping the tool and must not be turned into a
+    finding, and `MemoryError` means the answer would be wrong anyway.
+
+    **The failure is recorded loudly.** A tool that quietly does less is worse
+    than one that crashes: a crash gets reported the same day, and a silent
+    degradation sits there for months. The count reaches the verdict's
+    coverage, the report names what failed, and the exit code stops saying the
+    network is fine.
+    """
+
+    def __init__(self, raw, what):
+        self.raw, self.what = raw, what
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, value, tb):
+        if kind is None or issubclass(kind, (KeyboardInterrupt, SystemExit,
+                                             MemoryError)):
+            return False
+        self.raw.setdefault("check_failures", []).append({
+            "check": self.what,
+            # The type and the message, not the traceback: this goes in a
+            # report somebody pastes into a ticket, and the traceback is for
+            # the person fixing the tool rather than the one reading it.
+            "error": "%s: %s" % (kind.__name__, value),
+        })
+        return True
+
+
+def guarded(raw, what, fn, *args, **kwargs):
+    """One check, run the same way, returning no findings if it raises."""
+    with checked(raw, what):
+        return fn(*args, **kwargs)
+    return []
+
+
+def checks_that_failed(raw):
+    """The analysis that could not be run on this box, worst first by name."""
+    return sorted((raw or {}).get("check_failures") or [],
+                  key=lambda f: f["check"])
+
+
+#: How many failed checks to name before summarising. Same reasoning as the
+#: failed units: a report is pasted into a ticket, and a list of forty is not
+#: a sentence.
+CHECKS_NAMED = 4
+
+
+def _check_checks_that_failed(raw):
+    """Analysis this run could not complete, said out loud.
+
+    The alternative was a traceback and no report at all, which is what a real
+    box got. But a tool that quietly does less is worse than one that stops:
+    the crash was in my hands the same day, and a silent degradation would have
+    sat there for months. So this is a warning on the face of the report rather
+    than a footnote, and it keeps the run out of "no fault found".
+    """
+    failed = checks_that_failed(raw)
+    if not failed:
+        return []
+    named = failed[:CHECKS_NAMED]
+    more = len(failed) - len(named)
+    return [{
+        "severity": "warning",
+        "layer": 7,
+        "code": "checks_did_not_run",
+        "message": (
+            f"{len(failed)} of this tool's own checks failed while reading data "
+            f"it had already collected: "
+            + "; ".join(f"{f['check']} ({f['error']})" for f in named)
+            + (f"; and {more} more" if more else "")
+            + f". That is a bug in this tool, not a finding about the network - "
+              f"the collection succeeded and the reading of it did not. "
+              f"Everything else in this report still stands, and whatever those "
+              f"checks would have said is missing from it, so treat a clean "
+              f"result here as incomplete rather than as good news. The error "
+              f"above is what a bug report needs."),
+    }]
 
 
 def collection_coverage(raw):
@@ -12257,15 +12371,15 @@ def _check_kernel_drops(raw, findings, counter_window, baseline):
     stats = raw["kernel_drops"]
     if not stats.get("ok"):
         return
-    findings += _check_nic_backlog(stats, counter_window)
-    findings += _check_conntrack_table(stats, counter_window)
-    findings += _check_accept_queues(stats, counter_window, socket_owners(raw))
-    findings += _check_connection_setup(stats, counter_window)
-    findings += _check_server_limits(stats, counter_window, raw)
-    findings += _check_thermal(stats, counter_window)
-    findings += _check_udp(stats, counter_window)
-    findings += _check_fragments(stats, counter_window)
-    findings += _check_orphans(stats)
+    findings += guarded(raw, "nic backlog", _check_nic_backlog, stats, counter_window)
+    findings += guarded(raw, "conntrack table", _check_conntrack_table, stats, counter_window)
+    findings += guarded(raw, "accept queues", _check_accept_queues, stats, counter_window, socket_owners(raw))
+    findings += guarded(raw, "connection setup", _check_connection_setup, stats, counter_window)
+    findings += guarded(raw, "server limits", _check_server_limits, stats, counter_window, raw)
+    findings += guarded(raw, "thermal", _check_thermal, stats, counter_window)
+    findings += guarded(raw, "udp", _check_udp, stats, counter_window)
+    findings += guarded(raw, "fragments", _check_fragments, stats, counter_window)
+    findings += guarded(raw, "orphans", _check_orphans, stats)
 
 
 # ---------------------------------------------------------------------------
@@ -15566,15 +15680,15 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     raw["link_stats"] = cmd_link_stats(counter_window, sample=link_sample,
                                        progress=progress)
     late = []
-    findings += _check_counters(raw, duplex_by_iface)
-    late += _check_kernel_log(raw)
-    findings += _check_link_flaps(raw)
+    findings += guarded(raw, "counters", _check_counters, raw, duplex_by_iface)
+    late += guarded(raw, "kernel log", _check_kernel_log, raw)
+    findings += guarded(raw, "link flaps", _check_link_flaps, raw)
     raw["failed_units"] = cmd_failed_units()
-    late += _check_failed_units(raw)
-    late += _check_clock(raw)
+    late += guarded(raw, "failed units", _check_failed_units, raw)
+    late += guarded(raw, "clock", _check_clock, raw)
     _check_kernel_drops(raw, late, counter_window, drops_baseline)
     _check_utilization(raw, late, counter_window, uplink_mbps)
-    findings += _check_tcp(raw, counter_window, tcp_baseline)
+    findings += guarded(raw, "tcp", _check_tcp, raw, counter_window, tcp_baseline)
     _check_flows(raw, late)
     # The other plane's queues, read again now the window has run. Recv-Q is a
     # level rather than a counter, so the second reading is the measurement and
@@ -15582,18 +15696,18 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     if raw.get("udp_sockets", {}).get("ok") and counter_window:
         raw["udp_sockets"] = udp_window(raw["udp_sockets"], cmd_udp_sockets(),
                                         counter_window)
-    late += _check_udp_queues(raw)
-    late += _check_proxy_backends(raw)
-    late += _check_inbound_filtering(raw)
-    late += _check_forwarding_shape(raw)
-    late += _check_log_egress(raw)
-    late += _check_broker_leg(raw)
-    late += _check_transport_fallback(raw)
-    late += _check_encapsulation_headroom(raw)
+    late += guarded(raw, "udp queues", _check_udp_queues, raw)
+    late += guarded(raw, "proxy backends", _check_proxy_backends, raw)
+    late += guarded(raw, "inbound filtering", _check_inbound_filtering, raw)
+    late += guarded(raw, "forwarding shape", _check_forwarding_shape, raw)
+    late += guarded(raw, "log egress", _check_log_egress, raw)
+    late += guarded(raw, "broker leg", _check_broker_leg, raw)
+    late += guarded(raw, "transport fallback", _check_transport_fallback, raw)
+    late += guarded(raw, "encapsulation headroom", _check_encapsulation_headroom, raw)
     # After the flows, because it reads them. Wired in beside the sessions
     # check first, which runs before the socket table is even collected, so
     # it read an empty side and quietly concluded nothing every time.
-    late += _check_relay_volume(raw)
+    late += guarded(raw, "relay volume", _check_relay_volume, raw)
     _check_source_reachability(raw, late)
     findings[slot:slot] = late
 
@@ -15628,8 +15742,8 @@ def _check_device_and_link(raw, findings, link_sample):
 
     # Duplicate IP: Wireshark's classic ARP finding, from the table this box
     # already keeps rather than from a capture.
-    findings += _check_bonds(raw)
-    findings += _check_neigh_table(raw)
+    findings += guarded(raw, "bonds", _check_bonds, raw)
+    findings += guarded(raw, "neigh table", _check_neigh_table, raw)
     arp_entries = _check_arp(raw, findings)
     return neighbours, primary_mtu, duplex_by_iface, arp_entries
 
@@ -16835,8 +16949,8 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # route this box would actually use. Everything below reads differently
         # if they are not.
         raw["route_to"] = cmd_route_to(target)
-        findings += _check_discard_route(raw, target)
-        findings += _check_route_agrees(raw, hops, target)
+        findings += guarded(raw, "discard route", _check_discard_route, raw, target)
+        findings += guarded(raw, "route agrees", _check_route_agrees, raw, hops, target)
         path_insight = annotate_hops(
             hops, gw, target,
             sent_from=((trace or {}).get("raw") or {}).get("walk", {}).get("sent_from")
@@ -16920,7 +17034,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
                        "forwards real traffic - check the ping result above to tell them apart).",
         })
 
-    findings += _check_path_mtu(raw, target, quick, inet_loss, primary_mtu)
+    findings += guarded(raw, "path mtu", _check_path_mtu, raw, target, quick, inet_loss, primary_mtu)
     findings += _findings_from_the_walk(hops, path_insight, target)
     return hops, path_insight, path_source
 
@@ -17431,8 +17545,8 @@ def _check_addressing(raw, findings):
     # first time anyone writes `if raw["ipv4"]`. A key should mean one thing.
     raw["ipv4"] = bool(has_ipv4(raw["interfaces"]))
     raw["own_addresses"] = parse_own_addresses(raw["interfaces"])
-    findings += _check_source_address(raw)
-    findings += _check_service_addresses(raw)
+    findings += guarded(raw, "source address", _check_source_address, raw)
+    findings += guarded(raw, "service addresses", _check_service_addresses, raw)
     if not raw["interfaces"].get("ok"):
         # No command could describe the interfaces, so ask the kernel for the
         # one fact this finding turns on. It answers on a box shipping none of
@@ -18744,7 +18858,7 @@ def _survey_this_box(raw, findings):
     # rather than with the late checks so it lands below the layer-3 findings
     # it explains, which is what makes it the cause of them rather than a
     # second opinion beside them.
-    findings += _check_local_queue(raw)
+    findings += guarded(raw, "local queue", _check_local_queue, raw)
     # PROTOTYPE: what the proxy on this box believes about its own backends,
     # if there is one and it is willing to say. Absent on almost every box.
     raw["proxy_stats"] = cmd_haproxy_stats()
@@ -18943,15 +19057,23 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     probes = collect_probes(target, gw, ping_count, ping_wait, quick, mtr_cycles,
                             parallel=not soak)
     raw["firewall"] = firewall_window(_rules_before, cmd_firewall_counters())
-    findings += _check_gateway(raw, gw, probes, arp_entries)
+    findings += guarded(raw, "gateway", _check_gateway, raw, gw, probes, arp_entries)
 
-    findings += _check_proxy(raw, target)
+    findings += guarded(raw, "proxy", _check_proxy, raw, target)
     inet_loss = _check_internet(raw, findings, target, probes, ping_wait)
 
     say("reading the path and measuring MTU")
-    hops, path_insight, path_source = _check_path(
-        raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
-        trace=probes.get("trace"))
+    # Guarded as one region rather than per statement: everything downstream
+    # reads `hops`, so a failure here has to leave a usable empty path rather
+    # than a half-built one. This is the seam a real box died on - a hop number
+    # arriving as a string from an mtr build that quotes its JSON, subtracted
+    # from another hop number three lines into annotate_hops. Every collector
+    # had succeeded; the report was lost reading them.
+    hops, path_insight, path_source = [], {}, None
+    with checked(raw, "the path to the target"):
+        hops, path_insight, path_source = _check_path(
+            raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary_mtu,
+            trace=probes.get("trace"))
 
     # Runs here because it is the first point where both exist: the internet
     # checks reach their conclusion before there is a path to mark.
@@ -18965,8 +19087,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # whether something answers from outside, this shows what is bound here at
     # all - and on which interface rather than just loopback.
     raw["ports"] = cmd_listen_ports()
-    findings += _check_rotation(raw)
-    findings += _check_idle(raw)
+    findings += guarded(raw, "rotation", _check_rotation, raw)
+    findings += guarded(raw, "idle", _check_idle, raw)
     _check_own_tls(raw, findings, quick)
     _check_own_service(raw, findings, quick)
     # After both, so the rows carry whatever those two learned. It reads what
@@ -18974,15 +19096,15 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # under --quick, where the up column simply says less.
     _build_service_instances(raw)
     # After the table, because it compares its rows.
-    findings += _check_idle_endpoint(raw)
-    findings += _check_upstream_sessions(raw)
+    findings += guarded(raw, "idle endpoint", _check_idle_endpoint, raw)
+    findings += guarded(raw, "upstream sessions", _check_upstream_sessions, raw)
 
     say("querying each configured DNS resolver")
     dns_failed = _check_dns(raw, findings, target, inet_loss, quick)
     # After the resolvers are probed, not before: this reads what that check
     # collected, and running it first meant it read an empty dict and said
     # nothing, on every box, silently.
-    findings += _check_dns_cache(raw)
+    findings += guarded(raw, "dns cache", _check_dns_cache, raw)
     # Check specific ports if requested
     if check_ports:
         say(f"checking {len(check_ports)} port(s) on {target}")
@@ -18991,7 +19113,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # After the port checks, because it compares how long a handshake took
     # against how long the path is, and those timings are what they produce.
     # Called earlier it read an empty list and concluded nothing, silently.
-    findings += _check_answered_closer(raw, target, hops, port_results)
+    findings += guarded(raw, "answered closer", _check_answered_closer, raw, target, hops, port_results)
 
     # Everything else is done; close the counter window and report on it.
     if counter_window:
@@ -19023,11 +19145,13 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     _legs = build_path_legs(raw, _sides)
     trace_each_side(_legs, findings, quick)
     count_the_hops_in(_legs, quick)
-    findings += _check_asymmetric_path(_legs)
+    findings += guarded(raw, "asymmetric path", _check_asymmetric_path, _legs)
     # After it, because it only speaks when that one has: the pair is the
     # finding, and strict filtering on its own is a correct setting.
     raw["rp_filter"] = _read_rp_filter()
-    findings += _check_return_path_filtered(raw, findings)
+    findings += guarded(raw, "return path filtered", _check_return_path_filtered, raw, findings)
+    # Last, so it can name anything that failed above it.
+    findings += guarded(raw, "checks that failed", _check_checks_that_failed, raw)
     # Last, because it only speaks about findings that already exist.
     _check_cpu_load(findings)
     _check_shared_hop(_legs, findings)

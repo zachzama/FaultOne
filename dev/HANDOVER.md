@@ -95,6 +95,44 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### One broken check costs its own findings, not the report
+
+A real box lost its **entire** report to a `TypeError` in `annotate_hops`.
+Every collector had already succeeded - the gateway, the interfaces, the
+sockets, the resolvers, all read and all discarded, because one analysis
+function met a string where it expected an integer.
+
+**Collection already survived partial failure and analysis did not.** `run()`
+never raises, a failed collector returns `ok False`, and `collection_coverage`
+counts it so the verdict says how much of what could run did. The forty-three
+`_check_*` calls had none of that.
+
+`checked` (a context manager) and `guarded` (a call wrapper) record a failure
+into `raw["check_failures"]` and carry on. Every one of the 43 sites is
+wrapped, plus the path phase as a **region** - that seam is where the real
+crash was, and everything downstream reads `hops`, so it has to leave a usable
+empty path rather than a half-built one.
+
+**Concurrency would not have helped this**, which is worth saying because the
+two get conflated. A `ThreadPoolExecutor` re-raises at `.result()` and the run
+dies identically. This is isolation, not parallelism.
+
+**The exit code is UNKNOWN, not WARNING**, and that is the whole argument.
+The crash handler at the bottom of the file already says it: 1 means WARNING,
+so a scheduled check would read a broken tool as a mild network finding. A
+real critical still outranks it - somebody paged at 3am needs the outage, not
+the bug. `dev/deep_e2e.py` had the old rule encoded and now carries the
+exception with its reason.
+
+**The risk this introduces is real and is guarded against directly.** A tool
+that quietly does less is worse than one that stops: that crash was in front of
+somebody the same day, and a silent degradation would have sat for months. So
+the failure is a warning on the face of the report, it names the check and the
+exception, it keeps the run out of "no fault found", and
+`test_every_check_survives_every_scenario` runs the whole corpus and fails if
+**any** scenario records a failure. Wrapping exceptions is only acceptable
+while nothing is actually raising.
+
 ### The one serial loop that was costing real seconds
 
 A generic "refactor blocking loops and add a CLI" prompt was checked against

@@ -1,0 +1,47 @@
+[
+ {
+  "label": "G: stopping the tool is turned into a finding",
+  "old": "        if kind is None or issubclass(kind, (KeyboardInterrupt, SystemExit,\n                                             MemoryError)):\n            return False",
+  "new": "        if kind is None:\n            return False"
+ },
+ {
+  "label": "G: a check that raises still ends the run",
+  "old": "        return True\n\n\ndef guarded(raw, what, fn, *args, **kwargs):",
+  "new": "        return False\n\n\ndef guarded(raw, what, fn, *args, **kwargs):"
+ },
+ {
+  "label": "G: a failed check is recorded and never reported",
+  "old": "    failed = checks_that_failed(raw)\n    if not failed:\n        return []",
+  "new": "    failed = []\n    if not failed:\n        return []"
+ },
+ {
+  "label": "G: the exit code says the network is fine",
+  "old": "    if (report.get(\"raw\") or {}).get(\"check_failures\"):\n        return EXIT_UNKNOWN\n    if \"warning\" in severities:",
+  "new": "    if False:\n        return EXIT_UNKNOWN\n    if \"warning\" in severities:"
+ },
+ {
+  "label": "G: a broken check masks a real critical fault",
+  "old": "    if \"critical\" in severities:\n        return EXIT_CRITICAL                # a real fault outranks a broken tool",
+  "new": "    if False:\n        return EXIT_CRITICAL                # a real fault outranks a broken tool"
+ },
+ {
+  "label": "G: the finding names no check",
+  "old": "            + \"; \".join(f\"{f['check']} ({f['error']})\" for f in named)",
+  "new": "            + \"; \".join(f\"{f['error']}\" for f in named)"
+ },
+ {
+  "label": "G: the finding names no error for a bug report",
+  "old": "            + \"; \".join(f\"{f['check']} ({f['error']})\" for f in named)",
+  "new": "            + \"; \".join(f\"{f['check']}\" for f in named)"
+ },
+ {
+  "label": "G: a clean result is offered as good news anyway",
+  "old": "              f\"checks would have said is missing from it, so treat a clean \"\n              f\"result here as incomplete rather than as good news. The error \"",
+  "new": "              f\"checks would have said is missing from it. The error \""
+ },
+ {
+  "label": "G: the path seam goes back to being unguarded",
+  "old": "    hops, path_insight, path_source = [], {}, None\n    with checked(raw, \"the path to the target\"):",
+  "new": "    hops, path_insight, path_source = [], {}, None\n    if True:"
+ }
+]

@@ -23,7 +23,7 @@ reaches the wrong conclusion:
 | Clients are losing traffic, and so is the database | one problem, somewhere upstream | two problems facing opposite ways. Neither explains the other, and fixing one leaves the other exactly where it was |
 
 In each, the tool reports the same underlying findings a checklist would. The
-difference is which one it puts at the top, and that is the whole product: 202
+difference is which one it puts at the top, and that is the whole product: 203
 findings exist and exactly one reaches you as the answer.
 
 The rule is a single sentence. **A broken layer makes every layer above it look
@@ -1616,11 +1616,11 @@ they're spelled out:
 | | Count | What it is |
 |---|---|---|
 | **Data collections** | **42** | Distinct things it inspects on the device or the path, the routing table, the error counters, a TLS handshake, and so on. Some run more than once (two pings, one per checked port). |
-| **Findings** | **202** | Distinct conclusions it can reach and state in plain language. 167 are faults; 35 are context, like which switch port you're on. |
-| **Ranked causes** | **167** | Findings the verdict knows how to rank and assign an owner to. |
-| **Automated tests** | **531** | 1977 tests of this program's own code. A developer number, not a measure of what it checks for you. |
+| **Findings** | **203** | Distinct conclusions it can reach and state in plain language. 168 are faults; 35 are context, like which switch port you're on. |
+| **Ranked causes** | **168** | Findings the verdict knows how to rank and assign an owner to. |
+| **Automated tests** | **531** | 1987 tests of this program's own code. A developer number, not a measure of what it checks for you. |
 
-**The 202 findings are the useful figure** if you want to know what the tool can
+**The 203 findings are the useful figure** if you want to know what the tool can
 tell you. Every one has a scenario in the test suite that triggers it end to
 end.
 
@@ -2432,7 +2432,7 @@ monitoring-plugin convention every other exit here follows.
 
 ```bash
 python3 faultone.py --version      # runs, so the floor is satisfied
-python3 test_faultone.py           # 1977 tests, a few seconds, no dependencies
+python3 test_faultone.py           # 1987 tests, a few seconds, no dependencies
 ```
 
 The suite runs on the appliance as happily as anywhere else, which is the point
@@ -2494,6 +2494,7 @@ can say what the bar was rather than "the tool said so".
 | `LOCAL_QUEUE_STANDING_PKTS` | **64** | how many packets have to be sitting in this box's own egress queue before the queue is the story rather than ordinary bursting. A queue exists to hold a burst, so a handful waiting is it working; a standing backlog is traffic being delayed here long enough for the connections above it to see it. Set where an `fq_codel` default of 10240 is plainly not coping rather than where it is merely busy. This is the one reading that turns a latency symptom into a cause: without it the report says traffic is being held up and which way it was going, and names the delay itself as the answer |
 | `LOOP_MIN_HOP_GAP` | **2** | how far apart two answers from the same address have to be before the path is circling rather than one device replying twice. There has to be a hop in between for traffic to have gone anywhere and come back. Adjacent repeats are a device that does not decrement TTL the way a router does, which is ordinary on a firewall or a NAT and common on the first hop out of a site - a real appliance reported one address at hops 1 and 2 and was told it had a critical routing loop, with the provider named as the owner |
 | `ASYMMETRIC_HOP_GAP` | **2** | how far the hop count out and the hop count back have to differ before the path is called asymmetric. The two are not measured the same way - one is walked hop by hop, the other inferred from the TTL of a single reply against an assumed starting value - so an off-by-one falls out of the method without anything being wrong. Two is a different route |
+| `CHECKS_NAMED` | **4** checks | how many of this tool's own failed checks to name before summarising. A report is pasted into a ticket and a list of forty is not a sentence |
 | `DNS_PROBE_WORKERS` | **8** probes | how many resolver queries to have in flight at once. A full run asks each configured resolver two questions - the name probe and the NXDOMAIN one - so four resolvers is eight queries at a two second timeout each. Asked one after another that was four seconds of a seven second run on a box with one unresponsive resolver. Bounded for the same reason the port checks are, and far less provocatively: these are the resolvers the box already uses constantly |
 | `UNIT_STEM_FLOOR` | **4** characters | the shortest name that may be matched between a failed unit and a process holding a listener. `ss` reports a process by its comm and the kernel truncates that at 15 characters, so a unit and its own process often agree only on a prefix - and a prefix rule with no floor makes a two-letter name match half the box |
 | `RP_FILTER_STRICT` | **1** | the strict setting of `net.ipv4.conf.*.rp_filter` (RFC 3704). 0 is off and 2 is loose, which accepts a packet if its source is reachable by *any* route - the mode written for exactly the asymmetric case. Only 1 discards traffic this tool would otherwise call healthy |
@@ -3989,7 +3990,7 @@ its own `--baseline` with zero spurious changes.
 python3 test_faultone.py          # or: python3 -m unittest -v
 ```
 
-1977 tests, no dependencies, no network, a few seconds, so they run
+1987 tests, no dependencies, no network, a few seconds, so they run
 anywhere the tool does, including on the target box itself. That is the point of
 having no dependencies: you can validate it in the environment that matters.
 
@@ -4068,7 +4069,7 @@ fair demonstration that it works.) The canonical text is kept here
 instead, where the same guard that pins every other number scans it:
 
 > SSH into a box and get one line: is the fault this box, the way in, or the
-> way out - and who owns it. Ranks 202 findings with readable rules instead of
+> way out - and who owns it. Ranks 203 findings with readable rules instead of
 > listing everything that looks wrong. One Python file, no install, nothing
 > listens.
 

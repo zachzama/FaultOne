@@ -45,8 +45,15 @@ for code in sorted(T.S):
     findings = report["findings"]
     verdict = report["verdict"]
 
-    # exit status must match the worst severity present
+    # exit status must match the worst severity present, with one exception
+    # that is the point rather than a wrinkle: a check of this tool's own that
+    # failed did not answer the question, and UNKNOWN is the code for that.
+    # WARNING would have a scheduled run read a broken tool as a mild network
+    # finding, which is the argument the crash handler already makes. A real
+    # critical still outranks it - somebody paged needs the outage, not the bug.
+    broke = bool((report.get("raw") or {}).get("check_failures"))
     expected_exit = (2 if any(f["severity"] == "critical" for f in findings)
+                     else 3 if broke
                      else 1 if any(f["severity"] == "warning" for f in findings) else 0)
     actual_exit = nd.exit_status(report)
     if actual_exit != expected_exit:

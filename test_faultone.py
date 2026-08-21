@@ -1618,6 +1618,123 @@ class TestEveryResolverIsAskedAtOnce(unittest.TestCase):
         self.assertEqual([r["elapsed_ms"] for r in got], [1, 2, 3, 4])
 
 
+class TestOneBrokenCheckCostsItsOwnFindings(unittest.TestCase):
+    """A real box lost its whole report to a TypeError in annotate_hops.
+
+    Every collector had already succeeded. The gateway, the interfaces, the
+    sockets, the resolvers - all read, all discarded, because one analysis
+    function met a string where it expected an integer. Collection already
+    survived partial failure; analysis did not.
+
+    The risk this introduces is the reason most of these tests exist: a tool
+    that quietly does less is worse than one that stops. That crash was in
+    front of somebody the same day. A silent degradation would have sat there
+    for months, and a clean report from a run that skipped half its checks is
+    the most expensive way to be wrong.
+    """
+
+    def broken(self, what="the path to the target"):
+        mod = fresh()
+        setup, kwargs = S["checks_did_not_run"]
+        setup(mod)
+        return mod, mod.diagnose(**scenario_kwargs(kwargs))
+
+    def test_the_report_still_arrives(self):
+        """The whole point. One check failed; the other forty-odd did not."""
+        _mod, rep = self.broken()
+        self.assertTrue(rep["verdict"]["headline"])
+        self.assertTrue(rep["findings"])
+
+    def test_it_says_which_check_and_what_it_raised(self):
+        """The error is what a bug report needs, and the reader is the one
+        holding it. A traceback is for whoever fixes the tool; the type and the
+        message are what fits in a ticket."""
+        _mod, rep = self.broken()
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "checks_did_not_run")
+        self.assertIn("the path to the target", said)
+        self.assertIn("TypeError", said)
+
+    def test_it_blames_the_tool_and_not_the_network(self):
+        _mod, rep = self.broken()
+        self.assertIn("this tool", rep["verdict"]["owner"])
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "checks_did_not_run")
+        self.assertIn("bug in this tool, not a finding about the network", said)
+
+    def test_a_clean_result_is_not_offered_as_good_news(self):
+        """The failure mode that matters. Silence from a check that never ran
+        must not read as silence from a check that found nothing."""
+        _mod, rep = self.broken()
+        said = next(f["message"] for f in rep["findings"]
+                    if f["code"] == "checks_did_not_run")
+        self.assertIn("incomplete rather than as good news", said)
+        self.assertNotIn("No fault found", rep["verdict"]["headline"])
+
+    def test_the_exit_code_does_not_say_the_network_is_fine(self):
+        """UNKNOWN, not WARNING. The crash handler makes the same argument: 1
+        means WARNING, so a scheduled check would read a broken tool as a mild
+        network finding."""
+        mod, rep = self.broken()
+        self.assertEqual(mod.exit_status(rep), mod.EXIT_UNKNOWN)
+
+    def test_a_real_critical_still_outranks_a_broken_check(self):
+        """Somebody paged at 3am needs the outage, not the bug."""
+        mod, rep = self.broken()
+        worse = dict(rep, findings=list(rep["findings"])
+                     + [{"severity": "critical", "code": "inet_unreachable"}])
+        self.assertEqual(mod.exit_status(worse), mod.EXIT_CRITICAL)
+
+    def test_an_ordinary_run_is_unaffected(self):
+        """No failures, no finding, no change to the exit code."""
+        mod = fresh()
+        rep = mod.diagnose("8.8.8.8", None)
+        self.assertEqual(mod.checks_that_failed(rep["raw"]), [])
+        self.assertNotIn("checks_did_not_run",
+                         [f["code"] for f in rep["findings"]])
+
+    def test_stopping_the_tool_is_not_turned_into_a_finding(self):
+        """A KeyboardInterrupt is somebody pressing ctrl-c, and a MemoryError
+        means the answer would be wrong anyway. Swallowing either would be this
+        guard doing harm rather than good."""
+        for kind in (KeyboardInterrupt, SystemExit, MemoryError):
+            with self.subTest(kind=kind.__name__):
+                raw = {}
+                with self.assertRaises(kind):
+                    with nd.checked(raw, "x"):
+                        raise kind()
+                self.assertEqual(nd.checks_that_failed(raw), [])
+
+    def test_a_check_that_fails_yields_no_findings_rather_than_junk(self):
+        def explode():
+            raise ValueError("nope")
+        raw = {}
+        self.assertEqual(nd.guarded(raw, "a check", explode), [])
+        self.assertEqual(len(nd.checks_that_failed(raw)), 1)
+
+    def test_every_check_survives_every_scenario(self):
+        """The guard against the guard. Wrapping exceptions is only acceptable
+        while nothing is actually raising - otherwise this stops being a safety
+        net and becomes a place bugs live. Every scenario in the corpus, and
+        not one of them may record a failure."""
+        broken = {}
+        for code in sorted(S):
+            if code == "checks_did_not_run":
+                continue                  # this one raises on purpose
+            setup, kwargs = S[code]
+            mod = fresh()
+            setup(mod)
+            try:
+                rep = mod.diagnose(**scenario_kwargs(kwargs))
+            except Exception as exc:      # noqa: BLE001
+                broken[code] = "diagnose raised: %r" % (exc,)
+                continue
+            failed = mod.checks_that_failed(rep["raw"])
+            if failed:
+                broken[code] = failed
+        self.assertEqual(broken, {}, "checks raised on these scenarios")
+
+
 class TestResolverList(unittest.TestCase):
     def test_parses_resolv_conf(self):
         text = ("# Generated by NetworkManager\n"
@@ -3680,7 +3797,7 @@ class TestQuietGotchas(unittest.TestCase):
         # The call, not the definition - "def _check_dns_cache(raw, findings)"
         # contains the call as a substring, and matching that put the first
         # version of this assertion the wrong way round.
-        call = "\n    findings += _check_dns_cache(raw)"
+        call = '\n    findings += guarded(raw, "dns cache", _check_dns_cache, raw)'
         self.assertIn(call, src)
         self.assertLess(src.index("dns_failed = _check_dns(raw, findings"),
                         src.index(call))
@@ -13023,6 +13140,9 @@ class TestTheWordsAndThePictureAgree(unittest.TestCase):
         # of that chain, it has not reached one, and which units matter is the
         # reader's call - so there is no leg to colour.
         "units_failed", "unit_failed_that_carries_traffic",
+        # A check of this tool's own that failed. It describes the instrument,
+        # not the network, so there is no leg of the chain it belongs to.
+        "checks_did_not_run",
     }
 
     # A column can be lit with all four legs reading OK. Loss and jitter count
@@ -17798,9 +17918,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1110),
-            "compressed": (len(gzip.compress(raw, 9)), 336),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 228),
+            "on disk": (len(raw), 1117),
+            "compressed": (len(gzip.compress(raw, 9)), 339),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 230),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -23829,6 +23949,22 @@ def _(nd):
                 "ESTAB 0 0 10.0.0.5:443 198.51.100.10:51003\n")
 
 
+@scenario("checks_did_not_run")
+def _(nd):
+    """The crash a real box hit, as a scenario rather than a traceback.
+
+    An mtr build that quotes its JSON put a hop number through as a string, and
+    subtracting one from another three lines into annotate_hops ended the run -
+    after every collector had already succeeded. The parser handles that now;
+    this breaks the same seam a different way, because the point is not that
+    one bug is fixed but that the next one costs its own findings instead of
+    the report.
+    """
+    def explode(*args, **kwargs):
+        raise TypeError("unsupported operand type(s) for -: 'str' and 'str'")
+    nd._check_path = explode
+
+
 @scenario("units_failed")
 def _(nd):
     """Two instances the box was told to run and is not running.
@@ -26849,6 +26985,8 @@ class TestEveryFindingFires(unittest.TestCase):
         # for the same reason: knowing the unit carries traffic says which
         # units matter, not which leg of the chain to colour.
         "units_failed", "unit_failed_that_carries_traffic",
+        # And a failed check of this tool's own describes the instrument.
+        "checks_did_not_run",
     }
 
     def test_findings_that_move_no_stage_are_a_decision_not_an_oversight(self):

@@ -372,16 +372,21 @@ Split that way, the 56 are:
   guard the *suite* rather than the tool, so no mutation of `faultone.py` can
   reach them by construction.
 
-**So the real remaining list is seven**, and it is worth writing down because
-it is short enough to finish:
+**The real remaining list was seven, and it is now done.**
+`dev/mutations/the-last-seven.json` puts one violation under each: a report
+value reaching a `class` attribute unfiltered, the decoded certificate left on
+disk, a window the run already covered waited out again, a `--quick` run
+delayed by a window it never asked for, a stylesheet rule for something the
+page never draws, a comment explaining a deleted rule, and an entry in
+`BUILT_AT_RUNTIME` excusing a class the page never builds.
 
-    TestAStateFromAReportCannotLeaveItsAttribute.test_every_class_attribute_in_the_template_is_filtered
-    TestOwnTlsListener.test_reading_the_fields_leaves_no_file_behind
-    TestSamplingWindow.test_a_window_already_elapsed_is_not_waited_out_again
-    TestSamplingWindow.test_no_sampling_requested_means_no_waiting
-    TestTheStylesheetHasNothingLeftOver.test_no_comment_explains_a_rule_that_is_gone
-    TestTheStylesheetHasNothingLeftOver.test_no_rule_styles_something_the_page_never_draws
-    TestTheStylesheetHasNothingLeftOver.test_the_runtime_list_cannot_hide_a_real_orphan
+**All seven were caught, each by the test it was aimed at** - checked with
+`--catchers` rather than inferred from the run being green, because a mutation
+caught by a *sibling* is the mistake this whole exercise turned on.
+
+So every empty-only test in this suite is now either proven, redundant
+alongside a proven sibling, or one of the two that guard the suite rather than
+the tool and cannot be reached by mutating it. There is no list left here.
 
 All four groups are closed, and each yielded exactly one real defect where none
 was expected: the two sysfs inputs no fixture built, the address guard that

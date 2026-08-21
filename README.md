@@ -402,7 +402,7 @@ Anyone can write checks. The claim worth making is that the checks are
 themselves checked, and these are the numbers behind it:
 
 - **1969 tests**, and a test that fails if any of them asserts nothing at all.
-- **383 mutations**, each one breaking a rule on purpose. Every one has to make
+- **390 mutations**, each one breaking a rule on purpose. Every one has to make
   a test fail; a mutation that survives means the rule is not really covered,
   and it is treated as a defect in the suite rather than a curiosity.
 - **202 scenarios**, one per finding, driven through the whole pipeline - and

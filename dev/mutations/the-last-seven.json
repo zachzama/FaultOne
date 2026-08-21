@@ -1,0 +1,38 @@
+[
+ {
+  "label": "E: a report value reaches a class attribute unfiltered",
+  "old": "      + `<span class=\"${cls(outState)}\">\u2192</span>`",
+  "new": "      + `<span class=\"${outState}\">\u2192</span>`"
+ },
+ {
+  "label": "E: the certificate written out to be decoded is left behind",
+  "old": "    finally:\n        if path:\n            try:\n                os.unlink(path)\n            except OSError:\n                pass",
+  "new": "    finally:\n        if False:\n            try:\n                os.unlink(path)\n            except OSError:\n                pass"
+ },
+ {
+  "label": "E: a window the run already covered is waited out again",
+  "old": "            remaining = max(0.0, max(sample_seconds, MIN_COUNTER_WINDOW) - elapsed)",
+  "new": "            remaining = max(sample_seconds, MIN_COUNTER_WINDOW)"
+ },
+ {
+  "label": "E: a quick run is delayed by a window it never asked for",
+  "old": "        if sample_seconds:\n            remaining = max(0.0,",
+  "new": "        if True:\n            remaining = max(0.0,"
+ },
+ {
+  "label": "E: the stylesheet keeps a rule for something never drawn",
+  "old": "  .zarrow{display:flex; align-items:center; padding:0 10px; color:var(--text-dim);",
+  "new": "  .zarrow-legacy{display:none;}\n  .zarrow{display:flex; align-items:center; padding:0 10px; color:var(--text-dim);"
+ },
+ {
+  "label": "E: the runtime list excuses a class the page never builds",
+  "file": "test_faultone.py",
+  "old": "        \"pass\": \"${\", \"warn\": \"${\", \"fail\": \"${\", \"skip\": \"${\",",
+  "new": "        \"phantom\": \"${phantom-\", \"pass\": \"${\", \"warn\": \"${\", \"fail\": \"${\", \"skip\": \"${\","
+ },
+ {
+  "label": "E: a comment is left explaining a rule that was deleted",
+  "old": "    .zarrow{padding:2px 0; transform:rotate(90deg); align-self:center;}\n  }",
+  "new": "    .zarrow{padding:2px 0; transform:rotate(90deg); align-self:center;}\n    /* And the arrow between them, which used to need its own width here. */\n  }"
+ }
+]

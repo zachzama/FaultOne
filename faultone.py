@@ -873,6 +873,13 @@ def parse_mtr_json(text):
         data = json.loads(text)
     except (ValueError, TypeError):
         return []
+    # Valid JSON is not necessarily an object. `1e999` parses to a float of
+    # inf, `null` to None, `[]` to a list - and every one of those reached
+    # `.get` and raised AttributeError, which before the checks were isolated
+    # would have ended the run. mtr printing anything other than a report is
+    # not a reason to stop; it is a reason to have no hops.
+    if not isinstance(data, dict):
+        return []
     hubs = (data.get("report") or {}).get("hubs") or []
     hops = []
     for hub in hubs:
@@ -11407,6 +11414,30 @@ def guarded(raw, what, fn, *args, **kwargs):
     return []
 
 
+def collected(raw, what, fn, *args, **kwargs):
+    """One collector, run so a bug in it costs its own reading and no more.
+
+    `run()` cannot raise, but a collector is more than the command it runs: it
+    parses the output afterwards, and every parser in this file lives inside
+    one. A parser meeting a shape it did not expect ends the run exactly as
+    `annotate_hops` did - and that is the layer that *fills* `raw`, so guarding
+    only the checks that read it left the more exposed half open.
+
+    The failure is shaped like a command that failed, because every reader
+    downstream already handles that: `ok` False and a reason. Nothing has to
+    learn a new shape to survive this.
+    """
+    with checked(raw, what):
+        return fn(*args, **kwargs)
+    return {"ok": False, "cmd": what, "error": "this reading raised while "
+                                               "being parsed",
+            # Not `applicable: False`. That means "this box cannot answer",
+            # which is a fact about the box; this is a fact about the tool, and
+            # counting it as inapplicable would quietly lift the coverage
+            # figure that is supposed to notice.
+            }
+
+
 def checks_that_failed(raw):
     """The analysis that could not be run on this box, worst first by name."""
     return sorted((raw or {}).get("check_failures") or [],
@@ -13667,7 +13698,7 @@ def _check_clock(raw):
     clock is wrong then those readings are measuring the clock.
     """
     found = []
-    raw["clock"] = cmd_clock_sync()
+    raw["clock"] = collected(raw, "clock", cmd_clock_sync)
     clock = raw["clock"]
     if not clock.get("ok"):
         return found
@@ -13731,7 +13762,7 @@ def _check_kernel_log(raw):
     quiet rather than reporting the same link twice at two different urgencies.
     """
     found = []
-    raw["kernel_log"] = cmd_kernel_log()
+    raw["kernel_log"] = collected(raw, "kernel log", cmd_kernel_log)
     klog = raw["kernel_log"]
     if not klog.get("ok"):
         return found
@@ -15002,7 +15033,7 @@ def _check_arp(raw, findings):
     Returns the parsed entries, which the passive inventory reuses rather than
     parsing - or probing - anything again.
     """
-    raw["arp"] = cmd_arp()
+    raw["arp"] = collected(raw, "arp", cmd_arp)
     arp_entries = parse_arp_table(raw["arp"].get("stdout", "")) if raw["arp"].get("ok") else []
     for conflict in find_arp_conflicts(arp_entries):
         virtual = [(m, virtual_router_mac(m)) for m in conflict["macs"]]
@@ -15045,17 +15076,17 @@ def _check_arp(raw, findings):
     # Already read at the top of diagnose(), because the target choice needed
     # it. Re-read only when something else called this directly.
     if "sockets" not in raw:
-        raw["sockets"] = cmd_socket_states()
+        raw["sockets"] = collected(raw, "sockets", cmd_socket_states)
     if "udp_sockets" not in raw:
-        raw["udp_sockets"] = cmd_udp_sockets()
+        raw["udp_sockets"] = collected(raw, "udp sockets", cmd_udp_sockets)
     if "udp_tunnels" not in raw:
-        raw["udp_tunnels"] = cmd_udp_tunnels(raw)
+        raw["udp_tunnels"] = collected(raw, "udp tunnels", cmd_udp_tunnels, raw)
     if "socket_owners" not in raw:
-        raw["socket_owners"] = cmd_socket_owners()
+        raw["socket_owners"] = collected(raw, "socket owners", cmd_socket_owners)
     if "qdisc" not in raw:
-        raw["qdisc"] = cmd_qdisc()
+        raw["qdisc"] = collected(raw, "qdisc", cmd_qdisc)
     if "proxy_stats" not in raw:
-        raw["proxy_stats"] = cmd_haproxy_stats()
+        raw["proxy_stats"] = collected(raw, "proxy stats", cmd_haproxy_stats)
     sock_states = raw["sockets"].get("states", {}) if raw["sockets"].get("ok") else {}
     pending = raw["sockets"].get("pending", {}) if raw["sockets"].get("ok") else {}
     syn_sent = sock_states.get("SYN_SENT", 0)
@@ -15495,7 +15526,7 @@ def _check_flows(raw, findings):
     family, so two views of the same retransmits can't corroborate each other
     into false confidence.
     """
-    raw["tcp_flows"] = cmd_tcp_flows((raw.get("sockets") or {}).get("listen_ports"))
+    raw["tcp_flows"] = collected(raw, "tcp flows", cmd_tcp_flows, (raw.get("sockets") or {}).get("listen_ports"))
     stats = raw["tcp_flows"]
     if not stats.get("ok"):
         return
@@ -15683,7 +15714,7 @@ def _finish_link_checks(raw, findings, counter_window, link_sample, tcp_baseline
     findings += guarded(raw, "counters", _check_counters, raw, duplex_by_iface)
     late += guarded(raw, "kernel log", _check_kernel_log, raw)
     findings += guarded(raw, "link flaps", _check_link_flaps, raw)
-    raw["failed_units"] = cmd_failed_units()
+    raw["failed_units"] = collected(raw, "failed units", cmd_failed_units)
     late += guarded(raw, "failed units", _check_failed_units, raw)
     late += guarded(raw, "clock", _check_clock, raw)
     _check_kernel_drops(raw, late, counter_window, drops_baseline)
@@ -15726,7 +15757,7 @@ def _check_device_and_link(raw, findings, link_sample):
     raw["link_stats"] = _finish_link_sample(link_sample["first"], link_sample["source"], 0)
     # Collected before the counter findings because how to read a collision
     # depends on the negotiated duplex.
-    raw["link_modes"] = cmd_link_modes()
+    raw["link_modes"] = collected(raw, "link modes", cmd_link_modes)
     duplex_by_iface = {m["name"]: m.get("duplex")
                        for m in raw["link_modes"].get("interfaces", [])}
 
@@ -15778,7 +15809,7 @@ def _check_dns(raw, findings, target, inet_loss, quick):
                     f"one - so this is about this name, its zone, or the resolver's "
                     f"view of it rather than DNS being down."),
             })
-    raw["dns_lookup"] = cmd_dns("google.com")
+    raw["dns_lookup"] = collected(raw, "dns lookup", cmd_dns, "google.com")
     dns_out = raw["dns_lookup"].get("stdout", "") if raw["dns_lookup"].get("ok") else ""
     # A missing dig/nslookup is not a DNS failure. When the tool isn't there,
     # fall back to the resolver queries this program makes itself, which need
@@ -15817,7 +15848,7 @@ def _check_dns(raw, findings, target, inet_loss, quick):
     # all"; this asks the harder question of whether each configured resolver
     # works, how fast, and whether they agree.
     if "dns_health" not in raw:
-        raw["dns_health"] = cmd_dns_health(check_hijack=not quick)
+        raw["dns_health"] = collected(raw, "dns health", cmd_dns_health, check_hijack=not quick)
     resolvers = raw["dns_health"].get("resolvers", [])
     if not raw["dns_health"].get("ok") and not resolvers:
         unreadable = raw["dns_health"].get("unreadable")
@@ -16506,7 +16537,7 @@ def _check_path_mtu(raw, target, quick, inet_loss, primary_mtu):
     # Path MTU. Skipped in quick mode (it's several more pings) and pointless
     # if the target never answered at all.
     if not quick and inet_loss is not None and inet_loss < 100:
-        raw["path_mtu"] = cmd_path_mtu(target, primary_mtu or STANDARD_MTU)
+        raw["path_mtu"] = collected(raw, "path mtu", cmd_path_mtu, target, primary_mtu or STANDARD_MTU)
         pm = raw["path_mtu"]
         if pm.get("path_mtu") is None:
             found.append({
@@ -16948,7 +16979,7 @@ def _check_path(raw, findings, target, gw, inet_loss, quick, mtr_cycles, primary
         # Before anything is concluded from the hops: whether they are the
         # route this box would actually use. Everything below reads differently
         # if they are not.
-        raw["route_to"] = cmd_route_to(target)
+        raw["route_to"] = collected(raw, "route to", cmd_route_to, target)
         findings += guarded(raw, "discard route", _check_discard_route, raw, target)
         findings += guarded(raw, "route agrees", _check_route_agrees, raw, hops, target)
         path_insight = annotate_hops(
@@ -18359,7 +18390,7 @@ def _check_proxy(raw, target):
     # And whether it answers. Reading the setting was always the easy half:
     # the report says every check below describes the direct route, and then
     # said nothing about the route that is actually in use.
-    raw["proxy_reachable"] = cmd_proxy_reachable(cfg)
+    raw["proxy_reachable"] = collected(raw, "proxy reachable", cmd_proxy_reachable, cfg)
     dead = [p for p in (raw["proxy_reachable"].get("proxies") or [])
             if not p["reachable"]]
     if dead:
@@ -18840,20 +18871,20 @@ def _survey_this_box(raw, findings):
     # The socket table has to be read before the target is chosen rather than
     # with the rest of the device checks, because choosing a backend to aim at
     # is the first thing that depends on it. Read once and reused below.
-    raw["sockets"] = cmd_socket_states()
+    raw["sockets"] = collected(raw, "sockets", cmd_socket_states)
     # The other plane. A box can carry its user traffic over datagrams while its
     # control plane is TCP, and every other socket reading here is TCP - without
     # this the busiest half of such a box is simply absent from the report.
-    raw["udp_sockets"] = cmd_udp_sockets()
+    raw["udp_sockets"] = collected(raw, "udp sockets", cmd_udp_sockets)
     # And how many tunnels are arriving at them, which the socket table cannot
     # say and the connection tracking table can. Counted, never listed.
-    raw["udp_tunnels"] = cmd_udp_tunnels(raw)
+    raw["udp_tunnels"] = collected(raw, "udp tunnels", cmd_udp_tunnels, raw)
     # Who holds them, read beside the table itself so every finding built from
     # that table can name a process instead of saying "an application".
-    raw["socket_owners"] = cmd_socket_owners()
+    raw["socket_owners"] = collected(raw, "socket owners", cmd_socket_owners)
     # What this box's own egress queues are doing, for the three findings that
     # otherwise offer three candidates and can eliminate none of them.
-    raw["qdisc"] = cmd_qdisc()
+    raw["qdisc"] = collected(raw, "qdisc", cmd_qdisc)
     # And whether they are the reason anything above them is slow. Read here
     # rather than with the late checks so it lands below the layer-3 findings
     # it explains, which is what makes it the cause of them rather than a
@@ -18861,7 +18892,7 @@ def _survey_this_box(raw, findings):
     findings += guarded(raw, "local queue", _check_local_queue, raw)
     # PROTOTYPE: what the proxy on this box believes about its own backends,
     # if there is one and it is willing to say. Absent on almost every box.
-    raw["proxy_stats"] = cmd_haproxy_stats()
+    raw["proxy_stats"] = collected(raw, "proxy stats", cmd_haproxy_stats)
 
 
 def _check_against_the_last_visit(raw, findings, gw, arp_entries, baseline,
@@ -19006,8 +19037,8 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     tcp_baseline = _read_tcp_counters() if counter_window else None
     drops_baseline = _read_kernel_drops() if counter_window else None
 
-    raw["interfaces"] = cmd_interfaces()
-    raw["routes"] = cmd_routes()
+    raw["interfaces"] = collected(raw, "interfaces", cmd_interfaces)
+    raw["routes"] = collected(raw, "routes", cmd_routes)
 
     _check_addressing(raw, findings)
     # Only the probe repeats, and only when asked. Everything read before this
@@ -19086,7 +19117,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # What this device is listening on. Pairs with the port checks: those ask
     # whether something answers from outside, this shows what is bound here at
     # all - and on which interface rather than just loopback.
-    raw["ports"] = cmd_listen_ports()
+    raw["ports"] = collected(raw, "ports", cmd_listen_ports)
     findings += guarded(raw, "rotation", _check_rotation, raw)
     findings += guarded(raw, "idle", _check_idle, raw)
     _check_own_tls(raw, findings, quick)
@@ -19148,7 +19179,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     findings += guarded(raw, "asymmetric path", _check_asymmetric_path, _legs)
     # After it, because it only speaks when that one has: the pair is the
     # finding, and strict filtering on its own is a correct setting.
-    raw["rp_filter"] = _read_rp_filter()
+    raw["rp_filter"] = collected(raw, "rp filter", _read_rp_filter)
     findings += guarded(raw, "return path filtered", _check_return_path_filtered, raw, findings)
     # Last, so it can name anything that failed above it.
     findings += guarded(raw, "checks that failed", _check_checks_that_failed, raw)

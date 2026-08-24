@@ -1,0 +1,28 @@
+[
+ {
+  "label": "I: a collector that raises still ends the run",
+  "old": "def collected(raw, what, fn, *args, **kwargs):",
+  "new": "def collected(raw, what, fn, *args, **kwargs):\n    return fn(*args, **kwargs)\n\n\ndef _collected_unused(raw, what, fn, *args, **kwargs):"
+ },
+ {
+  "label": "I: a broken reading is marked inapplicable and lifts coverage",
+  "old": "    return {\"ok\": False, \"cmd\": what, \"error\": \"this reading raised while \"\n                                               \"being parsed\",",
+  "new": "    return {\"ok\": False, \"applicable\": False, \"cmd\": what,\n            \"error\": \"this reading raised while being parsed\","
+ },
+ {
+  "label": "I: a broken reading claims to have worked",
+  "old": "    return {\"ok\": False, \"cmd\": what, \"error\": \"this reading raised while \"",
+  "new": "    return {\"ok\": True, \"cmd\": what, \"error\": \"this reading raised while \""
+ },
+ {
+  "label": "J: valid JSON that is not an object reaches .get again",
+  "old": "    if not isinstance(data, dict):\n        return []",
+  "new": "    if False:\n        return []"
+ },
+ {
+  "label": "J: the parser list goes back to being written by hand",
+  "file": "test_faultone.py",
+  "old": "        return {name: getattr(nd, name) for name in dir(nd)\n                if name.startswith(\"parse_\") and callable(getattr(nd, name))}",
+  "new": "        return {name: getattr(nd, name) for name in (\"parse_mtr_json\",)}"
+ }
+]

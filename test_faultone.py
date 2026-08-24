@@ -1427,30 +1427,114 @@ class TestParserRobustness(unittest.TestCase):
 
     JUNK = ["", None, "\x00\x00", "a" * 50000, "%s%n", "../../etc/passwd",
             "<script>alert(1)</script>", "\u0442\u0435\u0441\u0442", "=" * 500,
-            "nameserver " + "9" * 400, "lldp." + "x" * 5000 + "=y"]
+            "nameserver " + "9" * 400, "lldp." + "x" * 5000 + "=y",
+            # Valid JSON that is not an object. Every other entry here is
+            # malformed, so a parser that handled malformed input and not this
+            # looked identical to one that handled both - which is what
+            # parse_mtr_json was.
+            "1e999", "null", "[]", '"a string"', "{}",
+            # And the shapes a table parser meets rather than a document one.
+            "a,b,c\n1,2\n", "\t \t\n", "-1 -1 -1", "0x" + "f" * 100]
+
+    #: How each parser wants its junk, decided by the name of its first
+    #: parameter rather than by a list of parser names.
+    #:
+    #: A list is what this was, and it had drifted to **eight of thirty-two** -
+    #: the same failure as `dev/vacuous.py`'s hand-written assertion names, and
+    #: the same fix. Twenty-four parsers had never been fed anything hostile,
+    #: and feeding them found `parse_mtr_json` raising AttributeError on
+    #: `1e999`: valid JSON that is a float rather than an object.
+    SHAPES = {
+        "text": lambda junk: (junk,),
+        "output": lambda junk: (junk,),
+        # These take a finished command result, not its text.
+        "ping_result": lambda junk: ({"ok": True, "stdout": junk},),
+        "iface_result": lambda junk: ({"ok": True, "stdout": junk},),
+        # Bytes off the wire rather than a string.
+        "data": lambda junk: (junk.encode("utf-8", "replace")
+                              if isinstance(junk, str) else b"",),
+        # Three files' contents, all as untrustworthy as each other.
+        "port_range": lambda junk: (junk, junk, junk),
+    }
+
+    #: Parsers whose contract is to raise, and what catches it. Declared rather
+    #: than excluded: the test still holds them to raising *only* what their
+    #: caller handles, so a new AttributeError in one of these still fails.
+    RAISES_BY_CONTRACT = {
+        "parse_dns_response": (ValueError, struct.error),
+    }
 
     def parsers(self):
-        return {
-            "guess_default_gateway": lambda t: nd.guess_default_gateway({"ok": True, "stdout": t}),
-            "parse_traceroute_hops": nd.parse_traceroute_hops,
-            "parse_ping_loss": lambda t: nd.parse_ping_loss({"ok": True, "stdout": t}),
-            "parse_ping_stats": lambda t: nd.parse_ping_stats({"ok": True, "stdout": t}),
-            "has_ip_address": lambda t: nd.has_ip_address({"ok": True, "stdout": t}),
-            "parse_mtr_json": nd.parse_mtr_json,
-            "parse_ethtool": nd.parse_ethtool,
-            "parse_arp_table": nd.parse_arp_table,
-            "parse_lldp_keyvalue": nd.parse_lldp_keyvalue,
-            "parse_resolvers": nd.parse_resolvers,
-            "is_private_ip": nd.is_private_ip,
-        }
+        """Every parser in the tool, found rather than listed."""
+        return {name: getattr(nd, name) for name in dir(nd)
+                if name.startswith("parse_") and callable(getattr(nd, name))}
+
+    def shape_for(self, fn):
+        first = list(inspect.signature(fn).parameters)[0]
+        return self.SHAPES.get(first), first
+
+    def test_the_list_is_found_and_not_written(self):
+        """Counted a second way, from the source text rather than from the
+        module, because the first version of this *was* a hand-written list and
+        a list that has stopped matching looks exactly like one that has not.
+        Two independent derivations disagreeing is the only thing that says
+        so."""
+        with open(nd.__file__, encoding="utf-8") as fh:
+            defined = set(re.findall(r"^def (parse_\w+)\(", fh.read(), re.M))
+        self.assertEqual(sorted(self.parsers()), sorted(defined))
+        self.assertGreater(len(defined), 25, "this file has more parsers than "
+                                             "that; the search stopped finding "
+                                             "them")
+
+    def test_a_parameter_name_it_cannot_feed_is_reported(self):
+        """Called directly, because every parser here is currently feedable -
+        so the branch that reports an unfeedable one is only reachable from a
+        test, and a mutation emptying it survived until this."""
+        def parse_something(mystery_argument):
+            return []
+        self.assertIsNone(self.shape_for(parse_something)[0])
+        self.assertEqual(self.shape_for(nd.parse_qdisc)[1], "text")
+
+    def test_every_parser_declares_a_shape_this_can_feed(self):
+        """A parameter name this does not recognise is a failure, not a skip.
+        Skipping is exactly how the old list came to cover a quarter of the
+        parsers while looking like it covered them all."""
+        # No mutation can reach this while every parser is feedable - an empty
+        # list and a correctly computed empty one are the same value. The
+        # decision it rests on is checked directly above; this is the wiring
+        # that applies it to the real set, and it earns its place the day
+        # somebody adds a parser with an unfamiliar first parameter.
+        unknown = sorted(name for name, fn in self.parsers().items()
+                         if self.shape_for(fn)[0] is None)
+        self.assertEqual(unknown, [], "no way to feed these junk - name the "
+                                      "first parameter like its neighbours, or "
+                                      "add a shape: %s" % unknown)
 
     def test_no_parser_raises_on_junk(self):
-        for name, fn in self.parsers().items():
+        """All of them, not a list of them. Every one reads output from a
+        command, a switch, or the network, and none of that is trusted."""
+        for name, fn in sorted(self.parsers().items()):
+            make, _first = self.shape_for(fn)
+            if make is None:
+                continue                  # named by the test above
+            allowed = self.RAISES_BY_CONTRACT.get(name, ())
             for junk in self.JUNK:
-                try:
-                    fn(junk)
-                except Exception as e:                       # noqa: BLE001 - that's the point
-                    self.fail(f"{name} raised {type(e).__name__} on {junk!r:.30}")
+                with self.subTest(parser=name, junk=repr(junk)[:20]):
+                    try:
+                        fn(*make(junk))
+                    except allowed:
+                        pass              # declared, and caught by its caller
+                    except Exception as e:               # noqa: BLE001 - the point
+                        self.fail("%s raised %s on %.30r"
+                                  % (name, type(e).__name__, junk))
+
+    def test_the_junk_includes_valid_json_that_is_not_an_object(self):
+        """The shape that got through. `1e999` parses to a float of inf and
+        `null` to None, and both reached `.get` on what was assumed to be a
+        report - so a working parser and a crashing one looked identical to a
+        corpus of malformed strings."""
+        for shape in ("1e999", "null", "[]", '"a string"'):
+            self.assertIn(shape, self.JUNK)
 
     def test_dns_response_parser_survives_hostile_bytes(self):
         import os
@@ -1711,6 +1795,52 @@ class TestOneBrokenCheckCostsItsOwnFindings(unittest.TestCase):
         raw = {}
         self.assertEqual(nd.guarded(raw, "a check", explode), [])
         self.assertEqual(len(nd.checks_that_failed(raw)), 1)
+
+    def test_a_collector_that_raises_costs_its_own_reading(self):
+        """The half the first pass left open. `run()` cannot raise, but a
+        collector is more than the command it runs - it parses the output
+        afterwards, and every parser in this file lives inside one."""
+        mod = fresh()
+        def explode():
+            raise ValueError("a parser met a shape it did not expect")
+        mod.cmd_qdisc = explode
+        rep = mod.diagnose("8.8.8.8", None)
+        self.assertTrue(rep["verdict"]["headline"])
+        self.assertIn("qdisc", [f["check"] for f in
+                                mod.checks_that_failed(rep["raw"])])
+
+    def test_a_failed_collector_looks_like_a_command_that_failed(self):
+        """So nothing downstream has to learn a new shape. Every reader
+        already handles `ok` False, because that is what a command that would
+        not run returns."""
+        mod = fresh()
+        mod.cmd_qdisc = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+        rep = mod.diagnose("8.8.8.8", None)
+        got = rep["raw"]["qdisc"]
+        self.assertIs(got.get("ok"), False)
+        self.assertTrue(got.get("error"))
+
+    def test_a_broken_collector_is_not_counted_as_inapplicable(self):
+        """`applicable False` means this box cannot answer, which is a fact
+        about the box. A collector that raised is a fact about the tool, and
+        marking it inapplicable would lift the very coverage figure that is
+        supposed to notice."""
+        mod = fresh()
+        mod.cmd_qdisc = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+        rep = mod.diagnose("8.8.8.8", None)
+        self.assertIsNot(rep["raw"]["qdisc"].get("applicable"), False)
+        ran, attempted = mod.collection_coverage(rep["raw"])
+        self.assertLess(ran, attempted)
+
+    def test_the_findings_that_read_it_still_run(self):
+        """One reading lost, not the report. The check that reads the queue
+        finds nothing, and everything that does not read it is untouched."""
+        mod = fresh()
+        mod.cmd_qdisc = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+        rep = mod.diagnose("8.8.8.8", None)
+        codes = [f["code"] for f in rep["findings"]]
+        self.assertNotIn("queue_standing_here", codes)
+        self.assertIn("checks_did_not_run", codes)
 
     def test_every_check_survives_every_scenario(self):
         """The guard against the guard. Wrapping exceptions is only acceptable
@@ -18030,9 +18160,9 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1117),
+            "on disk": (len(raw), 1119),
             "compressed": (len(gzip.compress(raw, 9)), 339),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 230),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 231),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -18836,9 +18966,15 @@ class TestExitStatus(unittest.TestCase):
         so a scheduled check would read a broken tool as a mild finding about
         the network."""
         import subprocess, os, tempfile
-        src = open(nd.__file__, encoding="utf-8").read().replace(
-            '    raw["interfaces"] = cmd_interfaces()',
-            '    raise RuntimeError("simulated crash")', 1)
+        # Planted *inline* in diagnose, not inside a collector or a check.
+        # Those are guarded now and would be reported rather than fatal, which
+        # is the point of them - so the thing this test is about, the handler
+        # of last resort, needs a raise that nothing catches on the way up.
+        anchor = '    raw["interfaces"] = collected(raw, "interfaces", cmd_interfaces)'
+        src = open(nd.__file__, encoding="utf-8").read()
+        self.assertIn(anchor, src, "the crash this plants has to still be "
+                                   "reachable; the anchor moved")
+        src = src.replace(anchor, '    raise RuntimeError("simulated crash")', 1)
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
                                         encoding="utf-8") as fh:
             fh.write(src)

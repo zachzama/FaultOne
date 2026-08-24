@@ -95,6 +95,46 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### The other half of the isolation, and the parsers nobody had fed
+
+Guarding the checks left the more exposed layer open. **`run()` cannot raise,
+but a collector is more than the command it runs** - it parses the output
+afterwards, and every parser in this file lives inside one. A parser meeting a
+shape it did not expect ends the run exactly as `annotate_hops` did, and that
+is the layer that *fills* `raw`.
+
+`collected()` wraps all 27 single-line collector calls. A failure is shaped
+like a command that failed - `ok` False and a reason - because every reader
+downstream already handles that and nothing has to learn a new shape. It is
+deliberately **not** marked `applicable: False`: that means "this box cannot
+answer", which is a fact about the box, and using it here would lift the very
+coverage figure that is supposed to notice.
+
+**And the junk guard was a hand-written list that had drifted to eight of
+thirty-two.** Same failure as `dev/vacuous.py`'s assertion names, same fix:
+found rather than listed. The shape each parser wants is decided by the name of
+its first parameter (`text`, `output`, `ping_result`, `data`, `port_range`),
+and **a name it does not recognise is a failure rather than a skip** - skipping
+quietly covering less than it appears to is how the old list got there.
+
+Feeding all 32 found one real crash. **`parse_mtr_json` raised AttributeError
+on `1e999`**: `json.loads` returns a float of inf, `null` returns None, `[]`
+returns a list, and every one of them reached `.get` on what was assumed to be
+a report. Every other entry in `JUNK` was *malformed*, so a parser that handled
+malformed input and not valid-JSON-that-is-not-an-object looked identical to
+one that handled both. Those four shapes are in the corpus now.
+
+`parse_dns_response` raises by contract and is declared rather than excluded -
+the test still holds it to raising **only** what `dns_query` catches, so a new
+`AttributeError` in it would still fail.
+
+Two of my own tests were untested in the way that matters. `parsers()` is now
+cross-checked against the source text, because a hand-written list that has
+stopped matching looks exactly like one that has not, and only two independent
+derivations disagreeing says so. And the unfeedable-parameter branch is
+unreachable while every parser is feedable, so the decision under it is called
+directly.
+
 ### One door for every command, held there by a test
 
 An audit for OS command injection found **nothing**, which is the answer worth

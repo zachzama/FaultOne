@@ -18162,7 +18162,7 @@ class TestDocsMatchReality(unittest.TestCase):
         claims = {
             "on disk": (len(raw), 1119),
             "compressed": (len(gzip.compress(raw, 9)), 339),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 231),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 230),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):

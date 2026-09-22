@@ -116,11 +116,11 @@ second version to keep in step, same behaviour:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 231 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 230 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine, and so does the box.
-Stripped and compressed together it's 231 KB instead of 1119. That is 79%
+Stripped and compressed together it's 230 KB instead of 1119. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.

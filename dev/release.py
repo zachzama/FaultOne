@@ -190,6 +190,25 @@ def main():
             for line in drawn.stdout.splitlines():
                 print("  " + line)
 
+        # The export screenshot carries the version in its banner for the same
+        # reason the hero does, so it goes stale on a bump the same way. It is
+        # a photograph rather than a drawing, which is why it needs Chrome and
+        # why the suite only checks a recorded hash instead of taking its own.
+        # A new 300 KB blob per release is the cost; releases are not frequent
+        # and a stale picture of the output is worse than a large repository.
+        print("recapturing the export screenshot")
+        if args.dry_run:
+            print("  would run: python3 dev/shot.py")
+        else:
+            shot = subprocess.run([sys.executable, os.path.join("dev", "shot.py")],
+                                  cwd=ROOT, capture_output=True, text=True)
+            if shot.returncode != 0:
+                bump(old, args.version)
+                sys.exit("could not recapture the screenshot - the bump has "
+                         "been reverted:\n" + (shot.stderr or shot.stdout))
+            for line in shot.stdout.splitlines():
+                print("  " + line)
+
     # Before the commit, not after. A release that fails its own checks should
     # never reach a tag, and a tag is the one thing here that must not move.
     #
@@ -208,7 +227,13 @@ def main():
                       ("dev/dialects.py --self-test",
                        [sys.executable, "dev/dialects.py", "--self-test"]),
                       ("dev/counts.py --check",
-                       [sys.executable, "dev/counts.py", "--check"])):
+                       [sys.executable, "dev/counts.py", "--check"]),
+                      # Belt and braces: the recapture above already ran on a
+                      # fresh cut, but a cut being *finished* by a second run
+                      # bumped in the first one, and this is the only thing
+                      # that would notice a hand-edited version since.
+                      ("dev/shot.py --check",
+                       [sys.executable, "dev/shot.py", "--check"])):
         print(f"running {what}")
         if args.dry_run:
             print(f"  would run: {' '.join(cmd[1:])}")
@@ -220,7 +245,8 @@ def main():
             # is the whole of what can still be withheld, and it is the part
             # that matters: a tag that never left this machine can be deleted.
             if not finishing:
-                run(["git", "checkout", "--", "faultone.py", "REFERENCE.md"])
+                run(["git", "checkout", "--", "faultone.py", "REFERENCE.md",
+                     "docs/export.png", "docs/export.json"])
             said = (proc.stderr.strip() or proc.stdout.strip())[-3000:]
             sys.exit(f"{what} failed"
                      + ("" if finishing else " - the bump has been reverted")

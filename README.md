@@ -129,6 +129,13 @@ paper properly, and opens from the keyboard. `.json` is the data on its own,
 which is what `--baseline` reads on the next visit and what you paste through
 a terminal.
 
+![The HTML export of a report naming an inbound fault: the verdict and its owner across the top, the three boxes reading clients FAULT with this box and what it connects out to both OK, and below them one column per side carrying the leg out, the leg back and the hops on that side.](docs/export.png)
+
+That is the page `--export` writes, at the top of a real run from the example
+corpus. It is a photograph rather than a drawing, so unlike the hero above it
+could go stale: `dev/shot.py` records the template hash and the version it
+captured, and the suite fails when either moves without a recapture.
+
 Every other flag applies to all three. A run aimed somewhere specific exports
 exactly like any other:
 
@@ -401,7 +408,7 @@ separate programs, never linked or copied in.
 Anyone can write checks. The claim worth making is that the checks are
 themselves checked, and these are the numbers behind it:
 
-- **1999 tests**, and a test that fails if any of them asserts nothing at all.
+- **2000 tests**, and a test that fails if any of them asserts nothing at all.
 - **416 mutations**, each one breaking a rule on purpose. Every one has to make
   a test fail; a mutation that survives means the rule is not really covered,
   and it is treated as a defect in the suite rather than a curiosity.
@@ -423,7 +430,7 @@ vocabularies above are for.
 - **[REFERENCE.md](REFERENCE.md)**: every check explained, and why it's worth checking
 - `faultone.py`: the whole tool
 - `static/index.html`: the report viewer, for your machine rather than theirs (regenerate with `--emit-viewer`)
-- `test_faultone.py`: `python3 test_faultone.py`, 1999 tests, no dependencies
+- `test_faultone.py`: `python3 test_faultone.py`, 2000 tests, no dependencies
 - `dev/` holds the release harnesses, not part of the tool: every finding through the whole pipeline, and a diff of every scenario against a previous version
 
 Every report records the version that produced it, so a page opened months

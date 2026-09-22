@@ -18722,6 +18722,29 @@ class TestDocsMatchReality(unittest.TestCase):
                 "docs/hero-%s.svg is stale - the report changed since it was "
                 "drawn. Re-run: python3 dev/hero.py" % theme)
 
+    def test_the_committed_screenshot_is_a_picture_of_this_tree(self):
+        """The hero above is drawn, so it cannot go stale. The export
+        screenshot is a photograph and can: the page it shows is built from
+        `VIEWER_TEMPLATE`, and the banner in it prints the version.
+
+        Neither is checkable from the pixels, so `dev/shot.py` writes down
+        what it captured and this asserts the note still describes the tree.
+        The comparison lives in that file rather than here, so `--check` and
+        this test cannot drift apart by both being written carefully.
+        """
+        import os
+        import sys
+        root = os.path.dirname(os.path.abspath(nd.__file__))
+        sys.path.insert(0, os.path.join(root, "dev"))
+        try:
+            import shot
+        except ImportError:
+            self.skipTest("dev/shot.py is not present")
+        if not os.path.exists(shot.SIDECAR):
+            self.skipTest("no screenshot committed yet")
+        is_stale, why = shot.stale()
+        self.assertFalse(is_stale, "%s - recapture with: python3 dev/shot.py" % why)
+
     def test_every_verdict_line_the_readme_shows_is_one_the_tool_prints(self):
         """A worked example is only worth showing if it is what comes out. The
         labels and their order both matter: the second example had the

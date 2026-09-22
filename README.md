@@ -7,6 +7,10 @@
 
 **203 findings it can reach. One line saying which one to fix first.**
 
+**[Read nine of its reports in your browser.](https://zachzama.github.io/FaultOne/)**
+No install, no broken box required - each one is a different fault, and the
+headline is the tool's answer to which one to fix first.
+
 ```bash
 python3 faultone.py --report                    # what's wrong, in this terminal
 python3 faultone.py --report --quick            # the essentials, ~2s
@@ -79,10 +83,9 @@ peer it picked and why. [How that choice is made.](REFERENCE.md#which-destinatio
 
 One Python file. Nothing to install, nothing left behind, no port opened.
 
-**[Read nine of its reports without installing anything.](https://zachzama.github.io/FaultOne/)**
-Each one is a different fault, and the headline is the tool's answer to which
-one to fix first. They are built from the test corpus and rebuilt on every
-release, so they are the current output rather than a picture of an old one.
+The [example reports](https://zachzama.github.io/FaultOne/) linked at the top
+are built from the test corpus and rebuilt on every release, so they are the
+current output rather than a picture of an old one.
 
 ## Use it
 

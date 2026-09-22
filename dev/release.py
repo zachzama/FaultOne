@@ -219,6 +219,30 @@ def main():
             for line in shot.stdout.splitlines():
                 print("  " + line)
 
+        # And the numbers the documents quote, because the bump moves one of
+        # them. `stripped_kb` is the gzip of the file with comments dropped,
+        # so changing one digit of the version can push it over a rounding
+        # boundary - 1.27.0 to 1.28.0 took it from 231 to 230. The gate then
+        # failed on a number the gate itself had just changed, and reverted a
+        # release that was otherwise perfectly good.
+        #
+        # Fixed here rather than by loosening the check: the check is right,
+        # and a release is exactly the moment those numbers should be made
+        # true. `--check` still runs below, on the result.
+        print("bringing the quoted numbers up to date")
+        if args.dry_run:
+            print("  would run: python3 dev/counts.py")
+        else:
+            counted = subprocess.run([sys.executable, os.path.join("dev", "counts.py")],
+                                     cwd=ROOT, capture_output=True, text=True)
+            if counted.returncode != 0:
+                bump(old, args.version)
+                sys.exit("could not update the quoted numbers - the bump has "
+                         "been reverted:\n" + (counted.stderr or counted.stdout))
+            for line in counted.stdout.splitlines():
+                if "->" in line or "rewrote" in line:
+                    print("  " + line.strip())
+
     # Before the commit, not after. A release that fails its own checks should
     # never reach a tag, and a tag is the one thing here that must not move.
     #
@@ -254,8 +278,17 @@ def main():
             # commit and the tag are already made. Stopping short of the push
             # is the whole of what can still be withheld, and it is the part
             # that matters: a tag that never left this machine can be deleted.
+            # Everything the steps above write, or the revert leaves a dirty
+            # tree - and this script refuses to cut on one, so a failed
+            # release would block its own retry until someone worked out by
+            # hand what had been touched. The hero pair was missing from this
+            # list from the beginning and only showed up the first time a
+            # check failed *after* the redraw.
             if not finishing:
-                run(["git", "checkout", "--", "faultone.py", "REFERENCE.md",
+                run(["git", "checkout", "--",
+                     "faultone.py", "REFERENCE.md", "README.md",
+                     "test_faultone.py",
+                     "docs/hero-dark.svg", "docs/hero-light.svg",
                      "docs/export.png", "docs/export.json"])
             said = (proc.stderr.strip() or proc.stdout.strip())[-3000:]
             sys.exit(f"{what} failed"

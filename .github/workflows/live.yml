@@ -1,0 +1,45 @@
+name: live site
+
+# Is the published example site still being served?
+#
+# `pages.yml` proves the pages are correct when they are built. This asks the
+# different question - whether they are still there - because the ways that
+# stops being true are not build failures: a repository setting changed, Pages
+# switched off, a rename that left the index pointing at files that are gone.
+# The build cannot notice any of them, having already succeeded.
+#
+# The README links to that site from its second line, so a dead link there is
+# the first thing a reader meets.
+
+on:
+  schedule:
+    # Weekly, Mondays. Deliberately not on the hour: scheduled runs bunch up
+    # at :00 across all of GitHub and get queued behind the crowd.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+# Not triggered by the Pages deploy finishing. Pages serves through a CDN, and
+# a check run seconds after a successful deploy can read the previous copy or
+# nothing at all - a failure for a reason that is not a fault, which is the
+# fastest way to teach somebody to ignore a red run.
+
+permissions:
+  contents: read
+
+jobs:
+  serving:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by commit, not by tag, for the reason spelled out in tests.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Reads the index the site is serving and follows the links out of it,
+      # rather than checking a list written here. A hand-written list is a
+      # list of the pages that existed the day it was written, and the two
+      # disagreeing is the failure this exists to catch.
+      - name: Is the site answering, with reports in it
+        run: python3 dev/live.py

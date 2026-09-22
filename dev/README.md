@@ -261,6 +261,35 @@ reason it redraws the hero.
 Needs Chrome, which is why it is here and not in a harness: the tool has no
 dependencies and the suite has none either.
 
+## `live.py`: is the published site still being served?
+
+```bash
+python3 dev/live.py                # check the published site
+python3 dev/live.py --base URL     # or somewhere else
+```
+
+Everything else here checks the site is **correct when built**. This asks
+whether it is **still there**, which fails in ways a build cannot see: a
+setting changed, Pages switched off, a rename that left the index pointing at
+files that are gone. Run weekly from `.github/workflows/live.yml`.
+
+This is the gap the resume card sat in for nine releases - a claim about the
+world that nothing re-read.
+
+**It follows the index rather than a list**, because a list written here would
+be a list of the pages that existed the day it was written, and those two
+disagreeing is the failure worth catching.
+
+Two markers, because there are two ways to serve something that is not a
+report. One says the response is the viewer at all rather than a Pages 404.
+The other tells a report apart from the **empty viewer** - `static/index.html`
+is the same template with nothing in its island, and serving that by accident
+answers 200 and looks right. Both were checked against a known-different case
+rather than assumed: `headline` is in the empty viewer *twice* because the
+rendering code mentions it, and the verdict label is lowercase in the file
+because the capitals come from `text-transform`. Matching what the screenshot
+showed found nothing on all nine pages.
+
 ## `slowest.py`: where does the suite spend its time?
 
 ```bash

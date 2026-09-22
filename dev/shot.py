@@ -56,6 +56,12 @@ DEMO = "faultone-demo-1-inbound-loss.html"
 WIDTH, HEIGHT = 1400, 940
 SCALE = 2
 
+#: GitHub's social preview - the card shown wherever the repository link is
+#: pasted - is cropped to 2:1. The README shot is 1.49:1, so uploading that one
+#: loses a third of its height through the middle of the three boxes. This is
+#: the same page at the right proportions instead of a crop of the wrong ones.
+SOCIAL = (1280, 640)
+
 #: Where Chrome lives on the two platforms this has been run on. Looked up
 #: rather than configured, and it says what it could not find if it fails.
 CANDIDATES = [
@@ -117,6 +123,40 @@ def stale():
     return False, "the committed screenshot matches this tree"
 
 
+def capture_social(dest):
+    """The 2:1 card, written wherever you ask rather than into the repository.
+
+    Deliberately not committed and deliberately not guarded. It is uploaded
+    once to a settings page and is never served from here, so a copy in the
+    tree would be an image nothing reads and nothing checks - which is the
+    exact thing docs/export.json exists to prevent. Regenerate and re-upload
+    if the report's layout ever changes.
+    """
+    exe = chrome()
+    out = tempfile.mkdtemp(prefix="faultone-social-")
+    try:
+        built = subprocess.run([sys.executable, os.path.join("dev", "demos.py"), out],
+                               cwd=ROOT, capture_output=True, text=True)
+        if built.returncode != 0:
+            sys.exit("dev/demos.py would not build the pages:\n" +
+                     (built.stderr or built.stdout))
+        subprocess.run([
+            exe, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+            "--force-device-scale-factor=%d" % SCALE,
+            "--window-size=%d,%d" % SOCIAL,
+            "--screenshot=%s" % dest, "file://" + os.path.join(out, DEMO),
+        ], capture_output=True, text=True)
+        if not os.path.exists(dest) or os.path.getsize(dest) < 10000:
+            sys.exit("Chrome did not write a usable image")
+        size = os.path.getsize(dest)
+        print("wrote %s (%dx%d, %d KB)"
+              % (dest, SOCIAL[0] * SCALE, SOCIAL[1] * SCALE, size // 1024))
+        if size > 1024 * 1024:
+            print("  warning: over GitHub's 1 MB limit for a social preview")
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
 def capture():
     exe = chrome()
     out = tempfile.mkdtemp(prefix="faultone-shot-")
@@ -154,7 +194,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true",
                     help="exit non-zero if the committed screenshot is stale")
+    ap.add_argument("--social", metavar="PATH", nargs="?",
+                    const=os.path.expanduser("~/Desktop/faultone-social-preview.png"),
+                    help="write the 2:1 card for GitHub's social preview "
+                         "(default: to your Desktop) and exit")
     args = ap.parse_args()
+    if args.social:
+        capture_social(args.social)
+        return 0
     if args.check:
         bad, why = stale()
         print(why)

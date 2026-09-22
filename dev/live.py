@@ -21,10 +21,11 @@ the failure worth catching is exactly the one where those two disagree. So it
 reads the index the site is serving, takes the links out of it, and fetches
 every one.
 
-Run on a schedule from `.github/workflows/live.yml`. Not wired to the deploy:
-Pages serves through a CDN and a check run seconds after a successful deploy
-can read the previous copy, or nothing at all, which would fail for a reason
-that is not a fault.
+**Run by hand, after changing the demo pages.** There was a weekly workflow
+doing this and it was the wrong shape: a recurring check guards against
+change, and nothing here changes any more. What it bought was a red run
+whenever somebody else's CDN hiccuped, on a repository whose whole job is the
+impression it makes.
 """
 
 import argparse

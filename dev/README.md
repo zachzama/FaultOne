@@ -271,7 +271,8 @@ python3 dev/live.py --base URL     # or somewhere else
 Everything else here checks the site is **correct when built**. This asks
 whether it is **still there**, which fails in ways a build cannot see: a
 setting changed, Pages switched off, a rename that left the index pointing at
-files that are gone. Run weekly from `.github/workflows/live.yml`.
+files that are gone. Run by hand after changing the demo pages - see the note
+under `counts.py --card` for why this is not on a schedule.
 
 This is the gap the resume card sat in for nine releases - a claim about the
 world that nothing re-read.
@@ -420,9 +421,14 @@ card is wrong, which is the part nobody was doing. The floor is compared
 against what this README promises rather than derived a second way, and
 `--card-url` points it at a copy so a resume edit can be checked before it is
 pushed - and so this check can be aimed at a deliberately wrong page, which is
-the only way to know it fails when it should. Run weekly from
-`.github/workflows/live.yml` beside `live.py`: both are claims about the world
-that nothing re-read.
+the only way to know it fails when it should.
+
+**Run by hand, not on a schedule.** There was a weekly workflow for this and
+`live.py`, and it was wrong: a recurring check guards against change, and the
+tool is finished, the resume is static and neither is being promoted. What it
+bought was a red run and an email every time somebody else's CDN hiccuped,
+on a repository whose whole job is the impression it makes. Run these two
+after editing the card or the demo pages, and not otherwise.
 
 `--kinds` answers the question the finding list cannot: **what have we not
 got.** Every ranked rule carries an ITU-T X.733 event type and probable cause,

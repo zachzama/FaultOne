@@ -1,0 +1,22 @@
+[
+ {
+  "label": "loopback SYN_SENT is called network filtering again",
+  "old": "                          if worst and _is_loopback(worst) else",
+  "new": "                          if False else"
+ },
+ {
+  "label": "a total that rounds to zero still gives out shares",
+  "old": "    if total_ms and total_ms >= 1 and len(timed) >= 2 and bar_cells >= 8:",
+  "new": "    if total_ms and len(timed) >= 2 and bar_cells >= 8:"
+ },
+ {
+  "label": "the off-route flag is never set",
+  "old": "    raw[\"path_off_route\"] = True",
+  "new": "    raw[\"path_off_route\"] = False"
+ },
+ {
+  "label": "a path the traffic does not take can be the answer again",
+  "old": "        if (code in PATH_DERIVED and ((raw or {}).get(\"path_off_route\") or aimed_nowhere)",
+  "new": "        if (False and code in PATH_DERIVED and ((raw or {}).get(\"path_off_route\") or aimed_nowhere)"
+ }
+]

@@ -13,3 +13,9 @@ dev/_branch_sweep_*/
 .coverage
 htmlcov/
 dev/notes-*.md
+
+# Exported reports, which must never be committed - but the pattern above
+# swallowed dev/mutations/from-a-real-report.json, a mutation set named
+# after the report it came from. Four mutations existed on one machine
+# only, and the repository claimed 416 while a clone had 412.
+!dev/mutations/*.json

@@ -7,28 +7,37 @@ not in the code and would otherwise have to be rediscovered.
 Everything here is checkable from the repository. Where a number is quoted,
 the command that produces it is next to it.
 
-## Start here (as of v1.24.0 plus the 2026-08-19 batches)
+**If you have arrived here from outside the project:** this is the working log,
+and it is kept on purpose. A decision's reasoning is worth more than its
+outcome, and neither one survives in a diff. So what is written down here is
+the next thing worth doing, the thing that was declined and the reason it was
+declined, and the occasional measurement that came back different the second
+time it was taken.
 
-Suite green at **1,839**, tree clean, `dev/counts.py --check` says nothing is
-stale, everything pushed. No release cut on top of v1.24.0 - the work since is
-tests and four behaviour fixes, one of which changes what a report says on a
-live box, so tag it whenever you like.
+None of it is a defect list against the released tool. The release gate runs
+the suite and three more harnesses before a tag can exist, and it reverts its
+own version bump if any of them fails - a release that cannot pass its own
+checks never reaches a tag. A project this size either keeps a document like
+this one or has the same argument twice.
 
-**Two things happened on 2026-08-20 that are worth reading before anything
-else.** A batch of test work went out and **broke CI on 3.7 twice**, both times
-from the same test taking a function's source extent: first `end_lineno`
-(3.8+), then the decorator `lineno` convention that a commit message claimed to
-have handled. Green here, red on the floor, eight minutes each way. The lesson
-is in `TestWhatCountsAsOneOfTheCables` now - the difference is one line number
-and it is reproducible without the interpreter, so it is asserted rather than
-hoped for. And **`gh run watch --exit-status` exited 0 on a red run**: it
-followed a job rather than the run. Poll
-`gh run view <id> --json status,conclusion` and read the *run's* conclusion.
+## Start here (as of v1.27.0, 2026-09-21)
 
-**Next decision waiting, written up below: the Python floor moves to 3.9.**
-Not implemented - the reasoning and the work list are in "Decided, not yet
-done". It has a date on it: the ubuntu-22.04 runner the 3.7 job needs begins
-deprecation on 2026-09-17.
+Suite green at **1,999**, tree clean, `dev/counts.py --check` says nothing is
+stale, everything pushed. The floor decision below is **done**: the minimum is
+Python 3.9, in the code, the documentation and the CI matrix.
+
+**One lesson from 2026-08-20 that outlived its occasion.** A batch of test work
+went out and broke CI on the floor twice, both times from the same test taking
+a function's source extent: first `end_lineno`, then the decorator `lineno`
+convention that a commit message claimed to have handled. Green here, red on
+the floor, eight minutes each way. The lesson is in
+`TestWhatCountsAsOneOfTheCables` now - the difference is one line number and it
+is reproducible without the interpreter, so it is asserted rather than hoped
+for. The 3.7 specifics are history since the floor moved; the shape is not.
+
+And **`gh run watch --exit-status` exited 0 on a red run**: it followed a job
+rather than the run. Poll `gh run view <id> --json status,conclusion` and read
+the *run's* conclusion. That one still bites.
 
 The work in flight is one long thread: **asking whether the suite's tests do
 anything**, and it has produced five patterns that make the rest of it fast.
@@ -53,8 +62,8 @@ times.
 
 **Next, in the order I would take it:**
 
-- **The Python floor**, which is the only thing here with a deadline. See
-  "Decided, not yet done" below; the work is an afternoon and mostly prose.
+- ~~**The Python floor**, the only thing here that had a deadline.~~ Done, and
+  written up under "Done: the floor is Python 3.9" below.
 - **The empty-only sweep, continued.** Batches ten to twenty-two: **81
   mutations, 31 holes, 5 equivalent mutants**, in `negatives-batch-ten`
   through `-twentytwo.json`. Seventy-seven tests moved from unexamined to

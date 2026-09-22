@@ -400,10 +400,29 @@ find out a release was one finding further along.
 ```bash
 python3 dev/counts.py            # rewrite them
 python3 dev/counts.py --check    # say what is stale, change nothing
+python3 dev/counts.py --card     # does the live resume still agree?
+python3 dev/counts.py --card --card-url=URL    # ...or a copy of it
 python3 dev/counts.py --self-test
 python3 dev/counts.py --kinds    # the X.733 coverage table
 python3 dev/counts.py --kinds --deep    # ...and how many can be the answer
 ```
+
+`--card` is the only part of this that reaches outside the repository, and it
+exists because `--check` cannot. The resume's FaultOne card quotes the
+collector count, findings, tests, mutations and the Python floor, and it lives
+in `zachzama/zachzama.github.io`. That put it beyond every guard here: it fell
+**nine releases** behind once, and then drifted again inside a single
+afternoon - pushed saying 1,999 tests and made wrong an hour later by a test
+that took the total to 2,000.
+
+It is **read-only**, because the card is not here to fix. It can only say the
+card is wrong, which is the part nobody was doing. The floor is compared
+against what this README promises rather than derived a second way, and
+`--card-url` points it at a copy so a resume edit can be checked before it is
+pushed - and so this check can be aimed at a deliberately wrong page, which is
+the only way to know it fails when it should. Run weekly from
+`.github/workflows/live.yml` beside `live.py`: both are claims about the world
+that nothing re-read.
 
 `--kinds` answers the question the finding list cannot: **what have we not
 got.** Every ranked rule carries an ITU-T X.733 event type and probable cause,

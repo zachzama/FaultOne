@@ -43,3 +43,15 @@ jobs:
       # disagreeing is the failure this exists to catch.
       - name: Is the site answering, with reports in it
         run: python3 dev/live.py
+
+      # The other claim about the world that nothing re-read. The resume's
+      # FaultOne card quotes findings, tests, mutations, the collector count
+      # and the Python floor, and it lives in another repository where
+      # `counts.py --check` cannot reach it. It fell nine releases behind
+      # once, then drifted again within a single afternoon.
+      #
+      # `if: always()` so one of these failing still reports the other. They
+      # are independent facts and finding out about both at once is the point.
+      - name: Does the resume still agree with this repository
+        if: always()
+        run: python3 dev/counts.py --card

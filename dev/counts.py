@@ -78,6 +78,10 @@ def measured():
             r"^\| `[A-Z_0-9]+` \|",
             io.open(os.path.join(REPO, "REFERENCE.md"), encoding="utf-8").read(),
             re.M)),
+        # Not quoted anywhere in this repository, and here for `--card`: the
+        # resume calls it "sources of host state", and the registry is what
+        # that number has to come from rather than a count somebody did once.
+        "collectors": len(nd.COLLECTORS),
         "disk_kb": round(len(raw) / 1024),
         "gz_kb": round(len(gzip.compress(raw, 9)) / 1024),
         "stripped_kb": round(len(gzip.compress(stripped, 9)) / 1024),
@@ -198,10 +202,98 @@ def kinds(deep=False):
     return 0
 
 
+#: The live resume, and the numbers its FaultOne card quotes. This is the one
+#: place these figures drift with nothing watching: everything else that
+#: repeats them is in this repository, where `--check` gates it, and this card
+#: is in another one. It fell nine releases behind that way, and then drifted
+#: again inside a single afternoon - pushed saying 1,999 tests, made wrong an
+#: hour later by a test that took the total to 2,000.
+#:
+#: Read-only on purpose. This cannot fix the card, because the card is not
+#: here; it can only say the card is wrong, which is the part nobody was doing.
+CARD_URL = "https://zachzama.github.io/"
+CARD_CLAIMS = [
+    (r"reads (\d[\d,]*) sources of host state", "collectors"),
+    (r"ranks (\d[\d,]*) findings", "findings"),
+    (r"verified with (\d[\d,]*) tests", "tests"),
+    (r"(\d[\d,]*) seeded mutations", "mutations"),
+]
+
+#: The floor is prose rather than a counted thing, so it is compared against
+#: what this repository's own README promises rather than derived twice.
+CARD_FLOOR = r"Runs in CI on Python (3\.\d+)"
+README_FLOOR = r"\*\*Python (3\.\d+) or newer"
+
+
+def card(want, url=CARD_URL):
+    """Does the live resume still agree with this repository?
+
+    `url` is overridable with `--card-url=...` so a resume edit can be checked
+    before it is pushed, and so this check can be pointed at a deliberately
+    wrong copy - which is the only way to know it fails when it should.
+    """
+    import urllib.request
+    print("reading %s" % url)
+    try:
+        req = urllib.request.Request(url,
+                                     headers={"User-Agent": "faultone-counts"})
+        page = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    except Exception as e:                                  # noqa: BLE001
+        print("  could not read it: %s" % e)
+        return 1
+    if "FaultOne" not in page:
+        print("  the page loaded and has no FaultOne card on it at all")
+        return 1
+
+    wrong = []
+    for pattern, key in CARD_CLAIMS:
+        m = re.search(pattern, page)
+        if not m:
+            wrong.append("%-12s the card no longer makes this claim - pattern "
+                         "%r found nothing" % (key, pattern))
+            print("  %-12s NOT FOUND" % key)
+            continue
+        said = int(m.group(1).replace(",", ""))
+        if said != want[key]:
+            wrong.append("%-12s card says %s, the code says %s"
+                         % (key, said, want[key]))
+            print("  %-12s %s != %s" % (key, said, want[key]))
+        else:
+            print("  %-12s %s" % (key, said))
+
+    # The floor, against what this repository promises rather than a constant.
+    readme = io.open(os.path.join(REPO, "README.md"), encoding="utf-8").read()
+    promised = re.search(README_FLOOR, readme)
+    claimed = re.search(CARD_FLOOR, page)
+    if not promised:
+        wrong.append("floor        the README no longer states one, so there "
+                     "is nothing to compare the card against")
+    elif not claimed:
+        wrong.append("floor        the card no longer states a Python range")
+    elif promised.group(1) != claimed.group(1):
+        wrong.append("floor        card says Python %s, the README promises %s"
+                     % (claimed.group(1), promised.group(1)))
+        print("  %-12s %s != %s" % ("floor", claimed.group(1), promised.group(1)))
+    else:
+        print("  %-12s %s" % ("floor", claimed.group(1)))
+
+    if wrong:
+        print("\n" + "\n".join("  - " + w for w in wrong))
+        print("\n%d claim(s) on the live resume disagree with this repository."
+              "\nThe card is in zachzama/zachzama.github.io and has to be "
+              "edited there." % len(wrong))
+        return 1
+    print("\nok: every number on the card matches this repository")
+    return 0
+
+
 def main(argv=None):
     args = ARGS if argv is None else argv
     if "--kinds" in args:
         return kinds(deep="--deep" in args)
+    if "--card" in args:
+        chosen = [a.split("=", 1)[1] for a in args if a.startswith("--card-url=")]
+        return card(measured(), chosen[0] if chosen else CARD_URL)
     check = "--check" in args
     want = measured()
     print("  ".join("%s=%s" % (k, v) for k, v in sorted(want.items())))

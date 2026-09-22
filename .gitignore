@@ -12,3 +12,4 @@ demo-failing-site.html
 dev/_branch_sweep_*/
 .coverage
 htmlcov/
+dev/notes-*.md

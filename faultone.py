@@ -1618,7 +1618,7 @@ def cmd_lldp():
             continue
         neighbours = parse_lldp_keyvalue(res.get("stdout", ""))
         if neighbours:
-            res["neighbours"] = neighbours
+            res["neighbors"] = neighbours
             rows = []
             for n in neighbours:
                 rows.append(f"{n['iface']:<10} {n.get('switch', '?'):<24} "
@@ -6939,7 +6939,7 @@ PANEL_HELP = {
                 "Catches loss that ICMP probes miss, with nothing captured.",
     },
     "inventory": {
-        "label": "neighbours", "layer": 2,
+        "label": "neighbors", "layer": 2,
         "desc": "Devices this box has already exchanged traffic with, from its own neighbor "
                 "table. Nothing is scanned or probed, so it says what this device has talked "
                 "to rather than what exists on the segment. Names come from reverse DNS.",
@@ -11077,6 +11077,29 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+#: The key this list ships under. It was "neighbours" up to 1.28.0 and is
+#: "neighbors" from 1.29.0, to match the word the report prints, RFC 4861 and
+#: `ip neigh`.
+NEIGHBORS_KEY = "neighbors"
+NEIGHBORS_KEY_LEGACY = "neighbours"
+
+
+def _neighbors(report):
+    """The neighbor list out of a report, whichever key it was written with.
+
+    `--baseline` reads a file somebody exported earlier, and an export written
+    before 1.29.0 carries the old key. Renaming the field without reading both
+    would not raise anything - the comparison would simply find no neighbors on
+    one side and report every port as changed, which is worse than a crash
+    because it looks like an answer.
+    """
+    d = _dict(report)
+    got = d.get(NEIGHBORS_KEY)
+    if got is None:
+        got = d.get(NEIGHBORS_KEY_LEGACY)
+    return got or []
+
+
 # States the kernel reports for an interface. "unknown" is the awkward one and
 # has to count as up: loopback, tun devices and several virtual drivers never
 # call the operstate machinery at all, so they sit at "unknown" while working
@@ -11169,7 +11192,7 @@ def compare_reports(current, baseline):
     # Switch port / VLAN: a device that moved, or a re-patched port, explains a
     # great deal on its own.
     def nb_map(rep):
-        return {n["iface"]: n for n in (_dict(rep).get("neighbours") or [])
+        return {n["iface"]: n for n in _neighbors(rep)
                 if isinstance(n, dict) and n.get("iface")}
     cur_nb, base_nb = nb_map(current), nb_map(baseline)
     for iface in sorted(set(cur_nb) | set(base_nb)):
@@ -14223,7 +14246,7 @@ def _check_neighbours_and_optics(raw, findings):
     neighbours = []
     if lldp:
         raw["lldp"] = lldp
-        neighbours = lldp["neighbours"]
+        neighbours = lldp["neighbors"]
         for n in neighbours:
             where = ", ".join(filter(None, [
                 f"switch {n['switch']}" if n.get("switch") else None,
@@ -18929,7 +18952,7 @@ def _check_against_the_last_visit(raw, findings, gw, arp_entries, baseline,
                        f"--baseline to see the address change hands.",
         })
     comparison = compare_reports({"detected_gateway": gw, "path_source": path_source,
-                                  "neighbours": neighbours, "raw": raw, "hops": hops,
+                                  "neighbors": neighbours, "raw": raw, "hops": hops,
                                   "call_quality": call_quality,
                                   # Without this the comparison could not tell
                                   # whether both visits measured the same
@@ -19356,7 +19379,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
         # The hops out to a destination this box actually uses. Where there
         # are none, the reference probe below stands in for the way out.
         "call_quality": call_quality,
-        "neighbours": neighbours,
+        "neighbors": neighbours,
         "inventory": inventory_data,
         # Shipped with the report so an exported JSON stays self-describing:
         # index.html can label layer badges without knowing this table itself.
@@ -21346,7 +21369,7 @@ def _render_neighbours(report, out, tint, width):
     # (tint and width unused here.) Every section renderer takes the same four
     # arguments so the list of them below reads as one thing and a section
     # can be reordered without checking what each one happens to need.
-    neighbours = report.get("neighbours") or []
+    neighbours = _neighbors(report)
     if neighbours:
         out.append("")
         out.append("SWITCH PORT (LLDP/CDP)")

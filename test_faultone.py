@@ -975,7 +975,7 @@ class TestStageStrip(unittest.TestCase):
 class TestBaselineComparison(unittest.TestCase):
     def report(self, **kw):
         base = {"detected_gateway": "192.168.1.1", "path_source": "traceroute",
-                "neighbours": [{"iface": "eth0", "switch": "SW-1", "port": "Gi1/0/1", "vlan": "10"}],
+                "neighbors": [{"iface": "eth0", "switch": "SW-1", "port": "Gi1/0/1", "vlan": "10"}],
                 "hops": [{"hop": 1}], "demarc_hop": 2, "call_quality": {"mos": 4.4},
                 "raw": {"link_modes": {"interfaces": [
                             {"name": "eth0", "speed_mbps": 1000, "duplex": "full", "mtu": 1500}]},
@@ -992,8 +992,35 @@ class TestBaselineComparison(unittest.TestCase):
     def test_identical_reports_show_no_changes(self):
         self.assertEqual(nd.compare_reports(self.report(), self.report()), [])
 
+    def test_a_baseline_written_before_the_key_was_renamed_still_compares(self):
+        """`--baseline` reads a file somebody exported earlier, and exports
+        written before 1.29.0 carry "neighbours". Reading only the new key
+        would not raise: the comparison would find nothing on the old side and
+        call every port changed, which is worse than a crash because it looks
+        like an answer."""
+        legacy = self.report()
+        legacy["neighbours"] = legacy.pop("neighbors")
+        self.assertNotIn("neighbors", legacy)
+
+        # same data, old key: nothing moved
+        self.assertEqual(nd.compare_reports(self.report(), legacy), [])
+
+        # and a real move is still seen across the rename
+        moved = self.report(neighbors=[{"iface": "eth0", "switch": "SW-1",
+                                        "port": "Gi1/0/24", "vlan": "10"}])
+        c = self.find(nd.compare_reports(moved, legacy), "eth0 switch port")
+        self.assertIsNotNone(c, "a port move went unseen against a legacy baseline")
+        self.assertEqual((c["before"], c["after"]), ("Gi1/0/1", "Gi1/0/24"))
+
+    def test_the_current_key_wins_when_a_report_somehow_carries_both(self):
+        """Belt and braces on the precedence: a hand-edited or half-migrated
+        file should be read as the new key says, not the old one."""
+        both = self.report()
+        both["neighbours"] = [{"iface": "eth0", "switch": "SW-9", "port": "Gi9/9/9"}]
+        self.assertEqual(nd._neighbors(both)[0]["port"], "Gi1/0/1")
+
     def test_device_moved_to_a_different_port(self):
-        cur = self.report(neighbours=[{"iface": "eth0", "switch": "SW-1",
+        cur = self.report(neighbors=[{"iface": "eth0", "switch": "SW-1",
                                        "port": "Gi1/0/24", "vlan": "10"}])
         c = self.find(nd.compare_reports(cur, self.report()), "eth0 switch port")
         self.assertEqual((c["before"], c["after"], c["direction"]), ("Gi1/0/1", "Gi1/0/24", "worse"))
@@ -6160,7 +6187,7 @@ class TestABaselineThatIsNotAReport(unittest.TestCase):
     was valid JSON with a foreign shape, which crashed the comparison half way
     through a run and lost the whole diagnosis over optional context."""
 
-    CURRENT = {"version": "1.6.4", "target": "8.8.8.8", "raw": {}, "neighbours": [],
+    CURRENT = {"version": "1.6.4", "target": "8.8.8.8", "raw": {}, "neighbors": [],
                "hops": [], "findings": [], "verdict": {}}
 
     def test_a_real_report_is_recognised(self):
@@ -6178,8 +6205,8 @@ class TestABaselineThatIsNotAReport(unittest.TestCase):
     def test_the_comparison_survives_a_foreign_shape_anyway(self):
         """Belt and braces: the guard above stops these reaching the
         comparison, and the comparison no longer breaks if one does."""
-        for base in ({"version": "1.0.0", "raw": None, "neighbours": None, "hops": None},
-                     {"version": "1.0.0", "raw": [], "neighbours": "nope", "hops": 42},
+        for base in ({"version": "1.0.0", "raw": None, "neighbors": None, "hops": None},
+                     {"version": "1.0.0", "raw": [], "neighbors": "nope", "hops": 42},
                      {}, {"hello": "world"}):
             with self.subTest(base=base):
                 nd.compare_reports(base, self.CURRENT)
@@ -6256,7 +6283,7 @@ class TestWhatRealToolsActuallyPrint(unittest.TestCase):
         m = fresh()
         m.cmd_optics = lambda i: {"ok": True, "cmd": "ethtool -m", "stdout": "", "parsed": {
             "identifier": "0x03 (SFP)", "alarms": [], "warnings": [], "rx_dark": True}}
-        m.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbours": [
+        m.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbors": [
             {"iface": "eth0", "switch": "SW-1", "port": "Gi1/0/1", "via": "LLDP"}]}
         rep = m.diagnose("8.8.8.8", None, quick=False)
         fired = [f for f in rep["findings"] if f["code"] == "optics_rx_low"]
@@ -16820,7 +16847,7 @@ class TestVerdict(unittest.TestCase):
     def test_flap_verdict_names_the_switch_port(self):
         m = fresh()
         counters(m, carrier_changes=2, d_carrier_changes=3)
-        m.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbours": [
+        m.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbors": [
             {"iface": "eth0", "switch": "SW-BR14-CLOSET-2", "port": "Gi1/0/24",
              "vlan": "180", "via": "LLDP"}]}
         rep = m.diagnose("8.8.8.8", None, quick=False, soak=1)
@@ -17986,15 +18013,15 @@ class TestVersioning(unittest.TestCase):
         nd.render_text_report({}, color=False, width=80)
 
     def test_a_baseline_from_another_version_is_reported(self):
-        current = {"version": "1.1.0", "raw": {}, "neighbours": [], "hops": []}
-        baseline = {"version": "1.0.0", "raw": {}, "neighbours": [], "hops": []}
+        current = {"version": "1.1.0", "raw": {}, "neighbors": [], "hops": []}
+        baseline = {"version": "1.0.0", "raw": {}, "neighbors": [], "hops": []}
         changes = nd.compare_reports(current, baseline)
         entry = next((c for c in changes if c["what"] == "faultone version"), None)
         self.assertIsNotNone(entry, "a version change explains differences that aren't the network")
         self.assertEqual((entry["before"], entry["after"]), ("1.0.0", "1.1.0"))
 
     def test_same_version_is_not_a_change(self):
-        same = {"version": "1.0.0", "raw": {}, "neighbours": [], "hops": []}
+        same = {"version": "1.0.0", "raw": {}, "neighbors": [], "hops": []}
         self.assertEqual([c for c in nd.compare_reports(same, dict(same))
                           if c["what"] == "faultone version"], [])
 
@@ -18160,8 +18187,8 @@ class TestDocsMatchReality(unittest.TestCase):
         readme = open(os.path.join(os.path.dirname(nd.__file__), "README.md"),
                       encoding="utf-8").read()
         claims = {
-            "on disk": (len(raw), 1119),
-            "compressed": (len(gzip.compress(raw, 9)), 339),
+            "on disk": (len(raw), 1120),
+            "compressed": (len(gzip.compress(raw, 9)), 340),
             "stripped and compressed": (len(gzip.compress(stripped, 9)), 231),
         }
         for label, (measured, quoted) in claims.items():
@@ -20783,8 +20810,8 @@ class TestPythonCompatibility(unittest.TestCase):
         self.assertEqual(platform.python_version().count("."), 2)
 
     def test_a_python_change_between_visits_is_reported(self):
-        current = {"python": "3.11.2", "raw": {}, "neighbours": [], "hops": []}
-        baseline = {"python": "3.9.6", "raw": {}, "neighbours": [], "hops": []}
+        current = {"python": "3.11.2", "raw": {}, "neighbors": [], "hops": []}
+        baseline = {"python": "3.9.6", "raw": {}, "neighbors": [], "hops": []}
         entry = next((c for c in nd.compare_reports(current, baseline)
                       if c["what"] == "python"), None)
         self.assertIsNotNone(entry, "a different interpreter can explain a difference")
@@ -23574,7 +23601,7 @@ class DiagnoseHarness(unittest.TestCase):
     def test_report_shape_is_stable(self):
         r = self.run_diagnose()
         for key in ("verdict", "stages", "comparison", "findings", "raw", "hops",
-                    "port_results", "layers", "panel_help", "call_quality", "neighbours",
+                    "port_results", "layers", "panel_help", "call_quality", "neighbors",
                     "lowest_broken_layer", "demarc_hop", "path_source", "generated_at"):
             self.assertIn(key, r, f"report lost the {key!r} field")
 
@@ -24863,7 +24890,7 @@ def _(nd): nd.cmd_optics = lambda i: {"ok": True, "cmd": "ethtool -m", "stdout":
     {"rx_dbm": -5.0, "tx_dbm": -2.0, "vendor": "V", "alarms": [], "warnings": ["Temp high warning"]}}
 
 @scenario("switch_port")
-def _(nd): nd.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbours": [
+def _(nd): nd.cmd_lldp = lambda: {"ok": True, "cmd": "lldpctl", "stdout": "", "neighbors": [
     {"iface": "eth0", "switch": "SW-1", "port": "Gi1/0/9", "vlan": "20", "via": "LLDP"}]}
 
 @scenario("duplicate_ip")
@@ -25081,10 +25108,10 @@ def _(nd): nd.cmd_tls_check = lambda h, p=443, timeout=5: {"ok": True, "cmd": "t
     "verify_error": "unable to get local issuer certificate", "tls_version": "TLSv1.2", "stdout": ""}
 
 @scenario("regression_since_baseline", baseline={"detected_gateway": "10.0.0.254", "raw": {},
-                                                 "neighbours": [], "hops": [], "version": "1.1.0"})
+                                                 "neighbors": [], "hops": [], "version": "1.1.0"})
 def _(nd): pass
 
-@scenario("baseline_changes", baseline={"detected_gateway": "10.0.0.1", "raw": {}, "neighbours": [],
+@scenario("baseline_changes", baseline={"detected_gateway": "10.0.0.1", "raw": {}, "neighbors": [],
                                         "hops": [], "version": "1.0.0"})
 def _(nd): pass
 

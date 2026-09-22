@@ -104,6 +104,38 @@ times.
 - **Phase C** (explicit ranking) then **B** (a contract for `raw`).
 - The résumé card, which the user has deprioritised repeatedly.
 
+### Apple's python caches bytecode somewhere else, and it bit an edit
+
+`python3` here is the Xcode one, and it does not write `__pycache__` next to
+the source. It writes to
+`~/Library/Caches/com.apple.python/<absolute path>/faultone.cpython-39.pyc`.
+Deleting `__pycache__` therefore clears nothing, because there never was one.
+
+The staleness check is the ordinary one: **source mtime in whole seconds, plus
+file size**. Both have to match for the cache to be reused. An edit that keeps
+the byte count and lands in the same second as the cached copy is served from
+the cache, and the interpreter runs the *old* code while the file on disk
+reads correctly.
+
+That is what happened swapping two lines inside `_neighbors` to check the
+tests noticed: the swap had the same length, the restore was in the same
+second, and three separate runs reported the same wrong answer. `dis` on the
+imported function disagreed with `inspect.getsource` on the same function,
+which is the signature to look for - and `compile(open(f).read())` gives the
+truth when they disagree.
+
+**Before believing any quick before/after on this machine:**
+
+```bash
+rm -rf ~/Library/Caches/com.apple.python"$PWD"
+```
+
+`dev/mutate.py` is **not** exposed. It reuses a worker tree, but a mutation
+that imports is always followed by a full suite run, so consecutive writes to
+one tree are a minute apart and the mtime always moves. A mutation that fails
+to import writes no cache at all. The window needs same second *and* same
+size, and nothing in that loop can produce one.
+
 ### The other half of the isolation, and the parsers nobody had fed
 
 Guarding the checks left the more exposed layer open. **`run()` cannot raise,

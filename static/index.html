@@ -1118,7 +1118,7 @@ function sourceTable(rows, target){
     : !failed.length
     ? 'every address this box holds can reach the target'
     : failed.length < rows.length - absent.length
-      ? failed.join(', ') + ' reaches nothing while its neighbours do'
+      ? failed.join(', ') + ' reaches nothing while its neighbors do'
       : 'no address on this box can reach the target, so this is the target rather than the addressing';
   return `<table class="srcs"><tr><th>address</th><th>interface</th>`
     + `<th>reaches ${escapeHtml(target || 'the target')}</th>`
@@ -1363,10 +1363,10 @@ function renderDiagnosis(data, opts){
       dns_health: 'dns resolvers',
       ports: 'listening ports',
       sockets: 'socket states',
-      inventory: 'neighbours (not a scan)',
+      inventory: 'neighbors (not a scan)',
       link_stats: 'interface error counters',
       tcp_health: 'tcp retransmissions',
-      arp: 'arp / neighbour table',
+      arp: 'arp / neighbor table',
       link_modes: 'link speed / duplex / mtu',
       path_mtu: 'path mtu probe',
       routes: 'routing table',
@@ -1416,9 +1416,9 @@ function setFavicon(state){
   // Read the colour from the stylesheet rather than repeating the hex here,
   // so the tab dot and the lamps can't drift apart.
   const css = getComputedStyle(document.documentElement);
-  const colour = (css.getPropertyValue(FAVICON_VAR[state] || '--text-dim') || '#6b7785').trim();
+  const color = (css.getPropertyValue(FAVICON_VAR[state] || '--text-dim') || '#6b7785').trim();
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">`
-            + `<circle cx="8" cy="8" r="6" fill="${colour}"/></svg>`;
+            + `<circle cx="8" cy="8" r="6" fill="${color}"/></svg>`;
   const link = document.getElementById('favicon');
   // encodeURIComponent also escapes the '#' of the colour, which would
   // otherwise truncate the data URI at the fragment.

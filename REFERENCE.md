@@ -156,12 +156,12 @@ else, will not reproduce from the next machine somebody tries, and outlives the
 upstream being fixed. That is the shape of "it works for me", and it is worth
 knowing before a resolver result is read as the network's answer.
 
-## Redundancy: what a neighbour table can and cannot show
+## Redundancy: what a neighbor table can and cannot show
 
 A gateway that is a **virtual address** belongs to a redundancy pair, and that
 reframes every finding about it, "the gateway is down" on a pair more often
 means a failover that did not complete than a router that stopped. The protocol
-and group are readable straight off the MAC the neighbour table already gave
+and group are readable straight off the MAC the neighbor table already gave
 us:
 
 | | |
@@ -179,7 +179,7 @@ last, symptoms moving with no pattern.
 
 **What this cannot see, and says so.** A same-group split brain: two masters,
 one VRID, is invisible here, because both use the *same* virtual MAC. That is
-what VRRP is for. The neighbour table shows one entry and there is nothing to
+what VRRP is for. The neighbor table shows one entry and there is nothing to
 detect, and a check that implied otherwise would be worse than no check. A
 first draft of this had a branch for it that could never execute.
 
@@ -368,7 +368,7 @@ above now states outright.
 
 It would have cost around eighteen columns on lines already running to ninety,
 plus scaling and width handling, to say something already said. The bar chart
-belongs where a reader must compare many values and no rule can summarise them;
+belongs where a reader must compare many values and no rule can summarize them;
 here a rule can.
 
 ## Which part of its own answer took the time
@@ -389,12 +389,12 @@ Context rather than a fault. What counts as slow depends entirely on what the
 service does, and a number picked here would be wrong for most of them: the
 same reasoning as the throughput split above.
 
-## Colour, for the terminal reader
+## Color, for the terminal reader
 
 `--report` is the primary way this is read. The viewer is optional, and on a
-locked-down box often unavailable. The colour vocabulary is deliberately small
+locked-down box often unavailable. The color vocabulary is deliberately small
 and means one thing throughout: **red is critical, amber is warning, green is
-fine.** It is switched off unless stdout is a real terminal, and honours
+fine.** It is switched off unless stdout is a real terminal, and honors
 `NO_COLOR`, because reports get pasted into tickets and piped into files where
 escape codes are noise. It is off on a `TERM=dumb` terminal too: a dumb
 terminal cannot interpret an escape sequence, so it prints it, and a report
@@ -424,10 +424,10 @@ An `ok`-severity note is not a reason to mark a row. Context like `tunnel_mtu`
 or `virtual_nic` carries a scope and leaves its row plain, because nothing about
 it is wrong.
 
-**"Needs hands on it" gets no colour of its own**, deliberately. Three colours
+**"Needs hands on it" gets no color of its own**, deliberately. Three colors
 that each mean a severity is a vocabulary a reader learns once; a fourth meaning
 something else entirely would dilute it. The words carry that distinction, and
-the colour keeps meaning severity everywhere it appears.
+the color keeps meaning severity everywhere it appears.
 
 ## A fix that needs hands is marked as one
 
@@ -933,7 +933,7 @@ justified. That is the safer direction to be wrong in, and still wrong.
 `link_` was looked at for the same reason and deliberately left alone. Errors,
 flapping and saturation are arguably three measurements of one cable or one
 check of it depending on how you count, and changing it would move the
-confidence of many verdicts on a judgement call rather than on a demonstrable
+confidence of many verdicts on a judgment call rather than on a demonstrable
 error.
 
 A test now asks the whole override table two things: that every key names a
@@ -958,10 +958,10 @@ because the pair can be crossed so this end transmits fine and hears nothing.
 
 **BSD does not zero-pad MAC addresses.** macOS prints `0:0:5e:0:1:1` where
 Linux prints `00:00:5e:00:01:01`. Same VRRP virtual router; only one of them
-was recognised as one. On a Mac the tool saw two routers arguing over an
+was recognized as one. On a Mac the tool saw two routers arguing over an
 address and reported a **duplicate IP** instead of the failover pair it was
 looking at, wrong owner, wrong advice, and no way to notice from the output.
-Addresses are now normalised at the single point they enter the table.
+Addresses are now normalized at the single point they enter the table.
 
 **Drivers have several ways of saying they don't know the link speed.** Modern
 tools print `Speed: Unknown!`, which no number regex matches. Older ethtool
@@ -1005,7 +1005,7 @@ append a switch port to advice that says not to go there.
 
 The dominant cause wins, so one burst produces one finding. Where a driver
 breaks nothing down (common on cheap hardware) it falls through to the link,
-which is both the old behaviour and the safest guess.
+which is both the old behavior and the safest guess.
 
 `nic_ring_overruns` shares a family with the softnet backlog findings. Both are
 this box failing to take delivery, counted at two depths, so neither is
@@ -1049,11 +1049,11 @@ All members down is *not* this finding. That is an interface with no carrier,
 and the link checks already say so in better words. Reporting both would blame
 the redundancy for a cable nobody has plugged in.
 
-## The ceiling on how many neighbours this box can have
+## The ceiling on how many neighbors this box can have
 
 The ARP table has a hard limit and no back pressure. Past `gc_thresh3` the
 kernel stops resolving addresses, so the box loses the ability to talk to
-*some* of its neighbours while everything that does not need one of them keeps
+*some* of its neighbors while everything that does not need one of them keeps
 working. The result is intermittent unreachability that follows no pattern and
 never reproduces on demand, a setting on this box presenting as the network.
 
@@ -1162,7 +1162,7 @@ sample minimum - and states: *"When the sample minimum coincides with the true
 minimum delay of the path, then the PDV distribution is equivalent to the
 queuing time distribution experienced by the test stream."* That is the claim
 `latency_high` and `latency_is_queuing` make, arrived at independently and
-standardised. It also endorses the shape: *"The one-sided PDV distribution can
+standardized. It also endorses the shape: *"The one-sided PDV distribution can
 be constrained with a single statistic, such as an upper percentile, so it is
 preferred"* - which is what `tail_of_*_slow` does.
 
@@ -1172,7 +1172,7 @@ that family: the IPDV distribution *"is two-sided, usually has zero mean, and no
 universal summary statistic that relates to a physical quantity has emerged."*
 We use it anyway because it is a measurement of **the traffic** rather than of a
 probe, which is worth more here than conformity - but the threshold behind it is
-a judgement and not a derivation, and that is now written down rather than
+a judgment and not a derivation, and that is now written down rather than
 implied. The RFC's own recommended quantile is the 99.9th, for de-jitter buffer
 sizing; `TAIL_RATIO` uses a p95 against the median because it is answering a
 different question - which connections are unlike the others - not sizing a
@@ -1277,7 +1277,7 @@ vantage point.
 else, so there is no operator name anywhere in what this tool collects. Two
 ways to get one are refused: the full ASN-to-name table is about a hundred
 thousand entries, which is why the Public Suffix List is not vendored here
-either, and a hand-written list of the networks that matter is a judgement that
+either, and a hand-written list of the networks that matter is a judgment that
 would date within a year. A lookup would send a packet to a third party and
 fail on exactly the boxes this is for, which have no internet egress of their
 own.
@@ -1358,7 +1358,7 @@ The second opinion comes from the box rather than from a constant, and that is
 the point. Any address hardcoded here is a guess about where the box sits, and
 a second public address would share the first one's fate on exactly the network
 that made this necessary. There is no list of what is blocked where, and no
-attempt to work out which country anything is in - both would be a judgement
+attempt to work out which country anything is in - both would be a judgment
 this tool has no business making, and both would be wrong within a year. At
 most two peers are asked, because a diagnostic that starts connecting to
 everything in the socket table is a scanner.
@@ -1448,11 +1448,11 @@ an arrow:
   clients in (10.20.0.7) FAULT  <-->  this box ok  <-->  connects out to (10.60.9.30) degraded
 ```
 
-- The state is a **word as well as a colour**: colour alone is not readable to
+- The state is a **word as well as a color**: color alone is not readable to
   everyone, and does not survive a printout or a screenshot pasted into a
   ticket.
 - Each zone carries **the sentence that put it there**, not just a lamp. A
-  colour says there is a problem; the sentence says what it is.
+  color says there is a problem; the sentence says what it is.
 - The **load balancer is named** when one address carries most of the inbound
   traffic (at least 60%, minimum three connections). That is the difference
   between "something on the way in" and an address someone can go and look at.
@@ -1462,7 +1462,7 @@ an arrow:
 - The **upstream zone names what the run aimed at**, which with `--target auto`
   is the backend.
 - On a box with nothing connected the inbound zone reads **none connected** and
-  greys out, not green, which would claim something had been examined, and not
+  grays out, not green, which would claim something had been examined, and not
   an alarm, because the socket table *was* read and there was nothing coming
   in. That is an answer, not a gap.
 
@@ -1473,7 +1473,7 @@ an arrow:
 The panel is shown on **every** box, including one that only talks outward. It
 was hidden there at first, on the grounds that two boxes and an arrow restate an
 eight-stage strip that says the same thing more precisely. That reasoning
-optimises for a reader who can already read the strip, and boxes that only
+optimizes for a reader who can already read the strip, and boxes that only
 talk outward are the common case, so hiding it there meant the panel written
 for someone who *cannot* read the strip was the one they would almost never be
 shown.
@@ -1664,7 +1664,7 @@ leg green would guess; drawing it red would guess the other way.
 
 A retransmit ratio counts packets this box had to send again and cannot say
 which direction lost them, so it sits on the side and never on a leg. That
-is the same reason it has never been allowed to colour the two ends of the
+is the same reason it has never been allowed to color the two ends of the
 boundary arrow apart.
 
 ### Which destination gets traced, and why that one
@@ -1679,7 +1679,7 @@ pointing at the internet twice, once at the connections this box opens and
 once at somewhere it never sends anything.
 
 It follows a peer from the connections themselves now. Which one is a
-judgement on a box holding hundreds, so it is made in a fixed order and
+judgment on a box holding hundreds, so it is made in a fixed order and
 **recorded with the hops**, because "hop 2 is slow" means nothing without
 knowing hop 2 of what. Hover the hop list and it says which destination was
 traced and why that one:
@@ -1796,8 +1796,8 @@ this is silent and the inference carries on alone.
 7. Connection tracking table: how full it is, and whether it has refused (Linux)
 8. Link speed, duplex and MTU
 9. Optical module power and alarms (fibre)
-10. LLDP/CDP neighbour: which switch and port
-11. ARP / neighbour table
+10. LLDP/CDP neighbor: which switch and port
+11. ARP / neighbor table
 12. TCP socket states
 13. UDP datagram listeners and what is queued behind them, because a box can carry its user traffic over datagrams while its control plane is TCP, and every other socket reading here is TCP (`ss -uan`)
 14. Interface queues: what this box's own egress queues are holding and dropping (Linux `tc`)
@@ -1812,7 +1812,7 @@ this is silent and the inference carries on alone.
 23. Clock synchronisation and offset, where a time daemon can be asked
 24. Units configured to run and not running, from `systemctl list-units --state=failed` - the one reading here that needs no previous visit and no address to probe, because a service that never came up holds nothing for any other check to find
 25. Listening ports
-26. Neighbour inventory (with `--inventory`)
+26. Neighbor inventory (with `--inventory`)
 
 **Off the device**
 25. Gateway reachability and loss
@@ -1825,7 +1825,7 @@ this is silent and the inference carries on alone.
 32. TCP reachability of specific ports
 33. TLS handshake and certificate on ports that should have one
 34. Bonded interface members, and which of them are down (Linux)
-35. Neighbour table size against its own ceiling (Linux)
+35. Neighbor table size against its own ceiling (Linux)
 36. CPU thermal throttling counters: times the hardware clocked itself down (Linux)
 37. Ephemeral ports, file descriptors and the accept-queue ceiling (Linux)
 38. The TLS certificate this box *serves*, read from the outside in
@@ -1853,14 +1853,14 @@ a fault.
 |---|---|
 | interfaces | `ip` then `ifconfig` (`ipconfig` on Windows) |
 | routes | `ip` then `netstat` or `route` |
-| neighbours | `ip` then `arp` |
+| neighbors | `ip` then `arp` |
 | listening ports, sockets | `ss` then `netstat` |
 | traceroute | `traceroute`, then `tracepath` (`tracert` on Windows) |
 | DNS | `dig`, then `nslookup`, then `host` |
 | clock | `chronyc`, then `timedatectl`, then `ntpq` |
 | kernel log | `dmesg` then `journalctl` |
 | TCP trace | `tcptraceroute`, then `traceroute -T`, then `mtr` |
-| switch neighbours | `lldpctl` then `lldpcli` |
+| switch neighbors | `lldpctl` then `lldpcli` |
 
 Every one of those moves on when a command **fails**, not only when it is
 missing. That was four chains and is now all of them: a `dig` that exists and
@@ -1894,7 +1894,7 @@ took the whole interface list with it. The result was not a gap. It was `no
 IP address on any interface`, the highest-ranked critical in the tool, on a
 machine with nothing wrong and `ifconfig` sitting unread beside it.
 
-Interfaces, routes, neighbours and listening ports now run the candidates in
+Interfaces, routes, neighbors and listening ports now run the candidates in
 order and take the first that answers. Exit zero with nothing on stdout does
 not count as answering, because that is the other way a trimmed command fails:
 it accepts the words and prints nothing.
@@ -1913,7 +1913,7 @@ The chain handed its last failure upward as a success. A command that ran and
 exited non-zero with nothing to say arrived downstream as a successful read of
 a machine with no address and no gateway, so the box was told it was broken
 rather than that it could not be read. A non-zero exit is a failed read now.
-Exit zero with no output is not: an empty neighbour table is a real answer, and
+Exit zero with no output is not: an empty neighbor table is a real answer, and
 the only honest one on a box that has spoken to nobody.
 
 And nothing asked the one source that cannot be trimmed. The facts are not in
@@ -1923,7 +1923,7 @@ as files:
 | Read | From | Gives |
 |---|---|---|
 | default route | `/proc/net/route` | the gateway, so every gateway check still runs |
-| neighbours | `/proc/net/arp` | who answered, including entries that never did |
+| neighbors | `/proc/net/arp` | who answered, including entries that never did |
 | this box's own address | a UDP `connect`, no packets sent | that it has one, and a way off itself |
 
 These are last resorts, tried only after every command has failed, because a
@@ -1995,7 +1995,7 @@ edge is the honest thing to measure. `www.google.com`, `wikipedia.org` and
 `github.com` all answer ICMP and resolve everywhere; any of them does.
 
 **"Is the path to the thing we depend on healthy?"** Aim at the thing. The
-database, the API gateway, the licence server. `--target auto` does this for
+database, the API gateway, the license server. `--target auto` does this for
 you on a box that has connections open to one.
 
 **"Is there loss that only shows over distance?"** Now a regional endpoint
@@ -2095,7 +2095,7 @@ choose would have measured this node's own address and called the box healthy
 while it served nothing.
 
 The address has to be an address. A hostname or an interface name is refused
-at the front rather than half-honoured, because Linux `ping -I` would accept an
+at the front rather than half-honored, because Linux `ping -I` would accept an
 interface and nothing else in the tool would, which is a flag meaning one thing
 on one platform and something else everywhere.
 
@@ -2301,10 +2301,10 @@ answers for it, and that a probe bound to it completes and returns.
 
 ```
 --report                 print the findings to this terminal and exit
---inventory              list neighbours already known to this device (ARP table;
-                         adds only a reverse-DNS lookup per neighbour)
+--inventory              list neighbors already known to this device (ARP table;
+                         adds only a reverse-DNS lookup per neighbor)
 --quiet                  hide the progress line while the checks run
---no-color               never colour the output (already off when redirected,
+--no-color               never color the output (already off when redirected,
                          when NO_COLOR is set, and on a dumb terminal;
                          FORCE_COLOR turns it back on, and this flag beats
                          both)
@@ -2470,7 +2470,7 @@ That matters most for `--baseline`: comparing this visit against one taken by a
 different version, the comparison says so, because a difference in what the
 tool measures isn't a difference in the network.
 
-## The numbers behind the judgements
+## The numbers behind the judgments
 
 Every finding here is a threshold someone chose. They're listed so you can
 disagree with one - and so that when a provider pushes back on a report, you
@@ -2484,11 +2484,11 @@ can say what the bar was rather than "the tool said so".
 | `KLOG_RECENT_SECONDS` | **3600** | how far back a kernel-log event still counts as happening now |
 | `KLOG_FLAPS_RECENT` | **4** | carrier transitions logged within that hour before the link is called unstable. Two is one clean down/up |
 | `SOFTNET_DROP_PPM` | **10** | receive-backlog drops per million packets processed |
-| `NEIGH_TABLE_WARN_PCT` | **80** | how full the neighbour (ARP) table gets before it is worth saying so. Same figure as the connection-tracking table and for the same reason: both refuse outright at 100% with no back pressure, so the useful moment to speak is before that. Its own constant all the same - two tables, two ceilings, and sharing a number would mean tuning either retuned the other |
+| `NEIGH_TABLE_WARN_PCT` | **80** | how full the neighbor (ARP) table gets before it is worth saying so. Same figure as the connection-tracking table and for the same reason: both refuse outright at 100% with no back pressure, so the useful moment to speak is before that. Its own constant all the same - two tables, two ceilings, and sharing a number would mean tuning either retuned the other |
 | `RESETS_PER_CONN_PCT` | **100** | resets this box sent, as a share of the connections it opened or accepted. A reset is not by itself a fault - an application closing with data unread sends one - so the line sits where the count stops looking like a by-product: at least one reset per connection handled. A dead listener, an unbound port or a scan all produce exactly that |
 | `UDP_DROP_PCT` | **1.0** | share of arriving datagrams this box failed to take delivery of. UDP has no retransmission and no window, so a datagram dropped at the socket is gone and the sender is never told. A share rather than a count per minute, because ten a minute means nothing without knowing whether ten thousand or ten million arrived |
 | `UDP_DROP_FLOOR` | **10** | and enough of them for the share to be a share. Netdata alerts on more than ten of these a minute with no share at all - a receive-buffer overflow is never routine, unlike a discard, so a small absolute count already means something and the share is what stops a busy box reporting its own noise |
-| `CONTROL_PLANE_MAX_SESSIONS` | **8** | how many outbound connections a box can hold and still be forwarding rather than proxying. A control plane is a handful of long-lived sessions to the service the box enrols with; a proxy opens one per piece of work and has a population. The number only has to separate those two shapes, and anything between a handful and a population would do - it is set where a box with redundant control sessions still reads as a broker. Log shipping is counted out before this is applied: those sessions are neither, and a box shipping to a collector used to cross the bar on them alone and stop being recognised as a broker |
+| `CONTROL_PLANE_MAX_SESSIONS` | **8** | how many outbound connections a box can hold and still be forwarding rather than proxying. A control plane is a handful of long-lived sessions to the service the box enrolls with; a proxy opens one per piece of work and has a population. The number only has to separate those two shapes, and anything between a handful and a population would do - it is set where a box with redundant control sessions still reads as a broker. Log shipping is counted out before this is applied: those sessions are neither, and a box shipping to a collector used to cross the bar on them alone and stop being recognized as a broker |
 | `LOAD_PER_CPU_WARN` | **2.0** | how deep the run queue has to be, per CPU, before this box's own load is offered as the reason something is slow. Higher than the 1.0 the context sentence beside it uses, and deliberately: that one only qualifies somebody else's finding - *the limit you hit is a setting, not a shortage* - where this is the finding, and a box at exactly one runnable task per CPU is fully used rather than in trouble. At two, work has been waiting as long as it has been running |
 | `LOAD_PER_CPU_BAD` | **8.0** | four times subscribed, where the wait dominates and every timing this tool takes is measuring the queue for a processor rather than the network. Above this the finding is critical rather than a warning |
 | `LOCAL_QUEUE_STANDING_PKTS` | **64** | how many packets have to be sitting in this box's own egress queue before the queue is the story rather than ordinary bursting. A queue exists to hold a burst, so a handful waiting is it working; a standing backlog is traffic being delayed here long enough for the connections above it to see it. Set where an `fq_codel` default of 10240 is plainly not coping rather than where it is merely busy. This is the one reading that turns a latency symptom into a cause: without it the report says traffic is being held up and which way it was going, and names the delay itself as the answer |
@@ -2511,7 +2511,7 @@ can say what the bar was rather than "the tool said so".
 | `CONNTRACK_REFUSAL_PER_DAY` | **10** | conntrack refusals per day of uptime for a historical count |
 | `ACCEPT_OVERFLOW_PER_DAY` | **10** | accept-queue overflows per day of uptime for a historical count |
 | `TAIL_RATIO` | **4.0** | how far the slowest connections on a side sit above the middle one before some of them are a fault rather than the spread every side has. A ratio and not a millisecond figure, for the reason `QUEUE_BURSTY_TAIL` is one: a p95 of 200ms is ordinary behind a 180ms median and alarming behind a 20ms one. Four times is wide, because a healthy side clusters and doubling happens on any box with one slow peer in the set |
-| `TAIL_MIN_CONNECTIONS` | **20** | connections a side needs before its p95 means anything. The 95th percentile of four samples is the worst of four - the same artefact `MIN_PROBES_FOR_LOSS` exists for on the loss side. A side with a handful of connections has no tail, it has a worst one |
+| `TAIL_MIN_CONNECTIONS` | **20** | connections a side needs before its p95 means anything. The 95th percentile of four samples is the worst of four - the same artifact `MIN_PROBES_FOR_LOSS` exists for on the loss side. A side with a handful of connections has no tail, it has a worst one |
 | `TAIL_ONE_PEER_SHARE` | **0.8** | how much of a side's slow tail has to sit on one peer before that peer is named as what the slow connections share. Below it the tail is spread, which is a different answer and not a weaker one: connections to many peers all slow together points at something they all cross, and naming the busiest of them would be picking a scapegoat out of a list. Four fifths leaves room for one straggler somewhere else |
 | `JITTER_MS` | **30.0** | milliseconds of round-trip variance, from TCP's own measurement on the connections this box carries, before the delay is called unstable |
 | `JITTER_SHARE` | **0.5** | and it must be at least this share of the round trip. Both are needed for the same reason as the queue pair below: the absolute figure alone fires on any long path where tens of milliseconds of variance is ordinary, and the share alone fires on a LAN where 0.2ms becomes 0.5ms |
@@ -2537,7 +2537,7 @@ can say what the bar was rather than "the tool said so".
 | `QUEUE_HOP_DRAWN_MS` | **5** | waiting on one hop worth drawing beside it in the path panel. Lower than `QUEUE_HOP_MS`, because a number on a row is context and naming a hop is a claim: a path where three hops queue 8ms each is telling the reader something the finding correctly declines to say. The verdict could name a hop on this evidence while the panel underneath drew the step and not the part of it anyone can act on |
 | `QUEUE_BURSTY_TAIL` | **2.0** | how far the slowest probe to a hop has to sit above its average, as a multiple of the waiting that hop does normally, before the queue is called bursty rather than standing. A multiple and not a millisecond figure because the question is about the shape of the distribution and not its size: a 5ms queue with a 20ms worst case and a 200ms queue with an 800ms worst case are the same fault at two scales. Twice, because a queue genuinely there most of the time still has a tail - the worst probe of thirty arrives during whatever the largest burst was |
 | `LATENCY_WALL_MS` | **100** | milliseconds a single hop must add before it is worth naming as a wall. The first hop counts its own latency: the path starts there, so everything before it is zero, and a satellite or VPN first hop carrying the whole delay is a wall like any other |
-| `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbours |
+| `LATENCY_WALL_SHARE` | **0.5** | and the share of the end-to-end delay it must be. The finding says a single hop adds *most* of the round trip, so "most" is what it measures - without this a uniformly graded path fired it and named a hop no worse than its neighbors |
 | `PEAK_WORTH_SHOWING` | **1.2** | how far a peak must sit above the average before the average is worth distrusting on sight. Below this the two tell the same story and printing both is noise; above it the average is actively hiding something. A ratio rather than a fixed gap, because a 10 Mbps peak over a 1 Mbps mean matters and a 1000 over a 999 does not |
 | `BURST_UTIL_PCT` | **25** | utilisation below which a queue overflowing has to be explained by bursts rather than volume |
 | `UPLINK_FULL_PCT` | **70** | share of the `--uplink-mbps` rate this device has to be using before the site's own line is called full. Lower than the NIC threshold: CPE queues are small and the line is shared, so loss starts well before the last few percent |
@@ -2550,7 +2550,7 @@ can say what the bar was rather than "the tool said so".
 | `DIR_SILENT_MS` | **5000** | Nothing received for this long, on a connection that is still sending, before the return direction is called stalled |
 | `DIR_SILENCE_RATIO` | **10** | And that many times longer than since it last sent, so the two counters have to disagree by a margin rather than by a moment |
 | `DIR_MIN_BYTES` | **100,000** | Sent on a connection before an answer is owed. Below it there may be nothing to reply to |
-| `DIR_SILENT_SHARE` | **50** | Or the quiet connections carry this much of the side's traffic, however few of them there are. A box holding one long-lived session beside forty short ones is a normal shape, and on it the session that matters is a minority of one — counted alone, a dead one stayed invisible behind its healthy neighbours |
+| `DIR_SILENT_SHARE` | **50** | Or the quiet connections carry this much of the side's traffic, however few of them there are. A box holding one long-lived session beside forty short ones is a normal shape, and on it the session that matters is a minority of one — counted alone, a dead one stayed invisible behind its healthy neighbors |
 | `RELAY_MIN_BYTES` | **10,000,000** | Arrived from the clients this box serves before the two sides are worth comparing at all. Below it a lopsided ratio is a quiet box, not a box that stopped relaying |
 | `RELAY_RATIO` | **20** | How many times more arrived on one side than left on the other before it is worth naming. An order of magnitude on purpose: inspection rewrites what it forwards and TLS termination re-frames it, so the two sides never match closely and a tight ratio fires on healthy boxes |
 | `OWN_TLS_MAX_LISTENERS` | **12** | Listeners of our own tested per run, counted per address and port rather than per port. Each costs a handshake or a request against a service that is probably logging connections. Anything past the limit is reported as not checked |
@@ -2627,7 +2627,7 @@ in the UI and as a `layer` field in the exported JSON:
 | Layer | Checks | What a failure here means |
 |---|---|---|
 | **L1 · Physical** | interface has an IPv4 address, error counters, link speed/duplex | cable unseated, Wi-Fi not associated, port down, DHCP never completed, corrupted frames on the wire |
-| **L2 · Data link** | ARP/neighbour table, gateway ping, interface MTU, LLDP switch port | local segment problem, switch/AP port, bad cabling, interference |
+| **L2 · Data link** | ARP/neighbor table, gateway ping, interface MTU, LLDP switch port | local segment problem, switch/AP port, bad cabling, interference |
 | **L3 · Network** | routing table, default gateway, internet ping, traceroute, path MTU | addressing or routing: no gateway, upstream/ISP break |
 | **L4 · Transport** | listening ports, TCP port checks | firewall rule or the service isn't listening |
 | **L7 · Application** | DNS lookup | name resolution, wrong or unreachable DNS server |
@@ -2971,7 +2971,7 @@ ICMP alone any more:
 | | how reachability is confirmed instead |
 |---|---|
 | the target | A TCP connect to 443, 80 then 53, the host the operator named, not a scan. **A refusal proves it as well as an accept does:** an RST is a completed round trip, so the packets got there and the reply got back. Only a timeout is inconclusive. Reports `inet_icmp_filtered`. |
-| the gateway | Its entry in the neighbour table. ARP does not cross a dead cable or a down switch port, so an entry with a hardware address means the link is up whatever ICMP says. An entry with no MAC, or in `FAILED`/`INCOMPLETE`, is the kernel asking rather than the gateway replying, and does not count. Reports `gw_icmp_filtered`. |
+| the gateway | Its entry in the neighbor table. ARP does not cross a dead cable or a down switch port, so an entry with a hardware address means the link is up whatever ICMP says. An entry with no MAC, or in `FAILED`/`INCOMPLETE`, is the kernel asking rather than the gateway replying, and does not count. Reports `gw_icmp_filtered`. |
 
 Both findings read as `ok`. They exist to stop something else being misread,
 and neither is ever a fault. When ICMP *and* the confirming probe both get
@@ -2998,7 +2998,7 @@ was built that way. On a box with no clients connected, the critical still
 fires exactly as before.
 
 **A check that cannot apply here is not a check that failed.** A cloud instance
-has no fibre optics, no switch neighbour, no `ethtool` and no carrier
+has no fibre optics, no switch neighbor, no `ethtool` and no carrier
 transitions to count. Those were counted as failed collections, so coverage
 read low and *every* verdict on that box was marked down in confidence for
 running on the hardware it runs on. Platform-gated collectors now return
@@ -3189,7 +3189,7 @@ worse case: requests going out and nothing coming back.
 `ss -ti` prints three timers per connection: `lastsnd`, `lastrcv` and
 `lastack`. This box sending within the last second while nothing has arrived for
 seconds is two counters disagreeing rather than anything inferred, which is why
-it is allowed to colour the two ends of the boundary arrow apart. No loss ratio
+it is allowed to color the two ends of the boundary arrow apart. No loss ratio
 ever is: one number cannot be told apart by direction.
 
 The trap is that `lastrcv` counts **data**, and an application with nothing to
@@ -3219,7 +3219,7 @@ something is not. Both rank **above** the service findings, because a return
 path carrying nothing is a network fault and those are not.
 
 The acknowledged-but-unanswered case is counted per side and said in words, and
-deliberately does not colour the arrow. An acknowledgement is proof that
+deliberately does not color the arrow. An acknowledgement is proof that
 network is carrying, so reddening the return leg would point at a carrier for
 something sitting above it.
 
@@ -3347,8 +3347,8 @@ picked out of that sample.
 The socket table is never stored: it names every peer this box talks to and is
 replaced by a digest before the report is written. So the cap that mattered was
 never the report's. `FLOW_READ_BYTES` (12 MB) is how much is *read* and
-`FLOW_MAX` (20,000) how many connections are analysed; 40,000 sockets parse in
-about 125 ms and analyse in about 20 ms. A sample that hits either limit still
+`FLOW_MAX` (20,000) how many connections are analyzed; 40,000 sockets parse in
+about 125 ms and analyze in about 20 ms. A sample that hits either limit still
 reports `tcp_flow_sample_partial`, exactly as before. The aim was to make the
 sample representative, not to stop admitting when it isn't.
 
@@ -3359,7 +3359,7 @@ traffic, which matters on someone else's network, where capture is a consent
 question, not a technical one:
 
 - **Duplicate IP**: Wireshark flags an address claimed by two MACs. The same
-  conflict is visible in the ARP/neighbour table this box already keeps. The
+  conflict is visible in the ARP/neighbor table this box already keeps. The
   reverse (one MAC, many IPs) is a router answering proxy ARP and is *not*
   reported. A duplicate address makes symptoms move around with no pattern,
   which is why it wastes so much time.
@@ -3417,14 +3417,14 @@ Some details that decide whether the answer is trustworthy:
 `ss` is Linux-only. Elsewhere the check reports that it can't run, which is not
 the same as reporting that nothing is wrong.
 
-## Neighbours: `--inventory`
+## Neighbors: `--inventory`
 
-The kernel's neighbour table already lists every device this box has exchanged
+The kernel's neighbor table already lists every device this box has exchanged
 traffic with. `--inventory` formats it, with reverse-DNS names where the
 configured resolvers answer:
 
 ```
-NEIGHBOURS (33 known to this device, nothing was probed)
+NEIGHBORS (33 known to this device, nothing was probed)
   192.168.1.1     gateway.local                   54:07:7d:bf:2d:34
   192.168.1.50    printer.local                   00:e0:4c:b0:03:fd
 ```
@@ -3437,7 +3437,7 @@ check.
 
 What it deliberately excludes: incomplete entries (a lookup that failed is not
 a device), broadcast and multicast addresses. Including them turned 36 real
-neighbours into 257 phantom ones the first time this ran.
+neighbors into 257 phantom ones the first time this ran.
 
 The trade is honest: this shows what this device *has talked to*, not what
 *exists* on the segment. A host that has never exchanged a frame with it won't
@@ -3732,7 +3732,7 @@ direction the fault is on and the path out beneath it, then the findings, then
 what was checked, then the captured output behind it. Each group is marked by a
 rail down its side.
 
-Hop colour comes from what the report concluded, not from a second reading of
+Hop color comes from what the report concluded, not from a second reading of
 the timings: a hop a finding named, a destination something has established is
 unreachable, and the state of the way in and of this box are all taken from the
 verdict and the direction panel. Hops the trace never heard from are drawn as
@@ -3889,7 +3889,7 @@ it.
 
 `dev/deep_e2e.py` asks the other question. It puts two scenarios on one box and
 declares which of them the verdict should reach for, reasoned before it is run.
-Recording whatever the tool says today would describe current behaviour rather
+Recording whatever the tool says today would describe current behavior rather
 than claim a right answer.
 
 The first thing it found was an inversion. `duplicate_ip` and
@@ -4090,14 +4090,14 @@ It is a dev harness rather than a test because it needs the network and an
 authenticated `gh`, and the suite has to run on a box with neither. Run it when
 you tag.
 
-## Licence
+## License
 
 MIT, in [LICENSE](LICENSE). Every file carries an `SPDX-License-Identifier: MIT`
 line, including the viewer, so a self-contained `report.html` handed to a
 site states its own terms.
 
 Nothing third-party is bundled. The optional tools are executed, not linked, so
-their licences (mtr is GPL, for instance) don't attach to this code. That stays
+their licenses (mtr is GPL, for instance) don't attach to this code. That stays
 true only as long as nobody copies code *out* of them and into here.
 
 ## Extending it
@@ -4127,7 +4127,7 @@ Deliberately **not** on this list:
 - **Measuring loss on the forward path separately from the return path**,
   the way scamper's `sting` does it. It works by sending crafted TCP
   segments to a live endpoint and reading the receiver's acknowledgement
-  behaviour to tell which direction lost what. It is the most-wanted answer
+  behavior to tell which direction lost what. It is the most-wanted answer
   this tool does not give, and it is not going to be built here.
 
   It measures by generating load on somebody's connection. That is the same

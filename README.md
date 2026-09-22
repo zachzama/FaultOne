@@ -3,7 +3,7 @@
 [![tests](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml/badge.svg)](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml)
 [![python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](#what-you-need)
 [![no dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#what-you-need)
-[![licence MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
+[![license MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 **203 findings it can reach. One line saying which one to fix first.**
 
@@ -112,15 +112,15 @@ cost of one flag.
 
 **On a painfully slow console?** Comments and docstrings are about a quarter of
 the file. The standard library will drop them for the trip: no build step, no
-second version to keep in step, same behaviour:
+second version to keep in step, same behavior:
 
 ```bash
 python3 -c "import ast;print(ast.unparse(ast.parse(open('faultone.py').read())))" > /tmp/faultone.py
-ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 230 KB on the wire
+ssh -C -J jump user@box "python3 - --report" < /tmp/faultone.py    # 231 KB on the wire
 ```
 
 That needs Python 3.9 on **your** machine, and so does the box.
-Stripped and compressed together it's 230 KB instead of 1119. That is 79%
+Stripped and compressed together it's 231 KB instead of 1119. That is 79%
 less, which is just over sixteen minutes down to under four on a 9600-baud
 console (8N1, so 960 bytes a second), and nothing you'd notice on anything
 faster.
@@ -197,7 +197,7 @@ machine.
 | `--uplink-mbps 50` | The site's line rate, off the ticket. Without it the tool measures against the NIC's speed and can blame the carrier for a line the site is filling itself. |
 | `--baseline old.json` | Compares against a previous visit and tells you what changed. |
 | `--check-ports common` | Checks 22, 53, 80, 443, 8080 without typing them out. |
-| `--inventory` | Lists the neighbours this device already knows, off its own ARP table. Nothing is scanned or probed; the only traffic it adds is a reverse-DNS lookup per neighbour, to a resolver already configured here. |
+| `--inventory` | Lists the neighbors this device already knows, off its own ARP table. Nothing is scanned or probed; the only traffic it adds is a reverse-DNS lookup per neighbor, to a resolver already configured here. |
 | `--export-compact` | An export without the evidence behind the checks that passed. Around a twentieth of the size, same picture. |
 
 [Every flag is listed here.](REFERENCE.md#every-flag)
@@ -334,10 +334,10 @@ interface error, drop, CRC and collision counters · how often the link has
 dropped and returned · what the kernel logged and when · packets this device
 drops itself · connection tracking table pressure · link speed, duplex and
 MTU · optical power and alarms on fibre · which switch port you're on
-(LLDP/CDP) · ARP/neighbour table · TCP socket states · TCP retransmission
+(LLDP/CDP) · ARP/neighbor table · TCP socket states · TCP retransmission
 counters · per-connection TCP loss and stalls, broken down by destination ·
 clock synchronisation · CPU thermal throttling · bonded interface members ·
-the neighbour table against its own ceiling · listening ports · neighbour
+the neighbor table against its own ceiling · listening ports · neighbor
 inventory
 
 *Serving traffic, if anything is connected:* who is connected and through
@@ -355,7 +355,7 @@ specific ports · TLS handshake and certificate
 your network ends and the provider's begins, per-hop latency and jitter, link
 utilisation, which side of this box a fault is on, what changed since a
 previous visit, and what the outbound connections are actually for - the
-control plane this box enrols with, the logs it ships elsewhere, and the
+control plane this box enrolls with, the logs it ships elsewhere, and the
 traffic it brokers, which are three different things in one column.
 
 [The same list with what each one catches.](REFERENCE.md#what-a-check-means-here-and-how-many-there-are)
@@ -407,12 +407,12 @@ secure. It does run real commands with your privileges.
 
 [Full security notes.](REFERENCE.md#security)
 
-## Licence
+## License
 
 MIT. See [LICENSE](LICENSE). Use it, change it, ship it inside whatever you
 like; it comes with no warranty.
 
-Nothing is vendored, so no other licence travels with the file. The optional
+Nothing is vendored, so no other license travels with the file. The optional
 tools it can use (`mtr`, `ethtool`, `lldpd`, `tcptraceroute`) are run as
 separate programs, never linked or copied in.
 

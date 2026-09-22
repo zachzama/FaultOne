@@ -6940,7 +6940,7 @@ PANEL_HELP = {
     },
     "inventory": {
         "label": "neighbours", "layer": 2,
-        "desc": "Devices this box has already exchanged traffic with, from its own neighbour "
+        "desc": "Devices this box has already exchanged traffic with, from its own neighbor "
                 "table. Nothing is scanned or probed, so it says what this device has talked "
                 "to rather than what exists on the segment. Names come from reverse DNS.",
     },
@@ -9118,13 +9118,13 @@ VERDICT_RULES = [
      "Nothing is failing yet - the bond is doing its job of hiding it. Find "
      "the member that is down and the port at its far end, before the next "
      "one goes and takes the box off the network."),
-    ("neigh_table_full", "this box's neighbour table, not the network",
-     "This box has run out of room to remember its neighbours",
+    ("neigh_table_full", "this box's neighbor table, not the network",
+     "This box has run out of room to remember its neighbors",
      "Raise net.ipv4.neigh.default.gc_thresh3, and gc_thresh2 and gc_thresh1 "
-     "with it. Until then this box will keep losing neighbours at random on a "
+     "with it. Until then this box will keep losing neighbors at random on a "
      "segment where nothing is wrong."),
-    ("neigh_table_near_limit", "this box's neighbour table, not the network",
-     "This box is close to running out of room to remember its neighbours",
+    ("neigh_table_near_limit", "this box's neighbor table, not the network",
+     "This box is close to running out of room to remember its neighbors",
      "It refuses outright rather than queuing when it fills, so raise "
      "net.ipv4.neigh.default.gc_thresh3 now rather than after the first "
      "unexplained outage."),
@@ -13100,7 +13100,7 @@ def _check_proxy_backends(raw):
                if worst.get("downtime_s") else "")
             + (f" and taken out {worst['times_down']} time(s) since the proxy started"
                if worst.get("times_down") else "")
-            + ". This is the proxy's own judgement rather than anything measured "
+            + ". This is the proxy's own judgment rather than anything measured "
               "here: nothing in a socket table says which backends a service has "
               "decided to stop using, or which check it was that failed."),
     })
@@ -13165,7 +13165,7 @@ def _check_forwarding_shape(raw):
             f"its control plane, its resolvers, its own path out. That is worth having "
             f"and is a real outage when it breaks, but it is not the user path: a loss "
             f"figure or a stalled return on that side is about this box reaching the "
-            f"service it enrols with, not about anyone's traffic getting through."),
+            f"service it enrolls with, not about anyone's traffic getting through."),
     })
     return found
 
@@ -14972,11 +14972,11 @@ def _check_neigh_table(raw):
             "severity": "warning",
             "layer": 3,
             "code": "neigh_table_full",
-            "message": f"The neighbour table has hit its ceiling "
+            "message": f"The neighbor table has hit its ceiling "
                        f"{table['table_fulls']:,} time(s) since boot"
                        + (f" (limit {limit:,})" if limit else "")
                        + ". Past it the kernel stops resolving addresses, so this box "
-                         "cannot talk to some of its neighbours while everything that does "
+                         "cannot talk to some of its neighbors while everything that does "
                          "not need one of them keeps working. That is why it presents as the "
                          "network failing at random and never reproduces on demand. It is a "
                          "setting on this box, not a fault on the wire - raise "
@@ -14987,11 +14987,11 @@ def _check_neigh_table(raw):
             "severity": "warning",
             "layer": 3,
             "code": "neigh_table_near_limit",
-            "message": f"The neighbour table holds {entries:,} of the {limit:,} entries it "
+            "message": f"The neighbor table holds {entries:,} of the {limit:,} entries it "
                        f"is allowed ({round(100.0 * entries / limit)}%). It has not refused "
                        f"anything yet. When it does the kernel stops resolving addresses "
                        f"rather than queuing, so the first symptom is this box losing "
-                       f"neighbours at random on a segment that is working - raise "
+                       f"neighbors at random on a segment that is working - raise "
                        f"net.ipv4.neigh.default.gc_thresh3 before that rather than after.",
         })
     return found
@@ -18171,7 +18171,7 @@ def _check_gateway(raw, gw, probes, arp_entries=None):
                     "code": "gw_icmp_filtered",
                     "layer": 2,
                     "message": f"Gateway {gw} did not answer a single ping, but it is in this "
-                               f"device's neighbour table at {neighbour['mac']}"
+                               f"device's neighbor table at {neighbour['mac']}"
                                + (f" ({neighbour['state']})" if neighbour.get("state") else "")
                                + ". ARP does not cross a dead cable or a down switch port, so "
                                  "the local link is up and the gateway is simply not answering "
@@ -18184,7 +18184,7 @@ def _check_gateway(raw, gw, probes, arp_entries=None):
                     "code": "gw_unreachable",
                     "layer": 2,
                     "message": f"Gateway {gw} is unreachable (100% packet loss) and it is not in "
-                               "the neighbour table either. Points to a local link problem: bad "
+                               "the neighbor table either. Points to a local link problem: bad "
                                "cable, weak/no Wi-Fi signal, a down switch/AP port, or the "
                                "gateway device itself being offline.",
                 })
@@ -18404,7 +18404,7 @@ def _check_proxy(raw, target):
                 f"{worst['port']}, and that address "
                 + WHAT_A_REFUSAL_MEANS.get(worst.get("refusal"),
                                            "could not be connected to")
-                + ". Every application here that honours the setting is failing right "
+                + ". Every application here that honors the setting is failing right "
                   "now, and nothing else on this report will show it: a ping, a "
                   "traceroute and a TCP connect to the target all go direct and do not "
                   "read that setting, so they can pass while nothing on the box can "
@@ -18433,7 +18433,7 @@ def _check_proxy(raw, target):
                 f"not allowed through it, which is not a network fault and will not "
                 f"appear as one: a ping, a traceroute and a TCP connect to the target "
                 f"all go direct, present nothing, and pass. Every application here that "
-                f"honours the proxy setting is failing right now."
+                f"honors the proxy setting is failing right now."
                 + (" Check the credentials this box presents, and whether the account "
                    "or device is still enrolled." if worst["status"] == 407 else
                    " Check what policy applies to this box, and to whatever identity it "
@@ -19055,7 +19055,7 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # failing now from one that collected errors months ago.
     # Baseline before the link counters sleep, so both rates come from the same
     # window rather than costing two of them.
-    say("checking link mode, switch port and neighbours")
+    say("checking link mode, switch port and neighbors")
     link_findings_slot = len(findings)
     neighbours, primary_mtu, duplex_by_iface, arp_entries = _check_device_and_link(
         raw, findings, link_sample)
@@ -19066,14 +19066,14 @@ def diagnose(target=None, check_ports=None, quick=False, soak=0, baseline=None,
     # table already collected above - nothing new is probed.
     inventory_data = None
     if inventory:
-        say("listing neighbours already known to this device")
+        say("listing neighbors already known to this device")
         inventory_data = build_inventory(arp_entries, _read_resolvers())
         raw["inventory"] = {
-            "ok": True, "cmd": "neighbour table (passive - nothing was probed)",
+            "ok": True, "cmd": "neighbor table (passive - nothing was probed)",
             "code": 0, "stderr": "",
             "stdout": "\n".join(
                 f"{h['ip']:<16}{(h['name'] or '-')[:30]:<32}{h['mac'] or '-'}"
-                for h in inventory_data["hosts"]) or "(no neighbours known)",
+                for h in inventory_data["hosts"]) or "(no neighbors known)",
         }
 
     say(f"probing gateway and {target}" + ("" if quick else ", tracing the path"))
@@ -20516,7 +20516,7 @@ function sourceTable(rows, target){
     : !failed.length
     ? 'every address this box holds can reach the target'
     : failed.length < rows.length - absent.length
-      ? failed.join(', ') + ' reaches nothing while its neighbours do'
+      ? failed.join(', ') + ' reaches nothing while its neighbors do'
       : 'no address on this box can reach the target, so this is the target rather than the addressing';
   return `<table class="srcs"><tr><th>address</th><th>interface</th>`
     + `<th>reaches ${escapeHtml(target || 'the target')}</th>`
@@ -20761,10 +20761,10 @@ function renderDiagnosis(data, opts){
       dns_health: 'dns resolvers',
       ports: 'listening ports',
       sockets: 'socket states',
-      inventory: 'neighbours (not a scan)',
+      inventory: 'neighbors (not a scan)',
       link_stats: 'interface error counters',
       tcp_health: 'tcp retransmissions',
-      arp: 'arp / neighbour table',
+      arp: 'arp / neighbor table',
       link_modes: 'link speed / duplex / mtu',
       path_mtu: 'path mtu probe',
       routes: 'routing table',
@@ -20814,9 +20814,9 @@ function setFavicon(state){
   // Read the colour from the stylesheet rather than repeating the hex here,
   // so the tab dot and the lamps can't drift apart.
   const css = getComputedStyle(document.documentElement);
-  const colour = (css.getPropertyValue(FAVICON_VAR[state] || '--text-dim') || '#6b7785').trim();
+  const color = (css.getPropertyValue(FAVICON_VAR[state] || '--text-dim') || '#6b7785').trim();
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">`
-            + `<circle cx="8" cy="8" r="6" fill="${colour}"/></svg>`;
+            + `<circle cx="8" cy="8" r="6" fill="${color}"/></svg>`;
   const link = document.getElementById('favicon');
   // encodeURIComponent also escapes the '#' of the colour, which would
   // otherwise truncate the data URI at the fragment.
@@ -21502,7 +21502,7 @@ def _render_services(report, out, tint, width):
     inv = report.get("inventory") or {}
     if inv.get("hosts"):
         out.append("")
-        out.append(f"NEIGHBOURS ({inv['count']} known to this device, nothing was probed)")
+        out.append(f"NEIGHBORS ({inv['count']} known to this device, nothing was probed)")
         # The shape of the segment before the hosts in it. This sat at the
         # bottom, after twenty addresses and a note saying forty were not
         # shown, which is where a reader arrives already having read the list
@@ -21587,7 +21587,7 @@ def _render_services(report, out, tint, width):
             out.append("  -> every address this box holds can reach the target")
         elif len(unreachable) < len(matrix) - len(absent):
             out.append(f"  -> {', '.join(unreachable[:3])} reaches nothing while its "
-                       f"neighbours do")
+                       f"neighbors do")
         else:
             out.append("  -> no address on this box can reach the target, so this is "
                        "the target rather than the addressing")
@@ -22022,7 +22022,7 @@ def build_parser():
         epilog="exit codes: 0 nothing wrong, 1 a warning, 2 something critical,\n"
                "            3 no verdict reached (a crash, or a run that could not\n"
                "            reach a conclusion). 0, 1 and 2 all mean it ran.\n\n"
-               "colour:     off when the output is not a terminal, when NO_COLOR is\n"
+               "color:     off when the output is not a terminal, when NO_COLOR is\n"
                "            set, and on a dumb terminal. FORCE_COLOR turns it back\n"
                "            on; --no-color beats both.")
     ap.add_argument("--version", action="version",
@@ -22035,12 +22035,12 @@ def build_parser():
                           "empty slot) to FILE, default static/index.html. Only needed when "
                           "regenerating the copy kept in the repo")
     ap.add_argument("--inventory", action="store_true",
-                     help="list the neighbours this device already knows about, from its own "
-                          "ARP/neighbour table. Nothing is scanned or probed - the only traffic "
-                          "it adds is a reverse-DNS lookup per neighbour, to a resolver already "
+                     help="list the neighbors this device already knows about, from its own "
+                          "ARP/neighbor table. Nothing is scanned or probed - the only traffic "
+                          "it adds is a reverse-DNS lookup per neighbor, to a resolver already "
                           "configured here")
     ap.add_argument("--no-color", action="store_true",
-                     help="never colour the output. Colour is already off when the output "
+                     help="never color the output. Color is already off when the output "
                           "is redirected, when NO_COLOR is set, and on a dumb terminal - "
                           "this is the override for when that detection is wrong")
     ap.add_argument("--quiet", action="store_true",

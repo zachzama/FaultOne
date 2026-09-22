@@ -760,7 +760,7 @@ class TestStageStripFits(unittest.TestCase):
     def test_colour_does_not_change_where_it_wraps(self):
         """An escape sequence takes no space on screen. Measured on the tinted
         string instead of the plain one, the strip would wrap a line that fits
-        - and only ever on the terminals that asked for colour."""
+        - and only ever on the terminals that asked for color."""
         m, rep = self.report()
         plain = self.strip_lines(m.render_text_report(rep, color=False, width=80))
         tinted = self.strip_lines(m.render_text_report(rep, color=True, width=80))
@@ -1293,7 +1293,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             # conditions this test exists for would go unexercised and it
             # would stay green with all of them deleted.
             nd.OS_NAME = "Linux"
-            self.assertTrue(nd.use_color(term), "a real terminal gets colour")
+            self.assertTrue(nd.use_color(term), "a real terminal gets color")
 
             os.environ["NO_COLOR"] = "1"
             self.assertFalse(nd.use_color(term), "NO_COLOR is set and was ignored")
@@ -1304,7 +1304,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
             os.environ["TERM"] = "xterm-256color"
 
             self.assertFalse(nd.use_color(term, True), "--no-color did not override")
-            self.assertFalse(nd.use_color(_io.StringIO()), "a pipe got colour")
+            self.assertFalse(nd.use_color(_io.StringIO()), "a pipe got color")
 
             # And the fifth, on its own terms: a console that may not read an
             # escape sequence is not sent one, whatever else is true.
@@ -1339,7 +1339,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
                 os.environ.pop(key, None)
             os.environ["TERM"] = "xterm-256color"
 
-            self.assertFalse(nd.use_color(pipe), "a pipe got colour unasked")
+            self.assertFalse(nd.use_color(pipe), "a pipe got color unasked")
             os.environ["FORCE_COLOR"] = "1"
             self.assertTrue(nd.use_color(pipe), "FORCE_COLOR was ignored")
             os.environ["FORCE_COLOR"] = ""
@@ -1385,7 +1385,7 @@ class TestAwkwardRealWorldInputs(unittest.TestCase):
         """A hostname is data and can be anything the network carries. On a
         terminal that cannot encode it - LANG=C, an out-of-band console - the
         write used to raise and the whole diagnosis was lost to a traceback
-        because a neighbour had an umlaut in its name. Running the checks and
+        because a neighbor had an umlaut in its name. Running the checks and
         then failing to deliver them is the shape of failure this tool exists
         to avoid."""
         import io as _io
@@ -1507,7 +1507,7 @@ class TestParserRobustness(unittest.TestCase):
         unknown = sorted(name for name, fn in self.parsers().items()
                          if self.shape_for(fn)[0] is None)
         self.assertEqual(unknown, [], "no way to feed these junk - name the "
-                                      "first parameter like its neighbours, or "
+                                      "first parameter like its neighbors, or "
                                       "add a shape: %s" % unknown)
 
     def test_no_parser_raises_on_junk(self):
@@ -1900,7 +1900,7 @@ class TestResolversDisagreeingAboutAGlobalName(unittest.TestCase):
     A real box produced two addresses one /16 apart, two front ends of the
     same thing, under the sentence "usually a stale cache on one of them".
     Written here in documentation space, per the rule that no routable address
-    appears in this repository: the shape is two neighbours and the shape is
+    appears in this repository: the shape is two neighbors and the shape is
     the whole point.
 
     What the finding was written for is a resolver answering with something
@@ -2111,7 +2111,7 @@ class TestCallQuality(unittest.TestCase):
 
     def test_ping_counts_windows(self):
         """The percentage parsed on both platforms and the sample size on only
-        one, so every judgement about loss on a Windows box was made without
+        one, so every judgment about loss on a Windows box was made without
         the denominator it is supposed to require."""
         win = {"ok": True, "stdout": self.WINDOWS}
         self.assertEqual(nd.parse_ping_counts(win), (4, 1))
@@ -2176,7 +2176,7 @@ class TestArpTable(unittest.TestCase):
 
     def test_a_static_entry_is_worth_saying_so(self):
         """A hard-coded gateway address is a configuration fact, and it
-        explains a box still resolving a neighbour that is gone."""
+        explains a box still resolving a neighbor that is gone."""
         self.assertEqual(nd.parse_arp_table(self.TIMED)[2]["state"], "permanent")
 
     def test_bsd_strips_the_leading_zero_off_every_octet(self):
@@ -2200,7 +2200,7 @@ class TestArpTable(unittest.TestCase):
     def test_windows_arp_table(self):
         """Hyphens rather than colons, no "dev" and no "at", so neither of the
         readers above saw a row - and `arp -a` is what this runs there. The
-        neighbour table, the duplicate-address check and the inventory were all
+        neighbor table, the duplicate-address check and the inventory were all
         empty on that platform."""
         entries = nd.parse_arp_table(self.WINDOWS)
         self.assertEqual([e["ip"] for e in entries], ["192.168.1.1", "192.168.1.50"])
@@ -3427,7 +3427,7 @@ class TestEveryCommandGoesThroughOneDoor(unittest.TestCase):
 
     What this does *not* claim to prove is that the tool is safe from its
     inputs. The reachable surface for untrusted text here is the report - PTR
-    names, LLDP neighbours, certificate fields, all rendered into HTML that
+    names, LLDP neighbors, certificate fields, all rendered into HTML that
     gets pasted into tickets - and that is guarded separately by `cls()`,
     `escapeHtml()` and TestAStateFromAReportCannotLeaveItsAttribute.
     """
@@ -4046,7 +4046,7 @@ class TestQuietGotchas(unittest.TestCase):
 
 
 class TestRedundancyGotchas(unittest.TestCase):
-    """Virtual routers: what the neighbour table can and cannot show."""
+    """Virtual routers: what the neighbor table can and cannot show."""
 
     def diag(self, arp):
         m = fresh()
@@ -4093,7 +4093,7 @@ class TestRedundancyGotchas(unittest.TestCase):
 
     def test_a_same_group_split_brain_is_not_claimed_because_it_cannot_be_seen(self):
         """Two masters in one VRRP group share one virtual MAC - that is what
-        VRRP is for - so the neighbour table shows a single entry and there is
+        VRRP is for - so the neighbor table shows a single entry and there is
         nothing to detect. Implying otherwise would be worse than silence."""
         rep = self.diag("10.0.0.1 dev eth0 lladdr 00:00:5e:00:01:2a REACHABLE\n"
                         "10.0.0.1 dev eth0 lladdr 00:00:5e:00:01:2a STALE\n")
@@ -4617,7 +4617,7 @@ class TestWhatCountsAsOneOfTheCables(unittest.TestCase):
         "cmd_link_stats": "the collector: it reports what the box has, and the "
                           "box has a loopback",
         "_finish_link_sample": "arithmetic over every counter it was handed, "
-                               "which is not a judgement about any of them",
+                               "which is not a judgment about any of them",
         "_default_route_iface": "a lookup by name - a route out of lo is still "
                                 "the route the table names",
         "build_stages": "asks only whether the list is empty, which is about "
@@ -6704,7 +6704,7 @@ class TestBondMembers(unittest.TestCase):
 
 class TestNeighbourTable(unittest.TestCase):
     """A ceiling with no back pressure: past it the kernel stops resolving,
-    and the box loses neighbours at random on a segment that is working."""
+    and the box loses neighbors at random on a segment that is working."""
 
     def build(self, arp_cache=None, thresh=None):
         import os, shutil, tempfile
@@ -7137,7 +7137,7 @@ class TestLatencyWall(unittest.TestCase):
 
     def test_a_uniformly_graded_path_has_no_wall(self):
         """Every hop adding the same amount. The milliseconds alone fired this
-        and named a hop no worse than its neighbours, while claiming a single
+        and named a hop no worse than its neighbors, while claiming a single
         hop added most of the delay."""
         codes = self.path([140.0, 280.0, 420.0])
         self.assertNotIn("latency_wall", codes)
@@ -7400,7 +7400,7 @@ class TestZones(unittest.TestCase):
         self.assertEqual(z["upstream"]["via"], "10.60.9.30")
 
     def test_a_zone_carries_the_message_that_put_it_there(self):
-        """A colour tells someone there is a problem. The sentence tells them
+        """A color tells someone there is a problem. The sentence tells them
         what it is, which is the point of the panel."""
         z = self.zones(self.proxy().diagnose(None, None, quick=False))
         self.assertIn("clients opened", z["downstream"]["worst"])
@@ -7436,11 +7436,11 @@ class TestZones(unittest.TestCase):
         for state in ("pass", "warn", "fail", "skip"):
             with self.subTest(state=state):
                 self.assertIn(".zarrow.%s{" % state, src,
-                              "an arrow in state %r has no colour of its own" % state)
+                              "an arrow in state %r has no color of its own" % state)
 
     def test_a_failing_stage_is_marked_on_the_chip_not_just_the_word_inside(self):
         """The strip is the line someone acts on, and for a long time the only
-        difference between a passing stage and a failed one was the colour of a
+        difference between a passing stage and a failed one was the color of a
         four-letter word inside an otherwise identical chip - same border, same
         background, same dimmed text. A strip with one FAIL in it read as
         uniformly quiet from any distance at all.
@@ -7462,8 +7462,8 @@ class TestZones(unittest.TestCase):
                               "a %r stage is not marked on its own ground" % state)
 
     def test_the_strip_keeps_a_marking_without_color_mix(self):
-        """The tint is a colour-mix, which an older browser drops on the floor.
-        Each rule states a flat colour first so what survives is a plain
+        """The tint is a color-mix, which an older browser drops on the floor.
+        Each rule states a flat color first so what survives is a plain
         coloured edge rather than no marking at all."""
         src = nd.VIEWER_TEMPLATE
         for state, var in (("fail", "--crit"), ("warn", "--warn")):
@@ -7494,7 +7494,7 @@ class TestZones(unittest.TestCase):
 
     def test_every_state_a_split_head_can_take_is_drawn_differently(self):
         """Three states, three appearances. Without a rule of its own the
-        unknown head falls back to the inherited colour, which is the muddle
+        unknown head falls back to the inherited color, which is the muddle
         this whole split exists to get out of - and it does it silently, with
         the class name still in the markup and nothing to show for it."""
         src = nd.VIEWER_TEMPLATE
@@ -7531,7 +7531,7 @@ class TestZones(unittest.TestCase):
     def test_a_side_with_no_direction_evidence_keeps_one_arrow(self):
         """The common case, and the one that must not drift. Where the kernel
         does not report the counters, or the connections are simply healthy,
-        both heads stay a single colour."""
+        both heads stay a single color."""
         setup, kwargs = S["tcp_flow_loss_backends"]
         mod = fresh()
         setup(mod)
@@ -8101,7 +8101,7 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
                 for row in self.probe(code)["hops"]:
                     if row["state"] != "ok":
                         self.assertTrue(row["why"],
-                                        "hop %s is marked in colour alone" % row["hop"])
+                                        "hop %s is marked in color alone" % row["hop"])
 
     def test_a_hops_share_is_sized_by_time_not_by_name(self):
         """The bar is the measurement. A long name must not widen it."""
@@ -8125,7 +8125,7 @@ class TestTheTracedPathAsItsOwnColumn(unittest.TestCase):
 
 
 class TestTheAddressesTheReportShows(unittest.TestCase):
-    """The neighbour inventory has resolved names since it was written and
+    """The neighbor inventory has resolved names since it was written and
     nothing else had: every column heading, finding and hop row carried a bare
     address. `10.0.2.40` is a fact a reader has to go and look up.
     """
@@ -8645,7 +8645,7 @@ class TestWhichBoxTheVerdictBlames(unittest.TestCase):
                           if nd.finding_side(c) == "local"])
 
     def test_lighting_a_zone_for_what_it_owns_changes_no_reasoning(self):
-        """The colour is the drawing. build_verdict reasons on finding_side, so
+        """The color is the drawing. build_verdict reasons on finding_side, so
         what explains what is untouched - a port ceiling still cannot be offered
         as the cause of an inbound fault."""
         self.assertEqual(nd.finding_side("ephemeral_ports_low"), "upstream")
@@ -9243,7 +9243,7 @@ class TestWhatTheProxyItselfBelieves(unittest.TestCase):
         did, and this is repeating it."""
         found = next(f for f in self.report()["findings"]
                      if f["code"] == "proxy_backend_down")
-        self.assertIn("proxy's own judgement", found["message"])
+        self.assertIn("proxy's own judgment", found["message"])
 
 
 class TestRefusedAndTimedOutAreTwoFaults(unittest.TestCase):
@@ -11545,7 +11545,7 @@ class TestTrafficThatDoesNotComeBackTheWayItWent(unittest.TestCase):
         """This shipped as ungraded context for one commit, and not by choice:
         the per-side traces ran after build_verdict and build_stages had both
         already decided, so nothing walked on either side could be a cause or
-        colour a stage however plainly it was the fault. The test written then
+        color a stage however plainly it was the fault. The test written then
         asserted that ordering so the constraint would be visible rather than
         rediscovered, and it is what failed when the traces moved - which is
         the whole reason to write a guard around a limitation.
@@ -12181,7 +12181,7 @@ class TestTellingTheTwoFamiliesApart(unittest.TestCase):
     """Guards that ask which family an address belongs to, on a corpus that is
     IPv4 wherever they are.
 
-    IPv6 is well covered in this suite - peers, sockets, neighbours, service
+    IPv6 is well covered in this suite - peers, sockets, neighbors, service
     addresses, the dual-stack connect - which is exactly why these went
     unnoticed. It is not a missing subject, it is four collectors whose own
     fixtures happen to hold no v6: the resolver list, a BSD route's next hop,
@@ -14618,7 +14618,7 @@ class TestTheSourceMatrixAsDrawn(unittest.TestCase):
     def test_a_failing_address_is_marked_and_named(self):
         for drawn in (self.text(self.failing()), self.html(self.failing())):
             self.assertIn("10.0.0.61", drawn)
-            self.assertIn("reaches nothing while its neighbours do", drawn)
+            self.assertIn("reaches nothing while its neighbors do", drawn)
         # Named is not enough - the row itself has to carry it, or the one line
         # that differs looks like the two above it.
         html = self.html(self.failing())
@@ -15079,7 +15079,7 @@ class TestTheFanOutLineAsDrawn(unittest.TestCase):
 
     def test_it_is_not_dressed_as_a_severity(self):
         """The other sub-lines say what is wrong with a hop. This one says what
-        the trace could not tell about it, so it must not borrow their colour."""
+        the trace could not tell about it, so it must not borrow their color."""
         html = self.draw({"fanout": 2, "fanout_also": ["b.example.net"]})
         self.assertIn('class="hwhy fan"', html)
         for severity in ("crit", "warn"):
@@ -15392,7 +15392,7 @@ class TestTheTerminalDrawsTheSameChain(unittest.TestCase):
         self.assertNotIn("  ->  ", line, "still drawing a relay as a one-way chain")
 
     def test_a_stalled_return_changes_the_shape_not_just_the_colour(self):
-        """Colour is the first thing lost - this line gets pasted into tickets
+        """Color is the first thing lost - this line gets pasted into tickets
         and piped into files. Two heads told apart only by an escape sequence
         become one arrow the moment that happens."""
         lines = self.chain(self.SIDES, {"client": {"connections": 6, "silent_return": 6}})
@@ -15526,7 +15526,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
 
         This used to assert the outbound head was drawn `pass`, and it passed
         for a reason that had nothing to do with the rule: the fixture's sides
-        are all healthy, so the head inheriting the leg's colour inherited
+        are all healthy, so the head inheriting the leg's color inherited
         "pass". On a real report the leg fails - a stalled return is a finding
         now - and the same code drew both heads red, which is not a split at
         all and is exactly what the arrow exists to avoid.
@@ -15575,7 +15575,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
     def test_each_boundary_reads_its_own_side(self):
         """The middle box's whole point: the leg to the clients and the leg to
         the backends are different equipment with different owners, and a
-        stall on one must not colour the other."""
+        stall on one must not color the other."""
         client, backend = self.draw({"client": {"connections": 6, "silent_return": 6},
                                      "backend": {"connections": 6, "silent_return": 0}})
         self.assertSplit(client)
@@ -15596,7 +15596,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
         self.assertSplit(backend)
 
     def test_the_arrow_carries_the_state_of_the_leg_it_spans(self):
-        """An unsplit arrow is not decoration: it takes the colour of the side
+        """An unsplit arrow is not decoration: it takes the color of the side
         away from the box, because that is the leg it spans."""
         sides = [{"side": "downstream", "state": "fail"},
                  {"side": "local", "state": "pass"},
@@ -15623,7 +15623,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
 
         The first hardcoded the outbound head to pass whenever the return
         stalled, which read as "the way out is fine" on no evidence at all. The
-        fix made it inherit the leg's colour, and that is circular: a stalled
+        fix made it inherit the leg's color, and that is circular: a stalled
         return is a finding, the finding fails the leg, and the outbound head
         then reads as broken *because of the stall on the other head*. On a real
         report both heads came out red, which is not a split and is the reason
@@ -15645,7 +15645,7 @@ class TestTheBoundaryArrowAsDrawn(unittest.TestCase):
                 self.assertIn('<span class="unknown">→</span>', client)
                 self.assertIn('<span class="fail">←</span>', client)
                 self.assertNotIn('<span class="%s">→</span>' % state, client,
-                                 "the way out is taking its colour from a leg "
+                                 "the way out is taking its color from a leg "
                                  "the return stall is what failed")
 
     def test_a_head_with_no_counter_behind_it_still_keeps_the_legs_colour(self):
@@ -16904,7 +16904,7 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(parsed["outbound"], 1)
 
     def test_a_check_that_cannot_apply_here_is_not_a_check_that_failed(self):
-        """A cloud instance has no fibre optics and no switch neighbour. Those
+        """A cloud instance has no fibre optics and no switch neighbor. Those
         were counted as failures, so every verdict on that box was marked down
         in confidence for running on the hardware it runs on."""
         raw = {"a": {"ok": True}, "b": {"ok": True},
@@ -17501,7 +17501,7 @@ class TestSamplingWindow(unittest.TestCase):
 
 
 class TestPassiveInventory(unittest.TestCase):
-    """The neighbour table already knows who this device has talked to. That is
+    """The neighbor table already knows who this device has talked to. That is
     the whole feature: no sweep, no probe, nothing touched that wasn't already
     talking - which is what makes it safe on a network nobody gave you."""
 
@@ -18072,7 +18072,7 @@ class TestNeighbourInventory(unittest.TestCase):
         twenty addresses and a note that forty more were not shown."""
         m, report, _ = self.run_inventory()
         lines = m.render_text_report(report, color=False, width=88).splitlines()
-        head = next(i for i, l in enumerate(lines) if l.startswith("NEIGHBOURS ("))
+        head = next(i for i, l in enumerate(lines) if l.startswith("NEIGHBORS ("))
         subnets = next(i for i, l in enumerate(lines) if l.strip().startswith("subnets:"))
         first_host = next(i for i, l in enumerate(lines[head:], head)
                           if "lladdr" not in l and ":" in l and l.startswith("  1"))
@@ -18091,7 +18091,7 @@ class TestNeighbourInventory(unittest.TestCase):
         self.assertEqual(slim.get("inventory"), report.get("inventory"))
         page = m.render_report_html(report)
         self.assertIn("192.168.1.1", page)
-        self.assertIn("neighbours (not a scan)", m.VIEWER_TEMPLATE)
+        self.assertIn("neighbors (not a scan)", m.VIEWER_TEMPLATE)
 
 
 class TestDocsMatchReality(unittest.TestCase):
@@ -18162,7 +18162,7 @@ class TestDocsMatchReality(unittest.TestCase):
         claims = {
             "on disk": (len(raw), 1119),
             "compressed": (len(gzip.compress(raw, 9)), 339),
-            "stripped and compressed": (len(gzip.compress(stripped, 9)), 230),
+            "stripped and compressed": (len(gzip.compress(stripped, 9)), 231),
         }
         for label, (measured, quoted) in claims.items():
             with self.subTest(size=label):
@@ -18277,7 +18277,7 @@ class TestDocsMatchReality(unittest.TestCase):
     # Several collectors share one entry on purpose - two ping targets are one
     # kind of inspection - so this maps name to a phrase, not one to one.
     COLLECTOR_IS_DOCUMENTED_AS = {
-        "cmd_arp": "neighbour table",
+        "cmd_arp": "neighbor table",
         "cmd_check_port": "TCP reachability of specific ports",
         "cmd_clock_sync": "Clock synchronisation",
         "cmd_dns": "DNS resolution",
@@ -18290,7 +18290,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_link_modes": "Link speed, duplex and MTU",
         "cmd_link_stats": "Interface error, drop, CRC and collision counters",
         "cmd_listen_ports": "Listening ports",
-        "cmd_lldp": "LLDP/CDP neighbour",
+        "cmd_lldp": "LLDP/CDP neighbor",
         "cmd_mtr": "Hop-by-hop path",
         "cmd_optics": "Optical module power and alarms",
         "cmd_own_http": "asked over HTTP for an answer",
@@ -18317,7 +18317,7 @@ class TestDocsMatchReality(unittest.TestCase):
         "cmd_traceroute": "Hop-by-hop path",
         "cmd_traceroute_tcp": "TCP-probe path",
         "_bond_members_linux": "Bonded interface members",
-        "_read_neigh_table": "Neighbour table size against its own ceiling",
+        "_read_neigh_table": "Neighbor table size against its own ceiling",
         "_read_thermal_throttle": "CPU thermal throttling counters",
         "_read_server_limits": "Ephemeral ports, file descriptors",
         "_read_conntrack": "Connection tracking table",
@@ -18545,7 +18545,7 @@ class TestDocsMatchReality(unittest.TestCase):
         import re
         source = open(nd.__file__, encoding="utf-8").read()
         ref = dict(self.docs())["REFERENCE.md"]
-        table = ref.split("## The numbers behind the judgements", 1)[1].split("\n## ", 1)[0]
+        table = ref.split("## The numbers behind the judgments", 1)[1].split("\n## ", 1)[0]
         documented = dict(re.findall(r"\| `([A-Z_0-9]+)` \| \*\*([0-9.,]+)\*\*", table))
         self.assertGreaterEqual(len(documented), 25, "the threshold table lost entries")
         for name, shown in documented.items():
@@ -18589,7 +18589,7 @@ class TestDocsMatchReality(unittest.TestCase):
         import re
         source = open(nd.__file__, encoding="utf-8").read()
         ref = dict(self.docs())["REFERENCE.md"]
-        table = ref.split("## The numbers behind the judgements", 1)[1].split("\n## ", 1)[0]
+        table = ref.split("## The numbers behind the judgments", 1)[1].split("\n## ", 1)[0]
         names = [n for n, _v, _w in
                  re.findall(r"\| `([A-Z_0-9]+)` \| \*\*([0-9.,]+)\*\* \| ([^|]*)\|", table)]
         self.assertGreaterEqual(len(names), 60, "the threshold table lost entries")
@@ -20434,7 +20434,7 @@ class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
     "exited 127 with nothing to say" arrived as a successful read of a machine
     with no address and no gateway - two criticals and exit 2 on a healthy box.
     And nothing tried the one source that cannot be missing: the kernel, which
-    publishes the routing and neighbour tables as files no userland can trim."""
+    publishes the routing and neighbor tables as files no userland can trim."""
 
     ROUTE = ("Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n"
              "eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\n"
@@ -20472,8 +20472,8 @@ class TestABoxWithNoUserlandWeKnow(unittest.TestCase):
     def test_an_empty_answer_from_a_working_command_is_still_an_answer(self):
         """The other side of that line, and the reason it tests the exit code
         rather than the output. A box that has spoken to nobody has an empty
-        neighbour table, and exit 0 with no rows is the true reading of it - it
-        must not become 'the neighbour table could not be read'."""
+        neighbor table, and exit 0 with no rows is the true reading of it - it
+        must not become 'the neighbor table could not be read'."""
         nd.OS_NAME = "Linux"
         nd.which = lambda c: "/bin/" + c
         nd.run = lambda cmd, timeout=None, limit=None: {
@@ -21007,7 +21007,7 @@ class TestTheFragmentsThatWriteRatherThanReturn(unittest.TestCase):
     # ---- setFavicon --------------------------------------------------------
 
     def test_the_colour_survives_being_put_in_a_uri(self):
-        """A CSS colour is a '#' and the '#' of a data URI starts a fragment,
+        """A CSS color is a '#' and the '#' of a data URI starts a fragment,
         so an unencoded one truncates the image to nothing. The template says
         so in a comment; nothing checked it."""
         did = run_viewer_dom(self, ("setFavicon",), 'setFavicon("critical");',
@@ -21031,8 +21031,8 @@ class TestTheFragmentsThatWriteRatherThanReturn(unittest.TestCase):
     def test_a_state_with_no_colour_of_its_own_falls_back_to_the_dim_one(self):
         """There are two fallbacks on that line - the variable name and a
         literal hex - and the first written version of this test used the same
-        colour for both, so deleting the variable fallback changed nothing and
-        the test passed on the literal. The dim colour is deliberately not
+        color for both, so deleting the variable fallback changed nothing and
+        the test passed on the literal. The dim color is deliberately not
         #6b7785 here for that reason."""
         did = run_viewer_dom(self, ("setFavicon",), 'setFavicon("something-new");',
                              cssvars={"--text-dim": "#123456"})
@@ -21171,7 +21171,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
 
     def test_a_hop_is_blamed_exactly_when_the_report_blames_it(self):
         """Marking the worst jump whenever there is one would put a warning on
-        a hop no worse than its neighbours: every path has a largest step, and
+        a hop no worse than its neighbors: every path has a largest step, and
         the finding only fires when that step is also most of the delay. The
         mark has to follow the conclusion in both directions - no hop marked
         without a finding behind it, and no such finding leaving its hop
@@ -21317,7 +21317,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         mapping = nd.VIEWER_TEMPLATE.split("const ZONE_SEV = {", 1)[1].split("}", 1)[0]
         for state in sorted(states):
             self.assertIn(f"{state}:", mapping,
-                          f"a side can report {state!r} and the picture has no colour for it")
+                          f"a side can report {state!r} and the picture has no color for it")
 
     def test_the_worse_conclusion_owns_the_target_hop(self):
         """No scenario fires both of these at once, so the corpus cannot reach
@@ -21407,7 +21407,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         return (a + 0.05) / (b + 0.05)
 
     def test_the_verdict_tint_keeps_its_own_text_readable(self):
-        """The verdict background is now a wash of the severity colour, which
+        """The verdict background is now a wash of the severity color, which
         moves every contrast ratio inside the block. "owner:" and "confidence:"
         are the most load-bearing words in the report and were already the
         dimmest text on it; the tint took them from 4.0:1 to 3.6:1. Computed
@@ -21415,7 +21415,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         template = nd.VIEWER_TEMPLATE
         panel = self._css_var(template, "--panel")
         lifted = self._css_var(template, "--text-dim-lift")
-        self.assertTrue(panel and lifted, "the colour variables moved or were renamed")
+        self.assertTrue(panel and lifted, "the color variables moved or were renamed")
         import re
         for severity in ("--warn", "--crit"):
             colour = self._css_var(template, severity)
@@ -21466,7 +21466,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
     def test_every_colour_the_stylesheet_asks_for_is_one_it_defines(self):
         """A var() naming a property that was never declared is not an error a
         browser reports: the declaration is dropped and the property falls back
-        to its initial value, so the element renders in the wrong colour and
+        to its initial value, so the element renders in the wrong color and
         looks deliberate. The relation pills - the cause, backs it up, caused
         by it - asked for --line, which the palette calls --border, and had
         been drawing their border in currentColor ever since."""
@@ -21706,14 +21706,14 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         answer - came to sit at 3.2:1 on white, and the hardware pill at 2.2:1.
         Neither palette test caught it, because both checked the variables that
         had been written rather than the colours the page draws. Declaring
-        every colour in a :root block is what makes those tests complete.
+        every color in a :root block is what makes those tests complete.
 
         Shadows are exempt and nothing else is. The first version of this guard
         matched hex only and justified the gap by saying the rgba() values were
         all shadows - they were not. One of them was the wash on the zone that
         says which direction is broken, and skipping it on that reasoning left
         the panel this test most needed to cover outside it. What decides is
-        the property being set, not how the colour was spelled."""
+        the property being set, not how the color was spelled."""
         import re
         css = nd.VIEWER_TEMPLATE.split("<style", 1)[1].split("</style>", 1)[0]
         outside = re.sub(r":root\{[^}]*\}", "", css)
@@ -21782,7 +21782,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
         """The page now follows the reader's system setting, which means half
         the audience never sees the palette the colours were chosen against.
         Amber on near-black is the combination that survives a dark theme and
-        fails a light one, so every colour is checked against the light ground
+        fails a light one, so every color is checked against the light ground
         rather than assumed to have been darkened enough."""
         import re
         block = nd.VIEWER_TEMPLATE.split("@media (prefers-color-scheme: light){", 1)
@@ -21889,7 +21889,7 @@ class TestTheChainMarksTheHopTheVerdictNames(unittest.TestCase):
 
     def test_the_tab_icon_is_inline_and_follows_the_verdict(self):
         """A tab squeezed too narrow to show its title still shows its state.
-        The icon has to be embedded - a report is one file - and its colour
+        The icon has to be embedded - a report is one file - and its color
         read from the stylesheet rather than repeated as a second literal."""
         template = nd.VIEWER_TEMPLATE
         self.assertIn('rel="icon" id="favicon"', template)
@@ -22138,7 +22138,7 @@ class TestTheNumberAndTheNameForANetwork(unittest.TestCase):
     name anywhere in what this tool collects. Two ways to get one are refused
     on purpose: the full table is about a hundred thousand entries, which is
     the reason the Public Suffix List is not vendored either, and a list of the
-    networks that matter is a judgement that dates. A lookup would send a
+    networks that matter is a judgment that dates. A lookup would send a
     packet to a third party and fail on exactly the boxes this is for, which
     have no internet egress of their own.
 
@@ -22512,7 +22512,7 @@ class TestSomethingTheBoxWasToldToRunAndIsNot(unittest.TestCase):
 class TestTheFailedUnitsThisBoxCanGradeItself(unittest.TestCase):
     """Where the box says something about a failed unit beyond its name.
 
-    `units_failed` leaves the judgement to the reader, which is honest about a
+    `units_failed` leaves the judgment to the reader, which is honest about a
     name read alone and stops being honest the moment this box corroborates the
     unit elsewhere. Two grounds, both local and both on a first visit: a failed
     `.socket` unit is a port systemd is not holding, and a failed `.service`

@@ -205,7 +205,7 @@ interpreter are pinned, so regenerating produces no diff unless the report
 itself changed.
 
 Every glyph carries its own `x` rather than one position per run. `textLength`
-would be shorter, and is honoured by browsers and ignored by some preview
+would be shorter, and is honored by browsers and ignored by some preview
 renderers, which draws a line wider than the panel it sits in, on exactly the
 machines nobody tested.
 
@@ -233,9 +233,9 @@ the tool learned**: the AS numbers shipped tested and invisible on forty pages
 for a week, because nothing asked whether a reading reached the page.
 
 The index is written last and only when every page has passed, so a directory
-with an index in it is a directory that built cleanly. Its colours are mapped
+with an index in it is a directory that built cleanly. Its colors are mapped
 from all four side states explicitly and there is no default - the first
-version mapped two and sent the rest to the fault colour, which printed
+version mapped two and sent the rest to the fault color, which printed
 `PASS` in red on seven of the nine cards while the build stayed green.
 
 ## `shot.py`: photograph the HTML export for the README
@@ -322,12 +322,12 @@ A test that asserts a string appears in `VIEWER_TEMPLATE` passes against code
 wired to a constant, because the dead branch still contains the string. That has
 been wrong three times here. Counting those assertions was the first attempt at
 sizing the problem and it sized the wrong thing - it measures how a test is
-written, not whether the behaviour is covered. Fifty-four of them looked like a
+written, not whether the behavior is covered. Fifty-four of them looked like a
 hole; forcing all fifty-four branches found **no** uncovered then-side.
 
 Run both directions. The else-sides are not the lesser half: `setFavicon` had
 two fallbacks on one line, and deleting the first changed no test's answer
-because a fixture had given both the same colour.
+because a fixture had given both the same color.
 
 Half an hour, one full suite run per site, so this is a thing to run when the
 viewer's branching changes rather than part of the suite. It reads ternaries

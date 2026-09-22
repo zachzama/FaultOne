@@ -1,0 +1,75 @@
+name: pages
+
+# The example reports, published as the pages they actually are.
+#
+# The README's hero is a drawing of the terminal output and docs/export.png is
+# a photograph of the HTML one, and both are pictures. This publishes the real
+# thing: nine interactive reports a reader can open, sort, and read the
+# evidence behind, without having a broken box to point the tool at.
+#
+# Built here rather than committed. `dev/demos.py` regenerates them from the
+# test corpus in a couple of seconds, so a copy in the repository would be a
+# megabyte of generated HTML that can disagree with the tool - which is the
+# same drift argument that put a hash beside the screenshot.
+
+on:
+  # Every tag, so the pages are the current release's output and cannot quietly
+  # describe an older one. dev/release.py pushes the tag, which lands here.
+  push:
+    tags: ["v*"]
+  # And by hand, for the first publish after Pages is switched on and for any
+  # time the site needs rebuilding without a release to hang it on.
+  workflow_dispatch:
+
+# Read the code, write the site, and nothing else. id-token is what
+# deploy-pages uses to prove to Pages that this run is the one it claims.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let a newer one win: if two tags land together the
+# site should end up showing the later one rather than whichever finished last.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # Pinned by commit, not by tag, for the reason spelled out in tests.yml:
+      # a tag can be moved, and a moved tag on a third-party action runs
+      # somebody else's code here with a token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # No install step and nothing to cache: the tool has no dependencies and
+      # neither does the script that builds the pages.
+      #
+      # This exits non-zero if any page's verdict stops naming the fault in its
+      # filename, so a broken demo fails the deploy instead of publishing a
+      # page that argues against itself. It writes the index last, and only on
+      # success, so there is no half-built site that still looks complete.
+      - name: Build the example reports
+        run: python3 dev/demos.py site
+
+      - name: Say what is about to be published
+        run: |
+          ls -la site
+          echo "pages: $(find site -name '*.html' | wc -l)"
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

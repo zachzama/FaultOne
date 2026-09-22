@@ -1,13 +1,20 @@
 # dev/
 
-Seven harnesses that are **not part of the tool**. Nothing here ships to a box,
-nothing here is imported by `faultone.py`, and deleting this directory changes
-nothing about what the tool does. They exist because the questions that come up
-before a release are not the ones a test suite answers: it checks that each
-thing still does what it was written to do, not whether a change leaked into
-something nobody thought to assert about.
+Harnesses and release tools that are **not part of the tool**. Nothing here
+ships to a box, nothing here is imported by `faultone.py`, and deleting this
+directory changes nothing about what the tool does. They exist because the
+questions that come up before a release are not the ones a test suite answers:
+it checks that each thing still does what it was written to do, not whether a
+change leaked into something nobody thought to assert about.
 
-All seven are stdlib-only and offline, like everything else here.
+Stdlib-only and offline, like everything else here, with two stated
+exceptions: `release.py` and `about.py` talk to GitHub, which is the point of
+them, and `shot.py` drives Chrome because photographing a page needs a browser.
+
+No count in that first line any more. It said "seven harnesses" while the
+directory held sixteen files, which is the same way every other number here
+went stale before `counts.py` started deriving them - and this one is not
+worth deriving.
 
 `HANDOVER.md` sits alongside them and is not one of them: it records what
 is unfinished and what was tried and rejected, since a commit says what was
@@ -154,6 +161,17 @@ deliberately not fatal: by the time it runs the release is published, and a
 description that could not be set is worth saying loudly without making a
 successful release look like a failed one.
 
+Two things ride along with a bump because both carry the version and both
+would otherwise be stale the moment it moves: the README **hero** is redrawn
+and the export **screenshot** is recaptured, each reverting the bump if it
+fails. `dev/shot.py --check` is in the gate as well, which is the only thing
+that would notice a cut being *finished* by a later run against a
+hand-edited version.
+
+The **example pages publish themselves**: `.github/workflows/pages.yml` runs
+on any `v*` tag, so the push this does is what republishes them. Nothing here
+uploads a site, and no generated HTML is committed.
+
 It never pushes without `--push`. That decision is the user's and this file
 should not be able to make it by accident.
 
@@ -190,6 +208,58 @@ Every glyph carries its own `x` rather than one position per run. `textLength`
 would be shorter, and is honoured by browsers and ignored by some preview
 renderers, which draws a line wider than the panel it sits in, on exactly the
 machines nobody tested.
+
+## `demos.py`: the example reports, and the site they become
+
+```bash
+python3 dev/demos.py                 # nine pages and an index, to ~/Desktop
+python3 dev/demos.py site            # or somewhere else
+```
+
+Nine reports, each a different fault, plus an index that lists them with the
+tool's own headline and the three side states beside it. This is what
+`.github/workflows/pages.yml` publishes on every tag, so it is the version of
+the output a reader meets first.
+
+**Built from the test corpus, never from a live run** - same argument as
+`hero.py`: a demo taken from a real machine publishes the addressing of
+whoever made it. The banner is pinned to Linux for the same reason.
+
+It checks itself twice, and both checks came from something that shipped
+wrong. **A page's verdict has to name the fault its filename claims**, or this
+exits non-zero - two pages once passed by saying "No fault found" while their
+`based_on[0]` still matched the scenario name. And **a page has to show what
+the tool learned**: the AS numbers shipped tested and invisible on forty pages
+for a week, because nothing asked whether a reading reached the page.
+
+The index is written last and only when every page has passed, so a directory
+with an index in it is a directory that built cleanly. Its colours are mapped
+from all four side states explicitly and there is no default - the first
+version mapped two and sent the rest to the fault colour, which printed
+`PASS` in red on seven of the nine cards while the build stayed green.
+
+## `shot.py`: photograph the HTML export for the README
+
+```bash
+python3 dev/shot.py            # writes docs/export.png and docs/export.json
+python3 dev/shot.py --check    # is the committed one stale?
+```
+
+The hero above is a drawing of the *terminal* report. This is the HTML export,
+the thing `--export` writes, and a reader evaluating the tool would otherwise
+see only half of what it makes. It drives `demos.py` and photographs demo 1 -
+the page whose whole argument is visible without scrolling.
+
+A photograph can fall out of step with what it depicts, which is the standing
+objection to committing one. So this writes down what it captured: the
+`VIEWER_TEMPLATE` hash and the version that was in the banner, in
+`docs/export.json`. The suite fails when either moves without a recapture, and
+the comparison lives in `shot.py` so `--check` and the test cannot drift apart
+by both being written carefully. `release.py` recaptures on a bump for the same
+reason it redraws the hero.
+
+Needs Chrome, which is why it is here and not in a harness: the tool has no
+dependencies and the suite has none either.
 
 ## `slowest.py`: where does the suite spend its time?
 

@@ -1,6 +1,6 @@
 name: tests
 
-# The README promises Python 3.7 or newer, on Linux, macOS and Windows. Until
+# The README promises Python 3.9 or newer, on Linux, macOS and Windows. Until
 # this existed, the suite had only ever run on one interpreter on one machine,
 # so both halves of that sentence were an intention rather than a fact.
 

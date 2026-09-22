@@ -463,11 +463,115 @@ DEMOS = [
 ]
 
 
+#: The two groups the docstring above argues for, by how many pages are in the
+#: first one. A reader who opens 1 and 2 and nothing else has still seen the
+#: product; the rest reward someone who already understands it.
+LEAD_WITH = 5
+
+INDEX_HEAD = """<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FaultOne - example reports</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0 auto; padding: 2.5rem 1.25rem 4rem; max-width: 60rem;
+         background: #07090d; color: #c9d4e2;
+         font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; color: #e8eef6; }
+  h1 .mono { color: #5eead4; }
+  h2 { font-size: .8rem; letter-spacing: .1em; text-transform: uppercase;
+       color: #7c8b9e; margin: 2.5rem 0 .75rem; font-weight: 600; }
+  p { color: #9fb0c3; max-width: 46rem; }
+  a.card { display: block; text-decoration: none; color: inherit;
+           border: 1px solid #1c2530; border-radius: .6rem; padding: .9rem 1.1rem;
+           margin: .6rem 0; background: #0b1016; }
+  a.card:hover { border-color: #2f6f63; background: #0d141c; }
+  .head { font-weight: 600; color: #e8eef6; }
+  .states { margin-top: .4rem; font-size: .8rem; }
+  .states span { display: inline-block; margin-right: 1.1rem; color: #7c8b9e; }
+  b.ok { color: #4ade80; } b.warn { color: #fbbf24; } b.fault { color: #f87171; }
+  b.skip { color: #7c8b9e; }
+  .slug { margin-top: .35rem; font-size: .75rem; color: #5d6b7d; }
+  footer { margin-top: 3rem; border-top: 1px solid #1c2530; padding-top: 1.25rem;
+           font-size: .875rem; color: #7c8b9e; }
+  footer a { color: #5eead4; }
+</style>
+<h1><span class="mono">FaultOne</span> - example reports</h1>
+<p>Nine reports this tool produced, as the page <code>--export</code> writes.
+Each one is a different fault, and the headline is the tool's own answer to
+<em>which</em> fault to fix first - not a list of everything that looked wrong.
+Open one and read the three boxes: the way in, this box, the way out.</p>
+<p><strong>These are built from the test suite's fixtures, never from a live
+run.</strong> A report is a map of the network it was taken on, so a demo taken
+from a real machine would publish the addressing of whoever made it. Every page
+here is regenerated and re-checked on each release: a page whose verdict stops
+naming the fault in its filename fails the build rather than shipping.</p>
+"""
+
+INDEX_FOOT = """<footer>
+<a href="https://github.com/zachzama/FaultOne">github.com/zachzama/FaultOne</a>
+- one Python file, no dependencies, nothing listens. Generated from
+<code>dev/demos.py</code> at %(version)s.
+</footer>
+"""
+
+
+#: Every state a side can be in, spelled out. The first version of this
+#: mapped two of them and sent everything else to the fault colour, which
+#: printed PASS in red on seven of the nine cards - the drawing was wrong
+#: while the build was green, because nothing here is asserted by the pages
+#: passing their own verdict check. Hence no default: a state nobody has
+#: decided a colour for stops the build instead of picking one.
+SIDE_COLOURS = {"pass": "ok", "warn": "warn", "fail": "fault", "skip": "skip"}
+
+
+def card(slug, headline, sides):
+    """One page, as the index shows it: what it concluded, and the three
+    states that make the conclusion checkable at a glance.
+
+    The name goes on it too. Two of the nine reach the same headline by
+    different routes - a box losing traffic outbound, and the same box with
+    nothing coming back to say so - and two identical cards read as a
+    mistake rather than as the distinction it is.
+    """
+    cells = []
+    for label, side in (("in", "downstream"), ("this box", "local"),
+                        ("out", "upstream")):
+        state = sides[side]
+        if state not in SIDE_COLOURS:
+            raise SystemExit("no colour decided for side state %r - add it to "
+                             "SIDE_COLOURS rather than letting it draw as a "
+                             "fault" % state)
+        cells.append('<span>%s <b class="%s">%s</b></span>'
+                     % (label, SIDE_COLOURS[state], state.upper()))
+    return ('<a class="card" href="faultone-demo-%s.html">'
+            '<div class="head">%s</div>'
+            '<div class="states">%s</div>'
+            '<div class="slug mono">%s</div></a>\n'
+            % (slug, headline, "".join(cells),
+               slug.split("-", 1)[1].replace("-", " ")))
+
+
+def index(rows, version):
+    """The landing page. Written here rather than by hand because the
+    headlines on it are the tool's, and a hand-written list of them is a
+    second place for them to be wrong."""
+    out = [INDEX_HEAD, "<h2>Start with these</h2>\n"]
+    for i, (slug, headline, sides) in enumerate(rows):
+        if i == LEAD_WITH:
+            out.append("<h2>Then, if you want the rest</h2>\n")
+        out.append(card(slug, headline, sides))
+    out.append(INDEX_FOOT % {"version": version})
+    return "".join(out)
+
+
 def main():
     out_dir = OUT_DIR
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     wrong = []
+    rows = []
     for slug, code, arrange in DEMOS:
         setup, kwargs = T.S[code]
         mod = T.fresh()
@@ -528,6 +632,7 @@ def main():
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(mod.render_report_html(report))
         sides = {z["side"]: z["state"] for z in report["sides"]}
+        rows.append((slug, report["verdict"]["headline"], sides))
         print("  %s %-36s in %-5s box %-5s out %-5s  %s"
               % ("ok" if named == code else "!!", os.path.basename(path),
                  sides["downstream"], sides["local"], sides["upstream"],
@@ -548,7 +653,13 @@ def main():
     if wrong:
         print("\n" + "\n".join(wrong))
         return 1
-    print("\nwrote %d pages to %s" % (len(DEMOS), out_dir))
+    # Written last and only on success, so a directory with an index in it is
+    # a directory whose pages all passed their own check. A half-built site
+    # that still looks complete is the failure mode worth avoiding here: this
+    # output is published, and nobody re-reads a page they have already seen.
+    with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(index(rows, T.nd.__version__))
+    print("\nwrote %d pages and an index to %s" % (len(DEMOS), out_dir))
     return 0
 
 

@@ -74,6 +74,11 @@ peer it picked and why. [How that choice is made.](REFERENCE.md#which-destinatio
 
 One Python file. Nothing to install, nothing left behind, no port opened.
 
+**[Read nine of its reports without installing anything.](https://zachzama.github.io/FaultOne/)**
+Each one is a different fault, and the headline is the tool's answer to which
+one to fix first. They are built from the test corpus and rebuilt on every
+release, so they are the current output rather than a picture of an old one.
+
 ## Use it
 
 The four commands at the top are the whole tool. Everything here is optional.

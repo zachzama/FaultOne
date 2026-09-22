@@ -1,5 +1,10 @@
 # FaultOne
 
+[![tests](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml/badge.svg)](https://github.com/zachzama/FaultOne/actions/workflows/tests.yml)
+[![python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](#what-you-need)
+[![no dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#what-you-need)
+[![licence MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
+
 **203 findings it can reach. One line saying which one to fix first.**
 
 ```bash

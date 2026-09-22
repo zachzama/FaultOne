@@ -329,6 +329,34 @@ def main():
     return 0
 
 
+def a_red_run():
+    """(sha, why) for some commit GitHub remembers going red, or (None, why).
+
+    Found rather than pinned. This case used to name the one commit the whole
+    gate exists for - pushed, red on every job, released from anyway - and
+    naming it coupled this check to git history twice over. First the run aged
+    out of the window the gate searched. Then an authorship rewrite changed
+    every SHA in the repository, so the name pointed at nothing. Neither had
+    the slightest thing to do with whether the gate can read a red run.
+
+    Any red run proves the same thing, and GitHub keeps its run records
+    against the SHA they ran on whether or not that commit is still reachable.
+    """
+    try:
+        out = subprocess.run(
+            ["gh", "run", "list", "--limit", "100", "--json",
+             "headSha,conclusion"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"could not ask GitHub for one ({e})"
+    if out.returncode != 0:
+        return None, "could not ask GitHub for one"
+    for run in json.loads(out.stdout or "[]"):
+        if run.get("conclusion") == "failure":
+            return run["headSha"], "found in recent history"
+    return None, "no failed run in the last 100, so there is none to read"
+
+
 def self_test():
     """The CI gate, against runs that really happened.
 
@@ -336,12 +364,8 @@ def self_test():
     tag gets cut - so the check that would have stopped three bad releases has
     to be checked by something. It reads real history rather than a stub,
     because what it has to get right is GitHub's answer shape.
-
-    b0a8b503 is the commit the whole gate exists for: pushed, red on all four
-    jobs, released from anyway.
     """
     cases = [("HEAD", ("ok", "unknown")),         # green, or not yet pushed
-             ("b0a8b5033", ("bad",)),
              ("0" * 40, ("unknown",))]            # a commit that does not exist
     bad = 0
     for ref, allowed in cases:
@@ -351,6 +375,19 @@ def self_test():
         ok = state in allowed
         bad += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {ref:12} -> {state}: {said}")
+
+    # The red case last, because it is the one that can legitimately be
+    # unavailable. A repository with no red run in living memory cannot
+    # demonstrate this and should say so rather than fail.
+    red, why = a_red_run()
+    if red is None:
+        print(f"  skip {'a red run':12} -> {why}")
+    else:
+        state, said = what_ci_said(red)
+        ok = state == "bad"
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {red[:9]:12} -> {state}: {said}")
+
     if bad:
         print("\nFAILED: the gate does not read CI the way it must")
         return 1

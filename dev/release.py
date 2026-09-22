@@ -30,7 +30,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "zachzama/FaultOne"
 TOOL = os.path.join(ROOT, "faultone.py")
 REFERENCE = os.path.join(ROOT, "REFERENCE.md")
-LOOK_BACK = 30      # runs of history to search for the commit being released
+#: Runs to accept for one commit. GitHub is asked about that commit rather
+#: than for recent history, so this is only a guard against paging: a single
+#: commit having more than this many runs would mean something else is wrong.
+PER_COMMIT = 20
 
 
 def run(cmd, dry=False, capture=False):
@@ -66,10 +69,20 @@ def what_ci_said(sha):
     never been checked on anything but this machine, which is the case a cut
     from unpushed work lands in.
     """
+    # Asked about this commit, not about recent history. Scanning the last
+    # thirty runs and filtering locally worked for a cut from the tip and
+    # quietly stopped working for anything older: --self-test pins the red
+    # commit this gate exists for, its run aged out of the window, and the
+    # self-test began reporting the gate as broken for a reason that had
+    # nothing to do with the gate. A check that fails for an incidental
+    # reason gets ignored, and then it is not a check.
+    #
+    # --commit needs the full forty characters; a short SHA matches nothing
+    # and would read as "never ran". Both callers rev-parse first.
     try:
         out = subprocess.run(
-            ["gh", "run", "list", "--limit", str(LOOK_BACK), "--json",
-             "headSha,conclusion,status,workflowName"],
+            ["gh", "run", "list", "--commit", sha, "--limit", str(PER_COMMIT),
+             "--json", "headSha,conclusion,status,workflowName"],
             cwd=ROOT, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
         return "unknown", f"could not ask GitHub ({e})"
@@ -77,10 +90,7 @@ def what_ci_said(sha):
         return "unknown", "could not ask GitHub: " + (out.stderr.strip() or "gh failed")
     runs = [r for r in json.loads(out.stdout or "[]") if r.get("headSha") == sha]
     if not runs:
-        # LOOK_BACK is the window, so this means "not in recent history"
-        # rather than "never ran". For a cut from the tip, which is the only
-        # thing this is ever asked about, they are the same sentence.
-        return "unknown", f"no CI run for {sha[:9]} in the last {LOOK_BACK} runs"
+        return "unknown", f"CI has never run on {sha[:9]}"
     pending = [r for r in runs if r.get("status") != "completed"]
     if pending:
         return "unknown", f"CI is still running on {sha[:9]}"

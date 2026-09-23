@@ -224,6 +224,13 @@ CARD_CLAIMS = [
 CARD_FLOOR = r"Runs in CI on Python (3\.\d+)"
 README_FLOOR = r"\*\*Python (3\.\d+) or newer"
 
+#: The card also carries a pasted transcript of `--report`, and its first line
+#: names the version that produced it. That is a second figure living in
+#: another repository with nothing watching it: every release moves it and the
+#: page has no idea. Compared against this file's own version rather than a
+#: constant, so a bump cannot satisfy it by being written down twice.
+CARD_TRANSCRIPT = r"FaultOne (\d+\.\d+\.\d+) - \w+ - python"
+
 
 def card(want, url=CARD_URL):
     """Does the live resume still agree with this repository?
@@ -276,6 +283,17 @@ def card(want, url=CARD_URL):
         print("  %-12s %s != %s" % ("floor", claimed.group(1), promised.group(1)))
     else:
         print("  %-12s %s" % ("floor", claimed.group(1)))
+
+    # The pasted transcript, if the card carries one.
+    stamped = re.search(CARD_TRANSCRIPT, page)
+    if not stamped:
+        print("  %-12s no transcript on the card" % "transcript")
+    elif stamped.group(1) != nd.__version__:
+        wrong.append("transcript   card shows output from FaultOne %s, this is %s"
+                     % (stamped.group(1), nd.__version__))
+        print("  %-12s %s != %s" % ("transcript", stamped.group(1), nd.__version__))
+    else:
+        print("  %-12s %s" % ("transcript", stamped.group(1)))
 
     if wrong:
         print("\n" + "\n".join("  - " + w for w in wrong))
